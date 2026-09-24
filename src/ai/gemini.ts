@@ -154,6 +154,40 @@ async function callGemini(
   timeoutMs: number,
 ): Promise<string> {
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+const GEMINI_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    label: {
+      type: "STRING",
+      enum: ["legit", "spam", "phish", "malware", "gray", "unsolicited-admin"],
+    },
+    confidence: {
+      type: "NUMBER",
+    },
+    summary: {
+      type: "STRING",
+    },
+    tags: {
+      type: "ARRAY",
+      items: {
+        type: "STRING",
+      },
+    },
+    signals: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          name: { type: "STRING" },
+          value: { type: "STRING" },
+        },
+        required: ["name", "value"],
+      },
+    },
+  },
+  required: ["label", "confidence", "summary", "tags", "signals"],
+};
+
   const body = {
     system_instruction: {
       parts: [{ text: input.systemPrompt }],
@@ -167,8 +201,10 @@ async function callGemini(
     generationConfig: {
       temperature: 0,
       responseMimeType: "application/json",
+      responseSchema: GEMINI_RESPONSE_SCHEMA,
     },
   };
+
 
   const response = await fetchImpl(url, {
     method: "POST",

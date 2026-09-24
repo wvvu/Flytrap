@@ -70,37 +70,66 @@ export function savePrompt(dir: string, id: string, content: string): void {
   writeFileSync(file, content, "utf8");
 }
 
+function sanitizeXmlBoundary(text: string): string {
+  return text.replace(/<\/?(untrusted_email|system_telemetry)[^>]*>/gi, "[filtered-tag]");
+}
+
 export function buildUserMessage(facts: ClassifyFacts): string {
   const from = facts.envelopeFrom ? facts.envelopeFrom : "<>";
-  const lines = [
+  const telemetryLines = [
     `AUTH: spf= ${facts.spf} dkim= ${facts.dkim} dmarc= ${facts.dmarc} rdns= ${facts.rdns}`,
     `ENVELOPE: from=${from} to=${facts.envelopeTo.join(",")}`,
-    `HEADER: From=${oneLine(facts.from)} Subject=${oneLine(facts.subject)} Message-ID=${oneLine(facts.messageId)}`,
   ];
   if (facts.history.length === 0 && facts.missingHistory.length === 0) {
-    lines.push("HISTORY: none");
+    telemetryLines.push("HISTORY: none");
   }
   for (const row of facts.history) {
     const notes = row.notes ? ` notes=${JSON.stringify(row.notes)}` : "";
-    lines.push(
+    telemetryLines.push(
       `HISTORY: localpart "${row.localpart}" on ${row.domain} first_seen=${day(row.firstSeen)} last_seen=${day(row.lastSeen)}${notes}`,
     );
   }
   for (const row of facts.missingHistory) {
-    lines.push(`HISTORY: localpart "${row.localpart}" on ${row.domain} no-record`);
+    telemetryLines.push(`HISTORY: localpart "${row.localpart}" on ${row.domain} no-record`);
   }
-  lines.push("TEXT:", facts.text, "URLS:");
-  if (facts.urls.length === 0) lines.push("-");
-  for (const url of facts.urls) lines.push(`- ${url}`);
-  lines.push("ATTACHMENTS:");
-  if (facts.attachments.length === 0) lines.push("-");
-  for (const attachment of facts.attachments) {
-    const name = attachment.filename || "(unnamed)";
-    const mime = attachment.mime || "application/octet-stream";
-    lines.push(`- ${name} sha256=${attachment.sha256} mime=${mime} size=${formatSize(attachment.sizeBytes)}`);
+
+  const urlLines = facts.urls.length === 0 ? ["-"] : facts.urls.map((url) => `- ${url}`);
+  const attachmentLines: string[] = [];
+  if (facts.attachments.length === 0) {
+    attachmentLines.push("-");
+  } else {
+    for (const attachment of facts.attachments) {
+      const name = attachment.filename || "(unnamed)";
+      const mime = attachment.mime || "application/octet-stream";
+      attachmentLines.push(`- ${name} sha256=${attachment.sha256} mime=${mime} size=${formatSize(attachment.sizeBytes)}`);
+    }
   }
-  return lines.join("\n");
+
+  return [
+    "<system_telemetry>",
+    ...telemetryLines,
+    "</system_telemetry>",
+    "",
+    "<untrusted_email>",
+    "<headers>",
+    `HEADER: From=${oneLine(facts.from)} Subject=${oneLine(facts.subject)} Message-ID=${oneLine(facts.messageId)}`,
+    "</headers>",
+    "<body_text>",
+    "TEXT:",
+    sanitizeXmlBoundary(facts.text),
+    "</body_text>",
+    "<urls>",
+    "URLS:",
+    ...urlLines,
+    "</urls>",
+    "<attachments>",
+    "ATTACHMENTS:",
+    ...attachmentLines,
+    "</attachments>",
+    "</untrusted_email>",
+  ].join("\n");
 }
+
 
 export function envelopeAddresses(raw: string | null): string[] {
   if (!raw) return [];

@@ -53,7 +53,10 @@ test("gemini classifier completes json format and parses result", async () => {
   assert.ok(calledUrl.includes("models/gemini-2.5-flash:generateContent"));
   assert.ok(calledUrl.includes("key=test-gemini-key-1234"));
   assert.equal(calledBody.generationConfig.responseMimeType, "application/json");
+  assert.ok(calledBody.generationConfig.responseSchema);
+  assert.equal(calledBody.generationConfig.responseSchema.type, "OBJECT");
 });
+
 
 test("gemini classifier fails over to next key on 429/503 and cools down", async () => {
   const calls: string[] = [];
