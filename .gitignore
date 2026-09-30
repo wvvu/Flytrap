@@ -53,3 +53,7 @@ Thumbs.db
 # Internal documentation & architecture specs
 docs/
 architecture/
+
+# Docker overrides
+docker-compose.override.yml
+docker-compose.override.yaml
