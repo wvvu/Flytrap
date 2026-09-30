@@ -1,5 +1,6 @@
 import type { Db } from "../db/index.js";
 import type { JobRow } from "../db/repos/jobs.js";
+import { readRuntimeSettings } from "../db/repos/settings.js";
 import { getMessage, markMessageNotified } from "../db/repos/messages.js";
 import type { AppLog } from "../log.js";
 import { aiResultSchema } from "../ai/types.js";
@@ -21,7 +22,12 @@ export async function runNotifyJob(deps: NotifyJobDeps, job: JobRow): Promise<vo
   if (!message) throw new Error("message missing");
   if (!message.ai_result) throw new Error("message has no ai result");
   const ai = aiResultSchema.parse(JSON.parse(message.ai_result));
-  const wanted = deps.notifyLabels.includes(ai.label) && ai.confidence >= deps.notifyMinConfidence;
+  const policy = readRuntimeSettings(deps.db, {
+    notifyLabels: deps.notifyLabels,
+    notifyMinConfidence: deps.notifyMinConfidence,
+    acceptDomains: [],
+  });
+  const wanted = policy.notifyLabels.includes(ai.label) && ai.confidence >= policy.notifyMinConfidence;
   if (wanted && deps.notifiers.length > 0) {
     const input = {
       messageId: message.id,

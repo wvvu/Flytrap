@@ -59,6 +59,13 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(script.body, /\/v1\/messages/);
     assert.match(script.body, /\/v1\/messages\/" \+ encodeURIComponent\(id\) \+ "\/reclassify/);
     assert.match(script.body, /x-csrf-token/);
+    assert.match(page.body, /<title>登录<\/title>/);
+    assert.match(page.body, /失败几次才停/);
+    assert.match(page.body, /收信域名/);
+    assert.match(page.body, /class="btn-fit"/);
+    assert.match(script.body, /document\.title = "登录"/);
+    assert.match(script.body, /document\.title = VIEW_TITLES\[view\]/);
+    assert.match(script.body, /身份检查/);
     assert.match(script.body, /重分类/);
     assert.equal(script.body.includes("innerHTML"), false);
     assert.equal(page.body.includes("蜜罐"), false);

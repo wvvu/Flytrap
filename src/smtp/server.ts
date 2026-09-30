@@ -3,6 +3,7 @@ import { SMTPServer, type SMTPServerDataStream, type SMTPServerOptions, type SMT
 import type { Config } from "../config.js";
 import type { Codec } from "../compress.js";
 import type { Db } from "../db/index.js";
+import { readAcceptDomains } from "../db/repos/settings.js";
 import { acceptMessage, type AcceptInput } from "../ingest/accept.js";
 import { IpLimiter } from "./limits.js";
 import { evaluateMailFrom, evaluateRcpt, normalizeIp } from "./policy.js";
@@ -76,7 +77,7 @@ export async function startSmtp(options: StartSmtpOptions): Promise<RunningSmtp>
       callback();
     },
     onRcptTo(address, _session, callback) {
-      const decision = evaluateRcpt(address.address, config.acceptDomainSet);
+      const decision = evaluateRcpt(address.address, new Set(readAcceptDomains(db, config.acceptDomains)));
       if (!decision.accept) {
         callback(smtpError(decision.responseCode, decision.message));
         return;
