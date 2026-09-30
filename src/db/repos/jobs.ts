@@ -1,4 +1,5 @@
 import type { Db } from "../index.js";
+import { readJobMaxAttempts } from "./settings.js";
 
 export type JobType = "auth" | "parse" | "classify" | "notify" | "rebuild";
 export type JobStatus = "queued" | "running" | "done" | "failed" | "dead";
@@ -51,7 +52,7 @@ export function enqueueJob(db: Db, input: EnqueueInput): void {
     input.type,
     input.messageId ?? null,
     input.payload === undefined ? null : JSON.stringify(input.payload),
-    input.maxAttempts ?? 5,
+    input.maxAttempts ?? readJobMaxAttempts(db),
     input.runAfter ?? input.now,
     input.now,
     input.now,
@@ -188,11 +189,15 @@ export function retryAllDeadJobs(db: Db, now: number): number {
 
 export interface ListJobsOptions {
   status?: string | null;
+  /** open: gave up, or queued again after a failure. retrying: queued with attempts already spent. */
+  scope?: "open" | "retrying" | null;
   limit?: number;
 }
 
 export interface JobDetailRow extends JobRow {
   message_subject: string | null;
+  message_from: string | null;
+  message_to: string | null;
 }
 
 export function countJobsByStatus(db: Db, status: JobStatus): number {
@@ -200,14 +205,37 @@ export function countJobsByStatus(db: Db, status: JobStatus): number {
   return row.c;
 }
 
+const JOB_DETAIL_FROM = `SELECT j.*, m.subject as message_subject, m.from_addr as message_from, m.envelope_to as message_to
+         FROM jobs j
+         LEFT JOIN messages m ON j.message_id = m.id`;
+
 export function listJobsWithDetails(db: Db, options: ListJobsOptions = {}): JobDetailRow[] {
   const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
+  if (options.scope === "open") {
+    return db
+      .prepare(
+        `${JOB_DETAIL_FROM}
+         WHERE j.status IN ('dead', 'failed')
+            OR (j.status = 'queued' AND j.attempts > 0)
+         ORDER BY j.updated_at DESC
+         LIMIT ?`,
+      )
+      .all(limit) as JobDetailRow[];
+  }
+  if (options.scope === "retrying") {
+    return db
+      .prepare(
+        `${JOB_DETAIL_FROM}
+         WHERE j.status = 'queued' AND j.attempts > 0
+         ORDER BY j.run_after ASC
+         LIMIT ?`,
+      )
+      .all(limit) as JobDetailRow[];
+  }
   if (options.status && options.status !== "all") {
     return db
       .prepare(
-        `SELECT j.*, m.subject as message_subject
-         FROM jobs j
-         LEFT JOIN messages m ON j.message_id = m.id
+        `${JOB_DETAIL_FROM}
          WHERE j.status = ?
          ORDER BY j.created_at DESC
          LIMIT ?`,
@@ -216,9 +244,7 @@ export function listJobsWithDetails(db: Db, options: ListJobsOptions = {}): JobD
   }
   return db
     .prepare(
-      `SELECT j.*, m.subject as message_subject
-       FROM jobs j
-       LEFT JOIN messages m ON j.message_id = m.id
+      `${JOB_DETAIL_FROM}
        ORDER BY j.created_at DESC
        LIMIT ?`,
     )

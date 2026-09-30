@@ -8,11 +8,29 @@ const LABEL_NAMES = {
   gray: "待看",
 };
 
+const VIEW_TITLES = {
+  inbox: "收件箱",
+  trash: "垃圾桶",
+  dlq: "失败",
+  settings: "设置",
+};
+const STEP_NAMES = {
+  auth: "身份检查",
+  parse: "拆信",
+  classify: "分拣",
+  notify: "提醒",
+  rebuild: "重建",
+};
+const STEP_ORDER = ["auth", "parse", "classify", "notify", "rebuild"];
+
 let currentTab = "ai";
 let currentView = "inbox";
-let currentSettingCategory = "prompts";
+let currentDlqScope = "open";
 let selectedMailId = null;
-let selectedJobId = null;
+let promptBaseline = "";
+let notifyBaseline = "";
+let attemptsBaseline = "";
+let settingsDomains = [];
 let currentMailHtml = "";
 let allowExternalImages = false;
 let cursor = null;
@@ -43,8 +61,6 @@ const badgeDlq = document.querySelector("#badge-dlq");
 // 第二列流头部
 const streamInboxHeader = document.querySelector("#stream-inbox-header");
 const streamTrashHeader = document.querySelector("#stream-trash-header");
-const streamDlqHeader = document.querySelector("#stream-dlq-header");
-const streamSettingsHeader = document.querySelector("#stream-settings-header");
 const trashQueryInput = document.querySelector("#trash-q");
 const trashRefreshBtn = document.querySelector("#btn-trash-refresh");
 const emptyTrashBtn = document.querySelector("#btn-empty-trash");
@@ -60,10 +76,9 @@ const retryAllBtn = document.querySelector("#btn-retry-all");
 // 第三列工作台各视图
 const viewMail = document.querySelector("#view-mail");
 const viewDlq = document.querySelector("#view-dlq");
-const viewPrompts = document.querySelector("#view-prompts");
-const viewMailboxes = document.querySelector("#view-mailboxes");
-const viewStats = document.querySelector("#view-stats");
-const viewSystem = document.querySelector("#view-system");
+const viewSettings = document.querySelector("#view-settings");
+const failureListEl = document.querySelector("#failure-list");
+const dlqNoticeEl = document.querySelector("#dlq-notice");
 
 // 邮件阅读器元素
 const mailEmptyEl = document.querySelector("#mail-empty");
@@ -128,12 +143,21 @@ btnRestoreMail?.addEventListener("click", () => void handleRestoreMail());
 btnDeleteMail?.addEventListener("click", () => void handleDeleteMail());
 backListBtn?.addEventListener("click", () => setMobilePane("list"));
 document.querySelector("#btn-save-prompt")?.addEventListener("click", () => void saveCurrentPrompt());
+document.querySelector("#prompt-editor")?.addEventListener("input", syncPromptSave);
+document.querySelector("#btn-save-notify")?.addEventListener("click", () => void saveNotifySettings());
+document.querySelector("#notify-confidence")?.addEventListener("input", syncNotifySave);
+document.querySelector("#btn-save-attempts")?.addEventListener("click", () => void saveAttemptSettings());
+document.querySelector("#job-max-attempts")?.addEventListener("input", syncAttemptSave);
+document.querySelector("#btn-add-domain")?.addEventListener("click", () => void addDomain());
+document.querySelector("#domain-add")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void addDomain();
+  }
+});
 document.querySelector("#mailbox-form")?.addEventListener("submit", (event) => {
   event.preventDefault();
   void saveMailbox();
-});
-document.querySelector("#btn-dlq-single-retry")?.addEventListener("click", () => {
-  if (selectedJobId) void retrySingleJob(selectedJobId);
 });
 
 document.querySelector("#trash-filters")?.addEventListener("submit", (e) => {
@@ -199,7 +223,8 @@ document.querySelector("#dlq-pills")?.addEventListener("click", (e) => {
   if (!target || !target.matches("button[data-dlq-status]")) return;
   for (const btn of document.querySelectorAll("#dlq-pills button")) btn.classList.remove("active");
   target.classList.add("active");
-  const st = target.getAttribute("data-dlq-status") || "";
+  const st = target.getAttribute("data-dlq-status") || "open";
+  currentDlqScope = st;
   void loadDlqJobs(st);
 });
 
@@ -324,6 +349,7 @@ async function signOut() {
 }
 
 function showLogin() {
+  document.title = "登录";
   loginEl.hidden = false;
   loginEl.style.display = "flex";
   appEl.hidden = true;
@@ -337,24 +363,20 @@ function showApp() {
   appEl.style.display = "grid";
 }
 
-const SETTING_CATEGORIES = [
-  { id: "prompts", glyph: "spark", title: "分拣提示词", desc: "模型按这段话给信分类" },
-  { id: "mailboxes", glyph: "note", title: "地址备注", desc: "你自己写的笔记，没有备注也很正常" },
-  { id: "stats", glyph: "chart", title: "收件统计", desc: "最近收了多少，各类有多少" },
-  { id: "system", glyph: "server", title: "运行状态", desc: "服务、数据库和当前账号" },
-];
-
 async function switchNav(view) {
   currentView = view;
+  document.title = VIEW_TITLES[view] || "收件箱";
+  if (appEl) {
+    if (view === "settings" || view === "dlq") appEl.dataset.layout = "page";
+    else delete appEl.dataset.layout;
+  }
   const navBtns = [navInboxBtn, navTrashBtn, navDlqBtn, navSettingsBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
-  const viewPanels = [viewMail, viewDlq, viewPrompts, viewMailboxes, viewStats, viewSystem];
+  const viewPanels = [viewMail, viewDlq, viewSettings];
   viewPanels.forEach((p) => { if (p) p.hidden = true; });
 
   streamInboxHeader.hidden = true;
   if (streamTrashHeader) streamTrashHeader.hidden = true;
-  streamDlqHeader.hidden = true;
-  if (streamSettingsHeader) streamSettingsHeader.hidden = true;
   noticeEl.textContent = "";
   listEl.replaceChildren();
   cursor = null;
@@ -373,84 +395,12 @@ async function switchNav(view) {
     await reloadTrash();
   } else if (view === "dlq") {
     navDlqBtn?.classList.add("active");
-    streamDlqHeader.hidden = false;
-    viewDlq.hidden = false;
-    await loadDlqJobs();
+    if (viewDlq) viewDlq.hidden = false;
+    await loadDlqJobs(currentDlqScope);
   } else if (view === "settings") {
     navSettingsBtn?.classList.add("active");
-    if (streamSettingsHeader) streamSettingsHeader.hidden = false;
-    renderSettingsStream();
-    await switchSettingCategory(currentSettingCategory, { keepListOnNarrow: true });
-  }
-}
-
-function renderSettingsStream() {
-  listEl.replaceChildren();
-  for (const cat of SETTING_CATEGORIES) {
-    const item = document.createElement("div");
-    item.className = "settings-nav-item";
-    if (cat.id === currentSettingCategory) item.classList.add("active");
-
-    const icon = document.createElement("span");
-    icon.className = "settings-nav-icon";
-    setGlyph(icon, cat.glyph);
-
-    const textWrap = document.createElement("div");
-    textWrap.className = "settings-nav-text";
-
-    const title = document.createElement("p");
-    title.className = "settings-nav-title";
-    title.textContent = cat.title;
-
-    const desc = document.createElement("p");
-    desc.className = "settings-nav-desc";
-    desc.textContent = cat.desc;
-
-    textWrap.append(title, desc);
-    item.append(icon, textWrap);
-    item.addEventListener("click", () => void switchSettingCategory(cat.id));
-    listEl.append(item);
-  }
-}
-
-async function switchSettingCategory(catId, options = {}) {
-  currentSettingCategory = catId;
-  const items = listEl.querySelectorAll(".settings-nav-item");
-  items.forEach((it, idx) => {
-    it.classList.toggle("active", SETTING_CATEGORIES[idx]?.id === catId);
-  });
-
-  const settingPanels = [viewPrompts, viewMailboxes, viewStats, viewSystem];
-  settingPanels.forEach((p) => { if (p) p.hidden = true; });
-
-  if (!options.keepListOnNarrow) setMobilePane("detail");
-  if (catId === "prompts") {
-    viewPrompts.hidden = false;
-    await loadPromptsView();
-  } else if (catId === "mailboxes") {
-    viewMailboxes.hidden = false;
-    await loadMailboxesView();
-  } else if (catId === "stats") {
-    viewStats.hidden = false;
-    await loadStatsView();
-  } else if (catId === "system") {
-    viewSystem.hidden = false;
-    await loadSystemView();
-  }
-}
-
-async function loadSystemView() {
-  try {
-    const health = await request("/healthz");
-    const me = await request("/v1/me");
-    const sysUser = document.querySelector("#sys-user");
-    const sysRoles = document.querySelector("#sys-roles");
-    const sysDb = document.querySelector("#sys-db");
-    if (sysUser) sysUser.textContent = me.user || "admin";
-    if (sysRoles) sysRoles.textContent = (health.roles || []).join(", ") || "smtp, worker, api";
-    if (sysDb) sysDb.textContent = health.db === "ok" ? "SQLite 正常" : "数据库异常";
-  } catch (err) {
-    noticeEl.textContent = explain(err);
+    if (viewSettings) viewSettings.hidden = false;
+    await loadSettingsPage();
   }
 }
 
@@ -932,102 +882,112 @@ async function handleEmptyTrash() {
   }
 }
 
-// ==================== 死信队列 (DLQ) 模块 ====================
+// ==================== 处理失败 ====================
 
-async function loadDlqJobs(statusFilter = "") {
-  listEl.replaceChildren();
-  noticeEl.textContent = "正在读取失败任务...";
+async function loadDlqJobs(scope = currentDlqScope) {
+  currentDlqScope = scope || "open";
+  if (failureListEl) failureListEl.replaceChildren();
+  if (dlqNoticeEl) dlqNoticeEl.textContent = "正在读取";
   try {
-    const url = statusFilter ? "/v1/jobs?status=" + encodeURIComponent(statusFilter) : "/v1/jobs";
+    const url = jobsUrl(currentDlqScope);
     const res = await request(url);
     currentJobs = Array.isArray(res.items) ? res.items : [];
-    noticeEl.textContent = currentJobs.length === 0 ? "没有卡住的任务" : "";
-
-    for (const job of currentJobs) {
-      listEl.append(createDlqJobItem(job));
-    }
-
-    if (currentJobs.length > 0 && !selectedJobId) {
-      selectDlqJob(currentJobs[0].id, { keepListOnNarrow: true });
-    }
+    if (dlqNoticeEl) dlqNoticeEl.textContent = currentJobs.length === 0 ? "没有要处理的任务" : "";
+    renderFailureGroups(currentJobs);
   } catch (err) {
-    noticeEl.textContent = explain(err);
+    if (dlqNoticeEl) dlqNoticeEl.textContent = explain(err);
   }
 }
 
-function createDlqJobItem(job) {
-  const item = document.createElement("div");
-  item.className = "dlq-job-item";
-  item.dataset.id = job.id;
-  if (job.id === selectedJobId) item.classList.add("selected");
-
-  const l1 = document.createElement("div");
-  l1.className = "item-line1";
-  const typeTag = document.createElement("span");
-  typeTag.className = "verdict-tag";
-  typeTag.dataset.label = job.status === "dead" ? "phish" : "spam";
-  typeTag.textContent = `${job.type} (${job.status})`;
-
-  const attempts = document.createElement("span");
-  attempts.className = "item-time";
-  attempts.textContent = `重试 ${job.attempts}/${job.maxAttempts}`;
-  l1.append(typeTag, attempts);
-
-  const title = document.createElement("p");
-  title.className = "item-subject";
-  title.textContent = job.messageSubject || `Message ID: ${job.messageId || "none"}`;
-
-  const errSnippet = document.createElement("span");
-  errSnippet.className = "dlq-error-snippet";
-  errSnippet.textContent = job.lastError || "没有错误说明";
-
-  item.append(l1, title, errSnippet);
-  item.addEventListener("click", () => selectDlqJob(job.id));
-  return item;
+function jobsUrl(scope) {
+  if (scope === "dead") return "/v1/jobs?status=dead";
+  if (scope === "retrying") return "/v1/jobs?scope=retrying";
+  return "/v1/jobs?scope=open";
 }
 
-function selectDlqJob(id, options = {}) {
-  selectedJobId = id;
-  if (!options.keepListOnNarrow) setMobilePane("detail");
-  document.querySelectorAll(".dlq-job-item").forEach((el) => {
-    if (el.dataset.id === id) el.classList.add("selected");
-    else el.classList.remove("selected");
-  });
+function renderFailureGroups(jobs) {
+  if (!failureListEl) return;
+  failureListEl.replaceChildren();
+  const groups = new Map();
+  for (const job of jobs) {
+    const key = job.messageId || job.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(job);
+  }
+  for (const group of groups.values()) {
+    group.sort((a, b) => stepRank(a.type) - stepRank(b.type));
+    failureListEl.append(createFailureLetter(group));
+  }
+}
 
-  const job = currentJobs.find((j) => j.id === id);
-  const detailBox = document.querySelector("#dlq-detail-content");
-  detailBox.replaceChildren();
+function stepRank(type) {
+  const index = STEP_ORDER.indexOf(type);
+  return index === -1 ? STEP_ORDER.length : index;
+}
 
-  if (!job) return;
+function createFailureLetter(jobs) {
+  const first = jobs[0] || {};
+  const article = document.createElement("article");
+  article.className = "letter";
 
-  const retryBtn = document.querySelector("#btn-dlq-single-retry");
-  retryBtn.hidden = false;
+  const subject = document.createElement("p");
+  subject.className = "letter-subject";
+  subject.textContent = first.messageSubject || "（无主题）";
 
-  const grid = document.createElement("div");
-  grid.className = "meta-grid";
-  grid.append(createMetaItem("任务 ID", job.id));
-  grid.append(createMetaItem("任务类型", job.type));
-  grid.append(createMetaItem("关联邮件", job.messageSubject || job.messageId || "无"));
-  grid.append(createMetaItem("状态", `${job.status} (失败 ${job.attempts}/${job.maxAttempts} 次)`));
-  grid.append(createMetaItem("入队时间", job.createdAt || ""));
-  grid.append(createMetaItem("下次执行", job.runAfter || ""));
+  const who = document.createElement("p");
+  who.className = "muted";
+  const from = first.messageFrom || "";
+  const to = first.messageTo || "";
+  who.textContent = from || to ? [from || "发件人还没解析出来", to].filter(Boolean).join(" → ") : "这封信的地址还没解析出来";
 
-  const errTitle = document.createElement("h4");
-  errTitle.textContent = "出错原因";
-  errTitle.style.marginTop = "16px";
+  article.append(subject, who);
+  for (const job of jobs) article.append(createFailureStep(job));
+  return article;
+}
 
-  const pre = document.createElement("pre");
-  pre.className = "code-block";
-  pre.textContent = job.lastError || "没有更多说明";
+function createFailureStep(job) {
+  const row = document.createElement("div");
+  row.className = "step-row";
 
-  detailBox.append(grid, errTitle, pre);
+  const copy = document.createElement("div");
+  copy.className = "step-copy";
+  const name = document.createElement("strong");
+  name.textContent = STEP_NAMES[job.type] || job.type;
+  const error = document.createElement("p");
+  error.className = "step-error";
+  error.textContent = job.lastError || "没有错误说明";
+  const state = document.createElement("p");
+  state.className = "muted";
+  state.textContent = stepState(job);
+  copy.append(name, error, state);
+
+  const stopped = job.status === "dead" || job.status === "failed";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = stopped ? "btn-fit" : "btn-fit ghost";
+  button.textContent = stopped ? "再试一次" : "等它自己试";
+  button.disabled = !stopped;
+  if (stopped) button.addEventListener("click", () => void retrySingleJob(job.id));
+
+  row.append(copy, button);
+  return row;
+}
+
+function stepState(job) {
+  if (job.status === "dead" || job.status === "failed") {
+    return `已放弃 · 试了 ${job.attempts}/${job.maxAttempts} 次`;
+  }
+  if (job.status === "queued" && job.runAfter) {
+    return `还会再试 · 下次 ${formatFullTime(job.runAfter)}`;
+  }
+  return "还会再试";
 }
 
 async function retrySingleJob(id) {
   try {
     await request("/v1/jobs/" + encodeURIComponent(id) + "/retry", { method: "POST", body: {} });
     toast("已重新排队");
-    await loadDlqJobs();
+    await loadDlqJobs(currentDlqScope);
     void updateDlqBadge();
   } catch (err) {
     toast("任务重试失败: " + explain(err));
@@ -1035,11 +995,11 @@ async function retrySingleJob(id) {
 }
 
 async function retryAllDead() {
-  if (!(await askConfirm("把失败的任务全部再跑一遍？"))) return;
+  if (!(await askConfirm("把已经停掉的任务全部再跑一遍？"))) return;
   try {
     const res = await request("/v1/jobs/retry-all", { method: "POST", body: {} });
     toast(`已重新排队 ${res.count || 0} 个`);
-    await loadDlqJobs();
+    await loadDlqJobs(currentDlqScope);
     void updateDlqBadge();
   } catch (err) {
     toast("批量重试失败: " + explain(err));
@@ -1061,84 +1021,229 @@ async function updateDlqBadge() {
   }
 }
 
-// ==================== AI 策略与提示词管理 ====================
+// ==================== 设置 ====================
 
-async function loadPromptsView() {
-  listEl.replaceChildren();
+async function loadSettingsPage() {
   try {
-    const statusRes = await request("/v1/ai/status");
-    document.querySelector("#ai-model-name").textContent = statusRes.model || "-";
-    document.querySelector("#ai-provider-name").textContent = statusRes.classifier || "-";
-    document.querySelector("#ai-key-count").textContent = String(statusRes.keyCount ?? 0);
+    const settings = await request("/v1/settings");
+    renderNotify(settings);
+    renderDomains(settings.acceptDomains || []);
+    const attempts = document.querySelector("#job-max-attempts");
+    if (attempts) {
+      attempts.value = String(settings.jobMaxAttempts ?? 5);
+      attemptsBaseline = attempts.value;
+      syncAttemptSave();
+    }
+    const aiLine = document.querySelector("#ai-status-line");
+    if (aiLine) aiLine.textContent = describeAi(settings.ai);
+    const channels = document.querySelector("#notify-channels");
+    if (channels) channels.textContent = describeChannels(settings.channels);
 
     const promptsRes = await request("/v1/prompts");
-    const items = promptsRes.items || [];
-    for (const p of items) {
-      const card = document.createElement("div");
-      card.className = "mail-item selected";
-      const title = document.createElement("p");
-      title.className = "item-from";
-      title.textContent = p.name;
-      card.append(title);
-      listEl.append(card);
-    }
-
     currentPromptId = promptsRes.defaultPromptId || "classify-v1";
     const detail = await request("/v1/prompts/" + encodeURIComponent(currentPromptId));
-    document.querySelector("#prompt-editor").value = detail.content || "";
+    const editor = document.querySelector("#prompt-editor");
+    if (editor) {
+      editor.value = detail.content || "";
+      promptBaseline = editor.value;
+      syncPromptSave();
+    }
+    await loadMailboxesView();
+    await loadMachineLine();
   } catch (err) {
-    noticeEl.textContent = explain(err);
+    toast(explain(err));
   }
 }
 
-// ==================== 收件画像模块 ====================
+function describeAi(ai) {
+  if (!ai || ai.classifier === "fake" || !ai.model) return "还没接模型。提示词先存着，接上之后新来的信按这份分。";
+  const keys = Number(ai.keyCount) === 1 ? "1 个 Key 可用" : `${ai.keyCount || 0} 个 Key 可用`;
+  return `${ai.model} · ${keys}`;
+}
+
+function describeChannels(channels) {
+  const telegram = channels && channels.telegram ? "Telegram 已接上" : "Telegram 没接";
+  const webhook = channels && channels.webhook ? "Webhook 已接上" : "Webhook 没接";
+  return `${telegram} · ${webhook}`;
+}
+
+function renderNotify(settings) {
+  const host = document.querySelector("#notify-labels");
+  if (!host) return;
+  host.replaceChildren();
+  const selected = new Set(settings.notifyLabels || []);
+  for (const label of LABELS) {
+    const wrap = document.createElement("label");
+    wrap.className = "chk";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = label;
+    input.checked = selected.has(label);
+    input.addEventListener("change", syncNotifySave);
+    const text = document.createElement("span");
+    text.textContent = LABEL_NAMES[label] || label;
+    wrap.append(input, text);
+    host.append(wrap);
+  }
+  const confidence = document.querySelector("#notify-confidence");
+  if (confidence) confidence.value = String(settings.notifyMinConfidence ?? 0.6);
+  notifyBaseline = notifySnapshot();
+  syncNotifySave();
+}
+
+function notifySnapshot() {
+  const labels = [];
+  document.querySelectorAll("#notify-labels input").forEach((input) => {
+    if (input.checked) labels.push(input.value);
+  });
+  const confidence = document.querySelector("#notify-confidence");
+  return JSON.stringify({ labels, confidence: confidence ? confidence.value.trim() : "" });
+}
+
+function syncNotifySave() {
+  const button = document.querySelector("#btn-save-notify");
+  if (button) button.disabled = notifySnapshot() === notifyBaseline;
+}
+
+function syncPromptSave() {
+  const editor = document.querySelector("#prompt-editor");
+  const button = document.querySelector("#btn-save-prompt");
+  if (button) button.disabled = !editor || editor.value === promptBaseline;
+}
+
+function syncAttemptSave() {
+  const input = document.querySelector("#job-max-attempts");
+  const button = document.querySelector("#btn-save-attempts");
+  if (button) button.disabled = !input || input.value.trim() === attemptsBaseline;
+}
+
+function renderDomains(domains) {
+  settingsDomains = Array.isArray(domains) ? domains.slice() : [];
+  const host = document.querySelector("#domain-list");
+  if (!host) return;
+  host.replaceChildren();
+  for (const domain of settingsDomains) {
+    const row = document.createElement("div");
+    row.className = "domain-row";
+    const input = document.createElement("input");
+    input.value = domain;
+    input.readOnly = true;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn-fit ghost";
+    button.textContent = "去掉";
+    button.addEventListener("click", () => void removeDomain(domain));
+    row.append(input, button);
+    host.append(row);
+  }
+}
+
+async function saveNotifySettings() {
+  const confidence = Number(document.querySelector("#notify-confidence")?.value);
+  const labels = [];
+  document.querySelectorAll("#notify-labels input").forEach((input) => {
+    if (input.checked) labels.push(input.value);
+  });
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    toast("把握要在 0 到 1 之间");
+    return;
+  }
+  try {
+    await request("/v1/settings/notify", { method: "PUT", body: { labels, minConfidence: confidence } });
+    notifyBaseline = notifySnapshot();
+    syncNotifySave();
+    toast("提醒已保存");
+  } catch (err) {
+    toast("保存提醒失败: " + explain(err));
+  }
+}
+
+async function addDomain() {
+  const input = document.querySelector("#domain-add");
+  const domain = input ? input.value.trim() : "";
+  if (!domain) return;
+  try {
+    const res = await request("/v1/settings/domains", {
+      method: "PUT",
+      body: { domains: settingsDomains.concat([domain]) },
+    });
+    if (input) input.value = "";
+    renderDomains(res.acceptDomains || []);
+    toast("域名已加上");
+  } catch (err) {
+    toast("加上域名失败: " + explain(err));
+  }
+}
+
+async function removeDomain(domain) {
+  if (settingsDomains.length <= 1) {
+    toast("至少留一个域名");
+    return;
+  }
+  if (!(await askConfirm(`不再收下 ${domain}？`))) return;
+  try {
+    const res = await request("/v1/settings/domains", {
+      method: "PUT",
+      body: { domains: settingsDomains.filter((item) => item !== domain) },
+    });
+    renderDomains(res.acceptDomains || []);
+    toast("已去掉 " + domain);
+  } catch (err) {
+    toast("去掉域名失败: " + explain(err));
+  }
+}
+
+async function saveAttemptSettings() {
+  const raw = document.querySelector("#job-max-attempts")?.value.trim() || "";
+  const maxAttempts = Number(raw);
+  if (!/^\d+$/.test(raw) || maxAttempts < 1 || maxAttempts > 20) {
+    toast("次数要是 1 到 20 的整数");
+    return;
+  }
+  try {
+    await request("/v1/settings/jobs", { method: "PUT", body: { maxAttempts } });
+    attemptsBaseline = String(maxAttempts);
+    syncAttemptSave();
+    toast("之后新来的任务，试满这次数就停");
+  } catch (err) {
+    toast("保存失败: " + explain(err));
+  }
+}
 
 async function loadMailboxesView() {
-  listEl.replaceChildren();
   try {
     const res = await request("/v1/mailbox-history");
     const items = res.items || [];
     const tbody = document.querySelector("#mailboxes-tbody");
+    if (!tbody) return;
     tbody.replaceChildren();
-
     for (const item of items) {
       const tr = document.createElement("tr");
       const tdAddr = document.createElement("td");
       tdAddr.textContent = `${item.localpart}@${item.domain}`;
-      const tdFirst = document.createElement("td");
-      tdFirst.textContent = formatShortTime(item.firstSeen);
-      const tdLast = document.createElement("td");
-      tdLast.textContent = formatShortTime(item.lastSeen);
       const tdNotes = document.createElement("td");
       tdNotes.textContent = item.notes || "没写备注";
-      tr.append(tdAddr, tdFirst, tdLast, tdNotes);
+      tr.append(tdAddr, tdNotes);
       tbody.append(tr);
     }
   } catch (err) {
-    noticeEl.textContent = explain(err);
+    toast("地址备注没读出来: " + explain(err));
   }
 }
 
-// ==================== 统计报表模块 ====================
-
-async function loadStatsView() {
-  listEl.replaceChildren();
+async function loadMachineLine() {
   try {
-    const res = await request("/v1/stats");
-    const total = res.total || {};
-    const sum = Object.values(total).reduce((acc, n) => acc + (typeof n === "number" ? n : 0), 0);
-    document.querySelector("#stat-total-count").textContent = String(sum);
-    document.querySelector("#stat-phish-count").textContent = String(total.phish || 0);
-    document.querySelector("#stat-malware-count").textContent = String(total.malware || 0);
-    document.querySelector("#stat-spam-count").textContent = String(total.spam || 0);
-    document.querySelector("#stat-legit-count").textContent = String(total.legit || 0);
-    const promo = document.querySelector("#stat-promo-count");
-    const gray = document.querySelector("#stat-gray-count");
-    if (promo) promo.textContent = String(total["unsolicited-admin"] || 0);
-    if (gray) gray.textContent = String(total.gray || 0);
-    renderTrend(Array.isArray(res.daily) ? res.daily : []);
+    const health = await request("/healthz");
+    const stats = await request("/v1/stats");
+    const today = stats.today || {};
+    const sum = Object.values(today).reduce((acc, n) => acc + (typeof n === "number" ? n : 0), 0);
+    const line = document.querySelector("#machine-line");
+    const dbText = health.db === "ok" ? "SQLite 正常" : "数据库异常";
+    if (line) line.textContent = `在线 · ${dbText} · 今天收了 ${sum} 封`;
+    renderTrend(Array.isArray(stats.daily) ? stats.daily : []);
   } catch (err) {
-    noticeEl.textContent = explain(err);
+    const line = document.querySelector("#machine-line");
+    if (line) line.textContent = explain(err);
   }
 }
 
@@ -1174,7 +1279,9 @@ async function saveCurrentPrompt() {
       method: "PUT",
       body: { content: editor ? editor.value : "" },
     });
-    toast("提示词已保存，下次分类会用这份新内容");
+    promptBaseline = editor ? editor.value : "";
+    syncPromptSave();
+    toast("提示词已保存，下次分类会用这份");
   } catch (err) {
     toast("保存提示词失败: " + explain(err));
   }

@@ -15,7 +15,7 @@ test("migration is idempotent and jobs are claimed atomically", () => {
   try {
     const first = migrate(db, migrationsDir(), () => 1);
     const second = migrate(db, migrationsDir(), () => 2);
-    assert.deepEqual(first, ["001_init", "002_trash", "003_indexes"]);
+    assert.deepEqual(first, ["001_init", "002_trash", "003_indexes", "004_settings"]);
     assert.deepEqual(second, []);
     const journal = db.pragma("journal_mode", { simple: true });
     assert.equal(String(journal).toLowerCase(), "wal");
@@ -24,7 +24,7 @@ test("migration is idempotent and jobs are claimed atomically", () => {
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all() as Array<{ name: string }>;
     const names = tables.map((row) => row.name);
-    for (const required of ["messages", "deliveries", "attachments", "jobs", "mailbox_history", "audit_log", "purged_messages"]) {
+    for (const required of ["messages", "deliveries", "attachments", "jobs", "mailbox_history", "audit_log", "purged_messages", "settings"]) {
       assert.ok(names.includes(required), required);
     }
     const indexes = db

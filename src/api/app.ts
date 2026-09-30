@@ -9,13 +9,14 @@ import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyRequ
 import { z } from "zod";
 import { LABELS } from "../ai/types.js";
 import { listPrompts, readPrompt, savePrompt } from "../ai/prompt.js";
-import type { Config } from "../config.js";
+import { ConfigError, type Config } from "../config.js";
 import type { Codec } from "../compress.js";
 import type { Db } from "../db/index.js";
 import PostalMime from "postal-mime";
 import { findAttachment, listMessageAttachments } from "../db/repos/attachments.js";
 import { writeAudit } from "../db/repos/audit.js";
 import { countJobsByStatus, enqueueJob, hasOpenJob, listJobsWithDetails, retryAllDeadJobs, retryJob, type JobStatus } from "../db/repos/jobs.js";
+import { readRuntimeSettings, saveAcceptDomains, saveJobMaxAttempts, saveNotifySettings, SettingsError } from "../db/repos/settings.js";
 import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
 import { countTrash, deleteMessage, emptyTrash, getMessage, listMessages, restoreMessage, trashMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
@@ -41,6 +42,19 @@ const DOMAIN_RE =
 const loginBody = z.object({
   username: z.string().min(1).max(128),
   password: z.string().min(1).max(512),
+}).strict();
+
+const notifySettingsBody = z.object({
+  labels: z.array(z.string()).max(LABELS.length),
+  minConfidence: z.number().min(0).max(1),
+}).strict();
+
+const domainSettingsBody = z.object({
+  domains: z.array(z.string().min(1).max(253)).min(1).max(50),
+}).strict();
+
+const jobSettingsBody = z.object({
+  maxAttempts: z.number().int().min(1).max(20),
 }).strict();
 
 const historyBody = z.object({
@@ -384,14 +398,23 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   app.get("/v1/jobs", async (request) => {
     const query = request.query as Record<string, unknown>;
     const status = optionalString(query.status);
+    const scope = optionalString(query.scope);
     const limit = typeof query.limit === "string" ? Number.parseInt(query.limit, 10) : undefined;
-    const rows = listJobsWithDetails(db, { status, limit });
+    if (scope && scope !== "open" && scope !== "retrying") throw new HttpError(400);
+    if (status && !JOB_STATUSES.includes(status as JobStatus) && status !== "all") throw new HttpError(400);
+    const rows = listJobsWithDetails(db, {
+      status,
+      scope: scope === "open" || scope === "retrying" ? scope : null,
+      limit,
+    });
     return {
       items: rows.map((row) => ({
         id: row.id,
         type: row.type,
         messageId: row.message_id,
         messageSubject: row.message_subject,
+        messageFrom: row.message_from,
+        messageTo: envelopeList(row.message_to),
         status: row.status,
         attempts: row.attempts,
         maxAttempts: row.max_attempts,
@@ -453,12 +476,85 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, id });
   });
 
-  app.get("/v1/ai/status", async () => {
+  app.get("/v1/ai/status", async () => aiStatus(config));
+
+  app.get("/v1/settings", async () => {
+    const runtime = readRuntimeSettings(db, {
+      notifyLabels: config.notifyLabels,
+      notifyMinConfidence: config.notifyMinConfidence,
+      acceptDomains: config.acceptDomains,
+    });
     return {
-      classifier: config.classifier,
-      model: config.classifier === "gemini" ? config.geminiModel : config.classifier === "openai-compat" ? config.openaiModel : "fake",
-      keyCount: config.classifier === "gemini" ? config.geminiApiKeys.length : config.openaiApiKey ? 1 : 0,
+      notifyLabels: runtime.notifyLabels,
+      notifyMinConfidence: runtime.notifyMinConfidence,
+      acceptDomains: runtime.acceptDomains,
+      jobMaxAttempts: runtime.jobMaxAttempts,
+      channels: {
+        telegram: Boolean(config.telegramBotToken && config.telegramChatId),
+        webhook: Boolean(config.notifyWebhookUrl),
+      },
+      ai: aiStatus(config),
     };
+  });
+
+  app.put("/v1/settings/notify", async (request, reply) => {
+    const body = notifySettingsBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    let labels;
+    try {
+      labels = saveNotifySettings(db, body.data.labels, body.data.minConfidence, now());
+    } catch (err) {
+      if (err instanceof SettingsError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "settings_notify",
+      detail: labels.join(",") || "none",
+    });
+    return reply.send({ ok: true, notifyLabels: labels, notifyMinConfidence: body.data.minConfidence });
+  });
+
+  app.put("/v1/settings/domains", async (request, reply) => {
+    const body = domainSettingsBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    let domains;
+    try {
+      domains = saveAcceptDomains(db, body.data.domains, now());
+    } catch (err) {
+      if (err instanceof ConfigError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "settings_domains",
+      detail: domains.join(","),
+    });
+    return reply.send({ ok: true, acceptDomains: domains });
+  });
+
+  app.put("/v1/settings/jobs", async (request, reply) => {
+    const body = jobSettingsBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    let maxAttempts;
+    try {
+      maxAttempts = saveJobMaxAttempts(db, body.data.maxAttempts, now());
+    } catch (err) {
+      if (err instanceof SettingsError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "settings_jobs",
+      detail: `maxAttempts=${maxAttempts}`,
+    });
+    return reply.send({ ok: true, jobMaxAttempts: maxAttempts });
   });
 
   app.get("/v1/stats", async () => {
@@ -518,6 +614,27 @@ export async function startApi(options: ApiOptions): Promise<RunningApi> {
   const address = app.server.address();
   const port = typeof address === "object" && address ? address.port : options.config.apiPort;
   return { port, close: () => app.close() };
+}
+
+function aiStatus(config: Config): { classifier: string; model: string; keyCount: number } {
+  return {
+    classifier: config.classifier,
+    model: config.classifier === "gemini" ? config.geminiModel : config.classifier === "openai-compat" ? config.openaiModel ?? "" : "fake",
+    keyCount: config.classifier === "gemini" ? config.geminiApiKeys.length : config.openaiApiKey ? 1 : 0,
+  };
+}
+
+function envelopeList(raw: string | null): string {
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is string => typeof item === "string").join(", ");
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
 }
 
 function isPublic(url: string): boolean {

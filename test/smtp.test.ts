@@ -11,6 +11,7 @@ import { loadConfig } from "../src/config.js";
 import { openDatabase, type Db } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
 import { migrationsDir } from "../src/paths.js";
+import { saveAcceptDomains, saveJobMaxAttempts } from "../src/db/repos/settings.js";
 import { buildSmtpMeta } from "../src/smtp/session-meta.js";
 import { startSmtp, type SmtpLog } from "../src/smtp/server.js";
 
@@ -217,6 +218,45 @@ test("a second connection past the per-ip ceiling is refused", async () => {
     }
   } finally {
     first.socket.destroy();
+    await smtp.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a saved domain list replaces the environment list for the next recipient", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-smtp-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  saveAcceptDomains(db, ["other.test"], 1);
+  saveJobMaxAttempts(db, 2, 1);
+  const config = loadConfig({
+    NODE_ENV: "test",
+    ROLES: "smtp",
+    MAIL_DATA_DIR: dir,
+    ACCEPT_DOMAINS: "example.com",
+    SMTP_HOST: "127.0.0.1",
+    SMTP_PORT: "2525",
+    CLASSIFIER: "fake",
+    COMPRESS: "gzip",
+    LOG_LEVEL: "error",
+  });
+  const smtp = await startSmtp({ config, db, codec: gzipCodec(), log: silent, port: 0 });
+  try {
+    const replies = await session(smtp.port, [
+      "EHLO test.example\r\n",
+      "MAIL FROM:<>\r\n",
+      "RCPT TO:<sink@example.com>\r\n",
+      "RCPT TO:<sink@other.test>\r\n",
+      "DATA\r\n",
+      "Subject: moved\r\n\r\nhello\r\n.\r\n",
+    ]);
+    assert.match(replies[3] ?? "", /^550 /);
+    assert.match(replies[4] ?? "", /^250 /);
+    assert.match(replies.at(-1) ?? "", /^250 /);
+    const job = db.prepare("SELECT max_attempts FROM jobs WHERE type = 'auth'").get() as { max_attempts: number };
+    assert.equal(job.max_attempts, 2);
+  } finally {
     await smtp.close();
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

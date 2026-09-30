@@ -364,6 +364,100 @@ test("dlq endpoints list, retry single and retry all dead jobs", async () => {
 });
 
 
+test("settings override notify, domains, and the failure list", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-settings-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const now = Date.UTC(2026, 8, 21, 12);
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      NOTIFY_LABELS: "phish,malware",
+      NOTIFY_MIN_CONFIDENCE: "0.6",
+      API_PASSWORD: password,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+      TELEGRAM_BOT_TOKEN: "token",
+      TELEGRAM_CHAT_ID: "1",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => now,
+  });
+  const client = cookieJar();
+  try {
+    await client.csrf(app);
+    const login = await client.post(app, "/v1/login", { username: "admin", password });
+    assert.equal(login.statusCode, 200);
+
+    const initial = await client.get(app, "/v1/settings");
+    assert.equal(initial.statusCode, 200);
+    assert.deepEqual(initial.json().notifyLabels, ["phish", "malware"]);
+    assert.equal(initial.json().notifyMinConfidence, 0.6);
+    assert.deepEqual(initial.json().acceptDomains, ["example.com"]);
+    assert.equal(initial.json().jobMaxAttempts, 5);
+    assert.equal(initial.json().channels.telegram, true);
+    assert.equal(initial.json().channels.webhook, false);
+
+    await client.csrf(app);
+    const notify = await client.put(app, "/v1/settings/notify", { labels: ["spam"], minConfidence: 0.2 });
+    assert.equal(notify.statusCode, 200);
+    assert.deepEqual(notify.json().notifyLabels, ["spam"]);
+
+    const domains = await client.put(app, "/v1/settings/domains", { domains: ["example.com", "other.test"] });
+    assert.equal(domains.statusCode, 200);
+    assert.deepEqual(domains.json().acceptDomains, ["example.com", "other.test"]);
+    const empty = await client.put(app, "/v1/settings/domains", { domains: [] });
+    assert.equal(empty.statusCode, 400);
+    const bogus = await client.put(app, "/v1/settings/domains", { domains: ["*.example.com"] });
+    assert.equal(bogus.statusCode, 400);
+
+    const attempts = await client.put(app, "/v1/settings/jobs", { maxAttempts: 3 });
+    assert.equal(attempts.statusCode, 200);
+    assert.equal(attempts.json().jobMaxAttempts, 3);
+    const tooMany = await client.put(app, "/v1/settings/jobs", { maxAttempts: 99 });
+    assert.equal(tooMany.statusCode, 400);
+
+    const saved = await client.get(app, "/v1/settings");
+    assert.deepEqual(saved.json().acceptDomains, ["example.com", "other.test"]);
+    assert.equal(saved.json().jobMaxAttempts, 3);
+
+    db.prepare(
+      `INSERT INTO messages (id, sha256, raw_path, size_bytes, received_at, envelope_to, domains, smtp_meta, subject, from_addr, status, created_at, updated_at)
+       VALUES ('msg-1', ?, 'raw/a', 1, ?, '["a@example.com"]', '["example.com"]', '{}', '工资条', 'payroll@example.com', 'received', ?, ?)`,
+    ).run("ab".repeat(32), now, now, now);
+    const insertJob = (id: string, type: string, status: string, attempts: number) => {
+      db.prepare(
+        `INSERT INTO jobs (id, type, message_id, status, attempts, max_attempts, run_after, last_error, created_at, updated_at)
+         VALUES (?, ?, 'msg-1', ?, ?, 5, ?, 'boom', ?, ?)`,
+      ).run(id, type, status, attempts, now, now, now);
+    };
+    insertJob("job-dead", "classify", "dead", 5);
+    insertJob("job-retry", "parse", "queued", 2);
+    insertJob("job-fresh", "auth", "queued", 0);
+    insertJob("job-done", "notify", "done", 1);
+
+    const open = await client.get(app, "/v1/jobs?scope=open");
+    const openIds = open.json().items.map((item: { id: string }) => item.id).sort();
+    assert.deepEqual(openIds, ["job-dead", "job-retry"]);
+    const letter = open.json().items.find((item: { id: string }) => item.id === "job-dead");
+    assert.equal(letter.messageSubject, "工资条");
+    assert.equal(letter.messageFrom, "payroll@example.com");
+    assert.equal(letter.messageTo, "a@example.com");
+
+    const retrying = await client.get(app, "/v1/jobs?scope=retrying");
+    assert.deepEqual(retrying.json().items.map((item: { id: string }) => item.id), ["job-retry"]);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function cookieJar() {
   let cookie = "";
   let token = "";
@@ -387,6 +481,20 @@ function cookieJar() {
     ): Promise<Injected> {
       const response = (await app.inject({
         method: "POST",
+        url,
+        headers: { cookie, "x-csrf-token": token, "content-type": "application/json" },
+        payload,
+      })) as Injected;
+      cookie = mergeCookie(cookie, response.headers["set-cookie"]);
+      return response;
+    },
+    async put(
+      app: Awaited<ReturnType<typeof buildApi>>,
+      url: string,
+      payload: Record<string, unknown>,
+    ): Promise<Injected> {
+      const response = (await app.inject({
+        method: "PUT",
         url,
         headers: { cookie, "x-csrf-token": token, "content-type": "application/json" },
         payload,

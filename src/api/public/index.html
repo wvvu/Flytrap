@@ -120,31 +120,6 @@
           </form>
         </div>
 
-        <!-- 死信队列模式的顶部操作栏 -->
-        <div id="stream-dlq-header" class="stream-header" hidden>
-          <div class="stream-title-row">
-            <h2>处理失败</h2>
-            <button type="button" id="btn-dlq-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
-          </div>
-          <div class="dlq-actions-bar">
-            <button type="button" id="btn-retry-all" class="btn-action-primary">全部再试一次</button>
-          </div>
-          <div class="pills-scroll" id="dlq-pills">
-            <button type="button" class="pill active" data-dlq-status="">全部</button>
-            <button type="button" class="pill" data-dlq-status="dead">已放弃</button>
-            <button type="button" class="pill" data-dlq-status="failed">失败</button>
-            <button type="button" class="pill" data-dlq-status="queued">排队</button>
-          </div>
-        </div>
-
-        <!-- 设置模式的二级列表头 -->
-        <div id="stream-settings-header" class="stream-header" hidden>
-          <div class="stream-title-row">
-            <h2>系统设置</h2>
-          </div>
-          <p class="stream-subtitle">提示词、地址备注和运行情况</p>
-        </div>
-
         <p id="notice" class="stream-notice" role="status"></p>
 
         <!-- 列表容器 -->
@@ -281,139 +256,121 @@
           </article>
         </section>
 
-        <!-- 死信队列详情舞台 -->
         <section id="view-dlq" class="workspace-view" hidden>
-          <div class="panel-inner">
-            <div class="panel-header">
-              <h2>失败任务</h2>
-              <button type="button" id="btn-dlq-single-retry" class="btn-primary" hidden>再试一次</button>
-            </div>
-            <div id="dlq-detail-content" class="detail-card">
-              <p class="empty-hint">左边选一条任务，这里看它为什么停了。</p>
-            </div>
-          </div>
-        </section>
-
-        <!-- Prompt 策略与模型管理舞台 -->
-        <section id="view-prompts" class="workspace-view" hidden>
-          <div class="panel-inner">
-            <div class="panel-header">
-              <h2>分拣提示词</h2>
-              <button type="button" id="btn-save-prompt" class="btn-primary">保存</button>
-            </div>
-            <div class="prompt-meta-row">
-              <div class="ai-status-card" id="ai-status-card">
-                <span>模型 <strong id="ai-model-name">-</strong></span>
-                <span>通道 <strong id="ai-provider-name">-</strong></span>
-                <span>可用 Key <strong id="ai-key-count">0</strong></span>
+          <div class="page-scroll">
+            <div class="block-head">
+              <div>
+                <h1 class="page-title">处理失败</h1>
+                <p class="muted">按信排。每一行是停住的那一步。</p>
+              </div>
+              <div class="page-tools">
+                <button type="button" id="btn-retry-all" class="btn-fit">停掉的全部再试</button>
+                <button type="button" id="btn-dlq-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
               </div>
             </div>
-            <div class="form-group">
-              <label for="prompt-editor">系统提示词</label>
-              <p class="stream-subtitle">保存后，新来的信按这份分。已经分过的，打开那封再点「重分类」。</p>
-              <textarea id="prompt-editor" rows="18" class="code-editor"></textarea>
+            <div class="pills-scroll" id="dlq-pills">
+              <button type="button" class="pill active" data-dlq-status="open">要处理</button>
+              <button type="button" class="pill" data-dlq-status="dead">已放弃</button>
+              <button type="button" class="pill" data-dlq-status="retrying">还会再试</button>
             </div>
+            <p id="dlq-notice" class="muted" role="status"></p>
+            <div id="failure-list" class="letter-list"></div>
           </div>
         </section>
 
-        <!-- 收件画像舞台 -->
-        <section id="view-mailboxes" class="workspace-view" hidden>
-          <div class="panel-inner">
-            <div class="panel-header">
-              <h2>地址备注</h2>
-            </div>
-            <p class="stream-subtitle">备注是你写给自己的。某个地址没有备注不代表那封信未知，分类也不会因此变成待看。</p>
-            <form id="mailbox-form" class="inline-form">
-              <input id="mb-domain" placeholder="域名，如 example.com" required>
-              <input id="mb-localpart" placeholder="前缀，如 me" required>
-              <input id="mb-notes" placeholder="这地址是干什么的，可以空着">
-              <button type="submit" class="btn-primary">保存备注</button>
-            </form>
-            <div id="mailboxes-table-wrap">
+        <section id="view-settings" class="workspace-view" hidden>
+          <div class="page-scroll">
+            <h1 class="page-title">设置</h1>
+            <p class="page-lead">每一块自己存。字没改的时候，保存是灰的。</p>
+
+            <section class="block">
+              <div class="block-head">
+                <div>
+                  <h2>分拣</h2>
+                  <p class="muted" id="ai-status-line">模型</p>
+                </div>
+                <button type="button" id="btn-save-prompt" class="btn-fit" disabled>保存</button>
+              </div>
+              <textarea id="prompt-editor" rows="14" class="code-editor" spellcheck="false"></textarea>
+              <p class="muted">保存后，新来的信按这份分。已经分过的，打开那封再点「重分类」。</p>
+            </section>
+
+            <section class="block">
+              <div class="block-head">
+                <div>
+                  <h2>提醒</h2>
+                  <p class="muted">只有勾上的分类才推送。普通信留在收件箱。</p>
+                </div>
+                <button type="button" id="btn-save-notify" class="btn-fit" disabled>保存</button>
+              </div>
+              <div class="chk-row" id="notify-labels"></div>
+              <div class="inline-row">
+                <span class="muted">把握至少</span>
+                <input id="notify-confidence" class="field-narrow" inputmode="decimal" autocomplete="off">
+                <span class="muted" id="notify-channels"></span>
+              </div>
+            </section>
+
+            <section class="block">
+              <div class="block-head">
+                <div>
+                  <h2>收信域名</h2>
+                  <p class="muted">这些域名上的任何前缀都会收下。至少留一个。</p>
+                </div>
+              </div>
+              <div id="domain-list" class="domain-list"></div>
+              <div class="inline-row">
+                <input id="domain-add" placeholder="再加一个域名" autocomplete="off">
+                <button type="button" id="btn-add-domain" class="btn-fit">加上</button>
+              </div>
+            </section>
+
+            <section class="block">
+              <div class="block-head">
+                <div>
+                  <h2>失败几次才停</h2>
+                  <p class="muted">只影响之后新来的任务。已经在队列里的，还是原来的次数。</p>
+                </div>
+                <button type="button" id="btn-save-attempts" class="btn-fit" disabled>保存</button>
+              </div>
+              <div class="inline-row">
+                <input id="job-max-attempts" class="field-narrow" inputmode="numeric" autocomplete="off">
+                <span class="muted">次之后不再自动试</span>
+              </div>
+            </section>
+
+            <section class="block">
+              <div class="block-head">
+                <div>
+                  <h2>地址备注</h2>
+                  <p class="muted">你自己的笔记。没有备注不代表那封信未知。</p>
+                </div>
+              </div>
+              <form id="mailbox-form" class="inline-row">
+                <input id="mb-domain" placeholder="域名" required autocomplete="off">
+                <input id="mb-localpart" class="field-narrow" placeholder="前缀" required autocomplete="off">
+                <input id="mb-notes" placeholder="备注，可以空" autocomplete="off">
+                <button type="submit" class="btn-fit">记下</button>
+              </form>
               <table id="mailboxes-table" class="data-table">
                 <thead>
                   <tr>
-                    <th>邮箱地址</th>
-                    <th>首见时间</th>
-                    <th>末见时间</th>
+                    <th>地址</th>
                     <th>备注</th>
                   </tr>
                 </thead>
                 <tbody id="mailboxes-tbody"></tbody>
               </table>
-            </div>
-          </div>
-        </section>
+            </section>
 
-        <!-- 统计舞台 -->
-        <section id="view-stats" class="workspace-view" hidden>
-          <div class="panel-inner">
-            <div class="panel-header">
-              <h2>收件统计</h2>
-            </div>
-            <div class="stats-cards-grid">
-              <div class="stat-card">
-                <span class="stat-num" id="stat-total-count">0</span>
-                <span class="stat-desc">收到</span>
-              </div>
-              <div class="stat-card stat-phish">
-                <span class="stat-num" id="stat-phish-count">0</span>
-                <span class="stat-desc">钓鱼</span>
-              </div>
-              <div class="stat-card stat-malware">
-                <span class="stat-num" id="stat-malware-count">0</span>
-                <span class="stat-desc">恶意</span>
-              </div>
-              <div class="stat-card stat-spam">
-                <span class="stat-num" id="stat-spam-count">0</span>
-                <span class="stat-desc">垃圾</span>
-              </div>
-              <div class="stat-card stat-legit">
-                <span class="stat-num" id="stat-legit-count">0</span>
-                <span class="stat-desc">正常</span>
-              </div>
-              <div class="stat-card stat-promo">
-                <span class="stat-num" id="stat-promo-count">0</span>
-                <span class="stat-desc">推广</span>
-              </div>
-              <div class="stat-card stat-gray">
-                <span class="stat-num" id="stat-gray-count">0</span>
-                <span class="stat-desc">待看</span>
-              </div>
-            </div>
-            <h3 class="trend-title">近 14 天</h3>
-            <div id="stat-trend" class="trend"></div>
-          </div>
-        </section>
-
-        <!-- 系统服务状态舞台 -->
-        <section id="view-system" class="workspace-view" hidden>
-          <div class="panel-inner">
-            <div class="panel-header">
-              <h2>运行状态</h2>
-            </div>
-            <div class="system-grid">
-              <div class="system-card">
-                <span class="sys-label">版本</span>
-                <strong class="sys-val">Flytrap v0.3.0</strong>
-              </div>
-              <div class="system-card">
-                <span class="sys-label">账号</span>
-                <strong id="sys-user" class="sys-val">admin</strong>
-              </div>
-              <div class="system-card">
-                <span class="sys-label">角色</span>
-                <strong id="sys-roles" class="sys-val">smtp, worker, api</strong>
-              </div>
-              <div class="system-card">
-                <span class="sys-label">数据库</span>
-                <strong id="sys-db" class="sys-val sys-status-ok">SQLite</strong>
-              </div>
-              <div class="system-card">
-                <span class="sys-label">状态</span>
-                <strong class="sys-val sys-status-ok">在线</strong>
-              </div>
-            </div>
+            <section class="block">
+              <h2>这台机器</h2>
+              <p class="muted" id="machine-line">在线</p>
+              <details class="machine-trend">
+                <summary>近 14 天</summary>
+                <div id="stat-trend" class="trend"></div>
+              </details>
+            </section>
           </div>
         </section>
       </main>
