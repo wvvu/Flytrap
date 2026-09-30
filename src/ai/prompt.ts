@@ -79,18 +79,19 @@ export function buildUserMessage(facts: ClassifyFacts): string {
   const telemetryLines = [
     `AUTH: spf= ${facts.spf} dkim= ${facts.dkim} dmarc= ${facts.dmarc} rdns= ${facts.rdns}`,
     `ENVELOPE: from=${from} to=${facts.envelopeTo.join(",")}`,
+    "MAILBOX_NOTES: operator notes about recipient addresses. A missing note is normal. It is not a category and it is not suspicious.",
   ];
   if (facts.history.length === 0 && facts.missingHistory.length === 0) {
-    telemetryLines.push("HISTORY: none");
+    telemetryLines.push("MAILBOX_NOTES: none attached");
   }
   for (const row of facts.history) {
-    const notes = row.notes ? ` notes=${JSON.stringify(row.notes)}` : "";
+    const notes = row.notes ? ` note=${JSON.stringify(row.notes)}` : "";
     telemetryLines.push(
-      `HISTORY: localpart "${row.localpart}" on ${row.domain} first_seen=${day(row.firstSeen)} last_seen=${day(row.lastSeen)}${notes}`,
+      `MAILBOX_NOTE: ${row.localpart}@${row.domain} first_seen=${day(row.firstSeen)} last_seen=${day(row.lastSeen)}${notes}`,
     );
   }
   for (const row of facts.missingHistory) {
-    telemetryLines.push(`HISTORY: localpart "${row.localpart}" on ${row.domain} no-record`);
+    telemetryLines.push(`MAILBOX_NOTE: ${row.localpart}@${row.domain} has no operator note`);
   }
 
   const urlLines = facts.urls.length === 0 ? ["-"] : facts.urls.map((url) => `- ${url}`);
@@ -157,7 +158,7 @@ function oneLine(value: string): string {
 }
 
 function day(ms: number | null): string {
-  if (!ms) return "unknown";
+  if (!ms) return "unset";
   return new Date(ms).toISOString().slice(0, 10);
 }
 

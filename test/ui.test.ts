@@ -61,6 +61,10 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(script.body, /x-csrf-token/);
     assert.match(script.body, /重分类/);
     assert.equal(script.body.includes("innerHTML"), false);
+    assert.equal(page.body.includes("蜜罐"), false);
+    assert.equal(page.body.includes("威胁研判"), false);
+    assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(page.body), false);
+    assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(script.body), false);
 
     const style = await app.inject({ method: "GET", url: "/app.css" });
     assert.equal(style.statusCode, 200);

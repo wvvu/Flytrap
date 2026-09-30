@@ -2,10 +2,10 @@ const LABELS = ["legit", "spam", "phish", "malware", "gray", "unsolicited-admin"
 const LABEL_NAMES = {
   legit: "正常",
   phish: "钓鱼",
-  malware: "恶意威胁",
+  malware: "恶意",
   spam: "垃圾",
   "unsolicited-admin": "推广",
-  gray: "未知/可疑",
+  gray: "待看",
 };
 
 let currentTab = "ai";
@@ -169,22 +169,22 @@ detailVerdictSelect?.addEventListener("change", async () => {
     if (detailModelVerdict) {
       const origName = LABEL_NAMES[res.originalLabel] || res.originalLabel || "未分类";
       const origConf = typeof res.originalConfidence === "number" ? " " + Math.round(res.originalConfidence * 100) + "%" : "";
-      detailModelVerdict.textContent = `(模型初判: ${origName}${origConf} · 人工修正)`;
+      detailModelVerdict.textContent = `(模型先看成 ${origName}${origConf}，你改过)`;
     }
     const listItem = findByDataId(listEl, ".mail-item", selectedMailId);
     if (listItem) {
       const tag = listItem.querySelector(".verdict-tag");
       if (tag) {
         tag.dataset.label = newLabel;
-        tag.textContent = (LABEL_NAMES[newLabel] || newLabel) + " (人工修正)";
+        tag.textContent = (LABEL_NAMES[newLabel] || newLabel) + " (你改过)";
       }
     }
-    noticeEl.textContent = "研判已手动修正为: " + (LABEL_NAMES[newLabel] || newLabel);
+    noticeEl.textContent = "已改成 " + (LABEL_NAMES[newLabel] || newLabel);
     setTimeout(() => {
-      if (noticeEl.textContent.startsWith("研判已手动修正")) noticeEl.textContent = "";
+      if (noticeEl.textContent.startsWith("已改成")) noticeEl.textContent = "";
     }, 3000);
   } catch (err) {
-    noticeEl.textContent = "修改研判失败: " + explain(err);
+    noticeEl.textContent = "改分类失败: " + explain(err);
   } finally {
     detailVerdictSelect.disabled = false;
   }
@@ -215,7 +215,7 @@ btnLoadImages?.addEventListener("click", () => {
   allowExternalImages = true;
   renderSandboxHtml(currentMailHtml);
   if (btnLoadImages) {
-    btnLoadImages.textContent = "已允许加载外链图片";
+    btnLoadImages.textContent = "图片已显示";
     btnLoadImages.disabled = true;
   }
 });
@@ -257,10 +257,22 @@ async function init() {
   window.setInterval(() => void pollLive(), 30000);
 }
 
+function setGlyph(el, name) {
+  if (!el) return;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "ico");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", "#i-" + name);
+  svg.append(use);
+  el.replaceChildren(svg);
+}
+
 function initTheme() {
   const saved = localStorage.getItem("flytrap_theme") || "dark";
   document.documentElement.setAttribute("data-theme", saved);
-  themeIcon.textContent = saved === "dark" ? "☀️" : "🌙";
+  setGlyph(themeIcon, saved === "dark" ? "sun" : "moon");
 }
 
 function toggleTheme() {
@@ -268,7 +280,7 @@ function toggleTheme() {
   const next = cur === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", next);
   localStorage.setItem("flytrap_theme", next);
-  themeIcon.textContent = next === "dark" ? "☀️" : "🌙";
+  setGlyph(themeIcon, next === "dark" ? "sun" : "moon");
 }
 
 async function signIn() {
@@ -276,7 +288,7 @@ async function signIn() {
   const btn = document.querySelector("#btn-login");
   if (btn) {
     btn.disabled = true;
-    btn.textContent = "正在进入...";
+    btn.textContent = "正在登录...";
   }
   try {
     await request("/v1/login", {
@@ -297,7 +309,7 @@ async function signIn() {
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = "进入控制台";
+      btn.textContent = "登录";
     }
   }
 }
@@ -327,10 +339,10 @@ function showApp() {
 }
 
 const SETTING_CATEGORIES = [
-  { id: "prompts", icon: "🤖", title: "AI 提示词策略与模型", desc: "System Prompt 策略与模型 Key 池" },
-  { id: "mailboxes", icon: "🛡️", title: "收件画像与蜜罐防线", desc: "受保护域名与诱饵邮箱属性" },
-  { id: "stats", icon: "📊", title: "统计大盘与威胁态势", desc: "邮件捕获总量与威胁分类统计" },
-  { id: "system", icon: "🖥️", title: "系统服务与运行健康", desc: "服务角色、端口监听与系统状态" },
+  { id: "prompts", glyph: "spark", title: "分拣提示词", desc: "模型按这段话给信分类" },
+  { id: "mailboxes", glyph: "note", title: "地址备注", desc: "你自己写的笔记，没有备注也很正常" },
+  { id: "stats", glyph: "chart", title: "收件统计", desc: "最近收了多少，各类有多少" },
+  { id: "system", glyph: "server", title: "运行状态", desc: "服务、数据库和当前账号" },
 ];
 
 async function switchNav(view) {
@@ -382,7 +394,7 @@ function renderSettingsStream() {
 
     const icon = document.createElement("span");
     icon.className = "settings-nav-icon";
-    icon.textContent = cat.icon;
+    setGlyph(icon, cat.glyph);
 
     const textWrap = document.createElement("div");
     textWrap.className = "settings-nav-text";
@@ -437,7 +449,7 @@ async function loadSystemView() {
     const sysDb = document.querySelector("#sys-db");
     if (sysUser) sysUser.textContent = me.user || "admin";
     if (sysRoles) sysRoles.textContent = (health.roles || []).join(", ") || "smtp, worker, api";
-    if (sysDb) sysDb.textContent = health.db === "ok" ? "SQLite (WAL 模式正常)" : "异常";
+    if (sysDb) sysDb.textContent = health.db === "ok" ? "SQLite 正常" : "数据库异常";
   } catch (err) {
     noticeEl.textContent = explain(err);
   }
@@ -514,7 +526,7 @@ function createMailListItem(item) {
 
   const from = document.createElement("span");
   from.className = "item-from";
-  from.textContent = item.from || item.envelopeFrom || "未知发件人";
+  from.textContent = item.from || item.envelopeFrom || "没有发件人";
 
   const time = document.createElement("span");
   time.className = "item-time";
@@ -537,7 +549,7 @@ function createMailListItem(item) {
   tag.className = "verdict-tag";
   tag.dataset.label = item.label || "none";
   const confText = item.manualOverride
-    ? " (人工修正)"
+    ? " (你改过)"
     : (typeof item.confidence === "number" ? ` ${Math.round(item.confidence * 100)}%` : "");
   tag.textContent = (LABEL_NAMES[item.label] || item.label || "未分类") + confText;
 
@@ -552,7 +564,7 @@ async function selectMail(id, options = {}) {
   const token = ++mailLoadToken;
   selectedMailId = id;
   allowExternalImages = false;
-  btnLoadImages.textContent = "允许加载外链图片";
+  btnLoadImages.textContent = "显示图片";
   btnLoadImages.disabled = false;
   if (!options.keepListOnNarrow) setMobilePane("detail");
 
@@ -575,7 +587,7 @@ async function selectMail(id, options = {}) {
     const detail = await request("/v1/messages/" + encodeURIComponent(id));
     if (token !== mailLoadToken) return;
     if (detailSubject) detailSubject.textContent = detail.subject || "(无主题)";
-    if (detailFrom) detailFrom.textContent = detail.from || detail.envelopeFrom || "未知发件人";
+    if (detailFrom) detailFrom.textContent = detail.from || detail.envelopeFrom || "没有发件人";
     if (detailTo) detailTo.textContent = Array.isArray(detail.envelopeTo) ? detail.envelopeTo.join(", ") : detail.envelopeTo || "";
     if (detailTime) detailTime.textContent = formatFullTime(detail.receivedAt);
 
@@ -595,15 +607,27 @@ async function selectMail(id, options = {}) {
       if (detail.aiResult?.manualOverride) {
         const origName = LABEL_NAMES[detail.aiResult.originalLabel] || detail.aiResult.originalLabel || "未分类";
         const origConf = typeof detail.aiResult.originalConfidence === "number" ? ` ${Math.round(detail.aiResult.originalConfidence * 100)}%` : "";
-        detailModelVerdict.textContent = `(模型初判: ${origName}${origConf} · 人工修正)`;
+        detailModelVerdict.textContent = `(模型先看成 ${origName}${origConf}，你改过)`;
       } else {
-        detailModelVerdict.textContent = `(模型判定 ${Math.round(confidence * 100)}%)`;
+        detailModelVerdict.textContent = `(模型 ${Math.round(confidence * 100)}%)`;
       }
     }
 
     if (verdictBar) verdictBar.style.width = Math.round(confidence * 100) + "%";
     if (verdictPercent) verdictPercent.textContent = Math.round(confidence * 100) + "%";
-    if (detailSummary) detailSummary.textContent = detail.aiResult?.summary || "尚未生成 AI 研判摘要";
+    if (detailSummary) detailSummary.textContent = detail.aiResult?.summary || "这封还没分拣";
+    const detailTags = document.querySelector("#detail-tags");
+    if (detailTags) {
+      detailTags.replaceChildren();
+      const tags = Array.isArray(detail.aiResult?.tags) ? detail.aiResult.tags : [];
+      for (const name of tags) {
+        if (typeof name !== "string" || !name) continue;
+        const chip = document.createElement("span");
+        chip.className = "mini-tag";
+        chip.textContent = name;
+        detailTags.append(chip);
+      }
+    }
 
     // 威胁信号指纹
     signalsList.replaceChildren();
@@ -612,7 +636,7 @@ async function selectMail(id, options = {}) {
     if (signals.length === 0) {
       const emptySig = document.createElement("span");
       emptySig.className = "text-dim";
-      emptySig.textContent = "无高危命中指纹";
+      emptySig.textContent = "没有额外依据";
       signalsList.append(emptySig);
     } else {
       for (const sig of signals) {
@@ -636,7 +660,7 @@ async function selectMail(id, options = {}) {
     if (urls.length === 0) {
       const emptyUrl = document.createElement("span");
       emptyUrl.className = "text-dim";
-      emptyUrl.textContent = "未提取到外部超链接";
+      emptyUrl.textContent = "没有链接";
       urlsList.append(emptyUrl);
     } else {
       for (const u of urls) {
@@ -659,7 +683,7 @@ async function selectMail(id, options = {}) {
     if (attachments.length === 0) {
       const emptyAtt = document.createElement("span");
       emptyAtt.className = "text-dim";
-      emptyAtt.textContent = "无随信附件";
+      emptyAtt.textContent = "没有附件";
       attachmentsList.append(emptyAtt);
     } else {
       for (const att of attachments) {
@@ -718,7 +742,7 @@ async function loadMailHtml(id, token) {
     renderSandboxHtml(currentMailHtml);
   } catch {
     if (token !== mailLoadToken) return;
-    currentMailHtml = "<p style='color:#888;padding:20px'>该邮件无 HTML 格式内容或解析失败</p>";
+    currentMailHtml = "<p style='color:#888;padding:20px'>这封没有 HTML 正文</p>";
     renderSandboxHtml(currentMailHtml);
   }
 }
@@ -909,12 +933,12 @@ async function updateTrashBadge() {
 
 async function loadDlqJobs(statusFilter = "") {
   listEl.replaceChildren();
-  noticeEl.textContent = "加载死信与失败任务中...";
+  noticeEl.textContent = "正在读取失败任务...";
   try {
     const url = statusFilter ? "/v1/jobs?status=" + encodeURIComponent(statusFilter) : "/v1/jobs";
     const res = await request(url);
     currentJobs = Array.isArray(res.items) ? res.items : [];
-    noticeEl.textContent = currentJobs.length === 0 ? "队列当前无异常任务" : "";
+    noticeEl.textContent = currentJobs.length === 0 ? "没有卡住的任务" : "";
 
     for (const job of currentJobs) {
       listEl.append(createDlqJobItem(job));
@@ -952,7 +976,7 @@ function createDlqJobItem(job) {
 
   const errSnippet = document.createElement("span");
   errSnippet.className = "dlq-error-snippet";
-  errSnippet.textContent = job.lastError || "无报错文本";
+  errSnippet.textContent = job.lastError || "没有错误说明";
 
   item.append(l1, title, errSnippet);
   item.addEventListener("click", () => selectDlqJob(job.id));
@@ -986,12 +1010,12 @@ function selectDlqJob(id, options = {}) {
   grid.append(createMetaItem("下次执行", job.runAfter || ""));
 
   const errTitle = document.createElement("h4");
-  errTitle.textContent = "最后抛出的异常报错";
+  errTitle.textContent = "出错原因";
   errTitle.style.marginTop = "16px";
 
   const pre = document.createElement("pre");
   pre.className = "code-block";
-  pre.textContent = job.lastError || "无详细异常堆栈";
+  pre.textContent = job.lastError || "没有更多说明";
 
   detailBox.append(grid, errTitle, pre);
 }
@@ -999,7 +1023,7 @@ function selectDlqJob(id, options = {}) {
 async function retrySingleJob(id) {
   try {
     await request("/v1/jobs/" + encodeURIComponent(id) + "/retry", { method: "POST", body: {} });
-    toast("该任务已成功重入队，Worker 正在调度执行");
+    toast("已重新排队");
     await loadDlqJobs();
     void updateDlqBadge();
   } catch (err) {
@@ -1008,10 +1032,10 @@ async function retrySingleJob(id) {
 }
 
 async function retryAllDead() {
-  if (!(await askConfirm("确定要将所有死信和失败任务全部重入队重试吗？"))) return;
+  if (!(await askConfirm("把失败的任务全部再跑一遍？"))) return;
   try {
     const res = await request("/v1/jobs/retry-all", { method: "POST", body: {} });
-    toast(`成功救回 ${res.count || 0} 个死信任务`);
+    toast(`已重新排队 ${res.count || 0} 个`);
     await loadDlqJobs();
     void updateDlqBadge();
   } catch (err) {
@@ -1083,7 +1107,7 @@ async function loadMailboxesView() {
       const tdLast = document.createElement("td");
       tdLast.textContent = formatShortTime(item.lastSeen);
       const tdNotes = document.createElement("td");
-      tdNotes.textContent = item.notes || "通用";
+      tdNotes.textContent = item.notes || "没写备注";
       tr.append(tdAddr, tdFirst, tdLast, tdNotes);
       tbody.append(tr);
     }
@@ -1163,10 +1187,10 @@ async function saveMailbox() {
         notes: document.querySelector("#mb-notes").value,
       },
     });
-    toast("收件画像已保存");
+    toast("备注已保存");
     await loadMailboxesView();
   } catch (err) {
-    toast("保存画像失败: " + explain(err));
+    toast("保存备注失败: " + explain(err));
   }
 }
 

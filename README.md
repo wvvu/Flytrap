@@ -1,11 +1,11 @@
 <div align="center">
 
-# ⚡ Flytrap
+# Flytrap
 
-**A self-hosted email honeypot & threat triage platform.**
+**A self-hosted inbox that keeps every letter.**
 
-*Deploy a Venus flytrap on your domain — every inbound email gets captured,*  
-*authenticated, AI-classified, and surfaced on a modern analyst workbench.*
+*Point an MX record at it. Mail for the domain is accepted, stored, and sorted*  
+*so you can read it — the point is to not miss anything.*
 
 ![Node 22+](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js\&logoColor=white)
 
@@ -21,14 +21,14 @@
 
 ## Why Flytrap?
 
-Most email security tools are enterprise black-boxes. Flytrap is the opposite: a **transparent, single-binary honeypot** that you point your MX record at and instantly start catching.
+Flytrap is a small mail inbox you run yourself. It accepts every recipient on your domains, keeps the raw message, and asks a model to sort the pile. Sorting is a suggestion. A missing address note is not "unknown", and a failed SPF check does not hide a real letter.
 
-- 🪤 **Catch everything** — Built-in SMTP server captures raw EML on disk with full envelope metadata
-- 🧠 **AI triage** — Gemini / OpenAI classifies every email into `phish · malware · spam · legit · gray`
-- 🔬 **Analyst workbench** — Three-column UI with sandboxed HTML preview, threat signals, auth chips (SPF/DKIM/DMARC), and one-click verdict override
-- 🔔 **Alert on threats** — Telegram & webhook push notifications when confidence thresholds are met
-- 🗄️ **Zero external deps** — SQLite + filesystem storage. No Postgres, no Redis, no Kafka
-- 🐳 **One-command deploy** — `docker compose up -d` and you're live
+- **Keep everything** — SMTP ingest writes the raw EML and the envelope. Any local part on an accepted domain is kept.
+- **AI sorting** — Gemini or OpenAI labels each message `legit`, `spam`, `unsolicited-admin`, `phish`, `malware`, or `gray` (shown as 待看: look at this one).
+- **Read it** — Three-column inbox, sandboxed HTML preview, SPF/DKIM/DMARC, and a manual label when the model is wrong.
+- **Optional alerts** — Telegram or webhook only for the labels you list. Ordinary mail stays in the inbox.
+- **No extra services** — SQLite and the filesystem. No Postgres, Redis, or Kafka.
+- **One command** — `docker compose up -d`.
 
 ---
 
@@ -121,10 +121,10 @@ Internet                         Flytrap (single process, 3 roles)
 | Category     | Feature                                                                                                          |
 | ------------ | ---------------------------------------------------------------------------------------------------------------- |
 | **SMTP**     | RFC-compliant ingest, STARTTLS, per-IP rate limiting (connections / minute / data-per-hour), multi-domain accept |
-| **AI**       | Gemini native API with multi-key pool + auto-cooldown, OpenAI-compatible fallback, online prompt hot-reload      |
+| **AI**       | Gemini native API with multi-key pool + auto-cooldown, OpenAI-compatible fallback, prompt edited in the panel    |
 | **Security** | Sandboxed HTML preview (iframe CSP), zero-innerHTML frontend, timing-safe auth, path traversal protection        |
 | **Ops**      | Dead letter queue with one-click retry, full audit log, graceful shutdown, Docker healthcheck                    |
-| **UI**       | Dark/light theme, keyboard shortcuts (j/k/r), cursor pagination, verdict override with audit trail               |
+| **UI**       | Dark/light theme, keyboard shortcuts (j/k/r), the inbox defaults to every message, manual label with an audit trail |
 
 ---
 
@@ -218,5 +218,5 @@ src/
 
 ---
 
-<div align="center">   <sub>Named after the <a href="https://en.wikipedia.org/wiki/Venus_flytrap">Venus flytrap</a> — it sits quietly, waits, and catches.</sub>    
+<div align="center">   <sub>Named after the <a href="https://en.wikipedia.org/wiki/Venus_flytrap">Venus flytrap</a> — it sits on the domain and keeps the mail.</sub>
 </div>
