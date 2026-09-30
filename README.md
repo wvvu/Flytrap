@@ -203,7 +203,7 @@ src/
   ```bash
   npm test
   ```
-  Runs the full automated test suite (45 unit & integration tests covering SMTP policy, authentication, DLQ, parser, and Gemini failover).
+  Runs the full automated test suite (47 unit & integration tests covering SMTP policy, authentication, DLQ, parser, Gemini failover, and prompt injection guardrails).
 - **Rebuild database from raw storage**:
   ```bash
   node dist/main.js --rebuild
