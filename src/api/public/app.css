@@ -1,19 +1,22 @@
 :root {
   color-scheme: dark;
-  --bg-canvas: #09090b;
-  --bg-rail: #0d0e12;
-  --bg-stream: #111216;
-  --bg-workspace: #0c0d10;
-  --bg-card: #161820;
-  --bg-card-hover: #1e2029;
-  --bg-card-active: #232634;
-  --border-subtle: #232630;
-  --border-strong: #363a4a;
-  --text-main: #f4f4f6;
-  --text-muted: #9fa4b4;
-  --text-dim: #64687a;
-  --primary: #3b82f6;
-  --primary-hover: #60a5fa;
+  --bg-canvas: #000000;
+  --bg-rail: #000000;
+  --bg-stream: #000000;
+  --bg-workspace: #000000;
+  --bg-card: #0a0a0a;
+  --bg-card-hover: #121212;
+  --bg-card-active: #171717;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text-main: #f5f5f5;
+  --text-muted: #a3a3a3;
+  --text-dim: #6b6b6b;
+  --primary: #ffffff;
+  --primary-hover: #e6e6e6;
+  --on-primary: #000000;
+  --accent-soft: rgba(255, 255, 255, 0.05);
+  --accent-line: rgba(255, 255, 255, 0.16);
   --phish: #ef4444;
   --phish-bg: rgba(239, 68, 68, 0.12);
   --malware: #f87171;
@@ -44,6 +47,9 @@
   --text-dim: #94a3b8;
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
+  --on-primary: #ffffff;
+  --accent-soft: rgba(37, 99, 235, 0.08);
+  --accent-line: rgba(37, 99, 235, 0.28);
   --phish-bg: rgba(239, 68, 68, 0.1);
   --malware-bg: rgba(220, 38, 38, 0.12);
   --spam-bg: rgba(245, 158, 11, 0.12);
@@ -72,29 +78,59 @@ button, input, select, textarea {
   color: inherit;
 }
 
-/* 登录界面 */
+/* 登录界面：不出现项目名，换皮也不带业务 */
 .login-wrapper {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100vh;
   background: var(--bg-canvas);
-  padding: 24px;
+  padding: 32px 24px;
 }
 
-.login-card {
+.login-panel {
   width: 100%;
-  max-width: 380px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: 16px;
-  padding: 32px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
+  max-width: 360px;
 }
 
-.brand {
-  text-align: center;
-  margin-bottom: 28px;
+.login-title {
+  font-size: 32px;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  margin-bottom: 36px;
+}
+
+.login-panel .form-group {
+  margin-bottom: 22px;
+}
+
+.login-panel .form-group label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.login-panel input {
+  border: none;
+  border-bottom: 1px solid var(--border-strong);
+  border-radius: 0;
+  background: transparent;
+  padding: 10px 0 12px;
+}
+
+.login-panel input:focus {
+  border-bottom-color: var(--text-main);
+}
+
+.login-panel .btn-primary {
+  border-radius: 0;
+  margin-top: 12px;
+  padding: 13px;
+  letter-spacing: 0.04em;
+}
+
+.login-panel .error-text {
+  text-align: left;
 }
 
 .sprite {
@@ -109,35 +145,6 @@ button, input, select, textarea {
   height: 18px;
   display: block;
   flex: none;
-}
-
-.brand-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  background: var(--primary);
-  color: #fff;
-  border-radius: 12px;
-  margin-bottom: 12px;
-}
-
-.brand-badge .ico {
-  width: 22px;
-  height: 22px;
-}
-
-.brand h2 {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
-.brand-sub {
-  font-size: 13px;
-  color: var(--text-dim);
-  margin-top: 4px;
 }
 
 .form-group {
@@ -171,7 +178,7 @@ input:focus, select:focus, textarea:focus {
   width: 100%;
   padding: 11px;
   background: var(--primary);
-  color: #fff;
+  color: var(--on-primary);
   border: none;
   border-radius: 8px;
   font-weight: 600;
@@ -223,16 +230,19 @@ input:focus, select:focus, textarea:focus {
 .logo-mark {
   width: 42px;
   height: 42px;
-  background: var(--border-subtle);
+  background: transparent;
   color: var(--text-main);
-  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 800;
-  font-size: 16px;
-  letter-spacing: -0.05em;
   margin-bottom: 12px;
+}
+
+.logo-mark .ico {
+  width: 20px;
+  height: 20px;
 }
 
 .rail-btn {
@@ -381,7 +391,7 @@ input:focus, select:focus, textarea:focus {
 
 .stream-filter-select:focus {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 0 0 2px var(--accent-line);
 }
 
 .stream-filter-select option {
@@ -470,7 +480,7 @@ input:focus, select:focus, textarea:focus {
   font-size: 13px;
   font-weight: 600;
   background: var(--primary);
-  color: #fff;
+  color: var(--on-primary);
   border: none;
   border-radius: 8px;
   cursor: pointer;
@@ -631,22 +641,6 @@ input:focus, select:focus, textarea:focus {
 .pill-promo { color: #c084fc; }
 .pill-promo.active { background: #a855f7 !important; color: #fff !important; border-color: #a855f7 !important; }
 
-.btn-more {
-  padding: 10px;
-  margin: 12px 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.btn-more:hover {
-  background: var(--bg-card-hover);
-  color: var(--text-main);
-}
-
 /* 第三列: 详情与研判主舞台 (Workspace) */
 .workspace {
   background: var(--bg-workspace);
@@ -800,8 +794,8 @@ input:focus, select:focus, textarea:focus {
 
 /* Infomaniak 风格安全提示栏 */
 .security-banner {
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.25);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
   border-radius: 8px;
   padding: 10px 14px;
   display: flex;
@@ -819,14 +813,14 @@ input:focus, select:focus, textarea:focus {
   font-size: 12px;
   font-weight: 600;
   border-radius: 6px;
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  border: 1px solid var(--accent-line);
   background: transparent;
   color: var(--primary);
   cursor: pointer;
 }
 
 .btn-sec-action:hover {
-  background: rgba(59, 130, 246, 0.15);
+  background: var(--accent-soft);
 }
 
 /* Tabs 切换栏与平齐操作区 */
@@ -914,8 +908,8 @@ input:focus, select:focus, textarea:focus {
   gap: 6px;
   padding: 3px 10px;
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
@@ -1388,7 +1382,7 @@ body,
 .rail,
 .stream,
 .workspace,
-.login-card,
+.login-panel,
 .stat-card,
 .summary-card,
 .system-card,
@@ -1429,8 +1423,8 @@ body,
 .trend-bar {
   width: 100%;
   max-width: 28px;
-  background: var(--primary);
-  border-radius: 6px 6px 2px 2px;
+  background: var(--text-main);
+  border-radius: 1px 1px 0 0;
   min-height: 2px;
 }
 

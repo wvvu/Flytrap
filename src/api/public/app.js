@@ -16,6 +16,7 @@ let selectedJobId = null;
 let currentMailHtml = "";
 let allowExternalImages = false;
 let cursor = null;
+let loadingMore = false;
 let currentJobs = [];
 let currentMessages = [];
 let mailLoadToken = 0;
@@ -38,7 +39,6 @@ const navTrashBtn = document.querySelector("#nav-trash");
 const navDlqBtn = document.querySelector("#nav-dlq");
 const navSettingsBtn = document.querySelector("#nav-settings");
 const badgeDlq = document.querySelector("#badge-dlq");
-const badgeTrash = document.querySelector("#badge-trash");
 
 // 第二列流头部
 const streamInboxHeader = document.querySelector("#stream-inbox-header");
@@ -49,7 +49,6 @@ const trashQueryInput = document.querySelector("#trash-q");
 const trashRefreshBtn = document.querySelector("#btn-trash-refresh");
 const emptyTrashBtn = document.querySelector("#btn-empty-trash");
 const listEl = document.querySelector("#list");
-const moreBtn = document.querySelector("#more");
 const noticeEl = document.querySelector("#notice");
 const queryInput = document.querySelector("#q");
 const labelInput = document.querySelector("#label");
@@ -190,7 +189,9 @@ detailVerdictSelect?.addEventListener("change", async () => {
   }
 });
 
-moreBtn.addEventListener("click", () => void loadMessagesPage(false));
+listEl.addEventListener("scroll", () => {
+  if (currentView === "inbox" || currentView === "trash") maybeLoadMore();
+});
 
 // DLQ 状态胶囊点击
 document.querySelector("#dlq-pills")?.addEventListener("click", (e) => {
@@ -250,7 +251,6 @@ async function init() {
     showApp();
     await switchNav("inbox");
     void updateDlqBadge();
-    void updateTrashBadge();
   } catch {
     showLogin();
   }
@@ -288,7 +288,7 @@ async function signIn() {
   const btn = document.querySelector("#btn-login");
   if (btn) {
     btn.disabled = true;
-    btn.textContent = "正在登录...";
+    btn.textContent = "请稍候";
   }
   try {
     await request("/v1/login", {
@@ -303,13 +303,12 @@ async function signIn() {
     showApp();
     await switchNav("inbox");
     void updateDlqBadge();
-    void updateTrashBadge();
   } catch (err) {
     loginError.textContent = explain(err);
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = "登录";
+      btn.textContent = "继续";
     }
   }
 }
@@ -358,7 +357,8 @@ async function switchNav(view) {
   if (streamSettingsHeader) streamSettingsHeader.hidden = true;
   noticeEl.textContent = "";
   listEl.replaceChildren();
-  moreBtn.hidden = true;
+  cursor = null;
+  loadingMore = false;
   setMobilePane("list");
 
   if (view === "inbox") {
@@ -371,7 +371,6 @@ async function switchNav(view) {
     if (streamTrashHeader) streamTrashHeader.hidden = false;
     viewMail.hidden = false;
     await reloadTrash();
-    void updateTrashBadge();
   } else if (view === "dlq") {
     navDlqBtn?.classList.add("active");
     streamDlqHeader.hidden = false;
@@ -459,16 +458,41 @@ async function loadSystemView() {
 
 async function reloadMessages() {
   cursor = null;
+  loadingMore = false;
   listEl.replaceChildren();
   noticeEl.textContent = "";
   await loadMessagesPage(true);
+  maybeLoadMore();
 }
 
 async function reloadTrash() {
   cursor = null;
+  loadingMore = false;
   listEl.replaceChildren();
   noticeEl.textContent = "";
   await loadMessagesPage(true);
+  maybeLoadMore();
+}
+
+function maybeLoadMore() {
+  if (currentView !== "inbox" && currentView !== "trash") return;
+  if (!cursor || loadingMore) return;
+  const remaining = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+  if (remaining < 280) void loadMoreMessages();
+}
+
+async function loadMoreMessages() {
+  if (!cursor || loadingMore) return;
+  if (currentView !== "inbox" && currentView !== "trash") return;
+  const previous = cursor;
+  const beforeCount = currentMessages.length;
+  loadingMore = true;
+  try {
+    await loadMessagesPage(false);
+  } finally {
+    loadingMore = false;
+  }
+  if (cursor && cursor !== previous && currentMessages.length > beforeCount) maybeLoadMore();
 }
 
 async function loadMessagesPage(replace) {
@@ -500,7 +524,6 @@ async function loadMessagesPage(replace) {
       listEl.append(createMailListItem(item));
     }
     cursor = page.nextCursor || null;
-    moreBtn.hidden = !cursor;
 
     // 桌面端顺手打开第一封。窄屏留在列表，避免一进来就盖住收件流。
     if (replace && items.length > 0 && !selectedMailId) {
@@ -827,7 +850,6 @@ async function handleTrashMail() {
       mailEmptyEl.hidden = false;
       setMobilePane("list");
     }
-    void updateTrashBadge();
   } catch (err) {
     noticeEl.textContent = "移入垃圾桶失败: " + explain(err);
   } finally {
@@ -855,7 +877,6 @@ async function handleRestoreMail() {
       mailEmptyEl.hidden = false;
       setMobilePane("list");
     }
-    void updateTrashBadge();
   } catch (err) {
     noticeEl.textContent = "恢复邮件失败: " + explain(err);
   } finally {
@@ -884,7 +905,6 @@ async function handleDeleteMail() {
       mailEmptyEl.hidden = false;
       setMobilePane("list");
     }
-    void updateTrashBadge();
   } catch (err) {
     noticeEl.textContent = "彻底删除失败: " + explain(err);
   } finally {
@@ -905,27 +925,10 @@ async function handleEmptyTrash() {
     mailEmptyEl.hidden = false;
     setMobilePane("list");
     await reloadTrash();
-    void updateTrashBadge();
   } catch (err) {
     noticeEl.textContent = "清空垃圾桶失败: " + explain(err);
   } finally {
     if (emptyTrashBtn) emptyTrashBtn.disabled = false;
-  }
-}
-
-async function updateTrashBadge() {
-  if (!badgeTrash) return;
-  try {
-    const res = await request("/v1/trash/count");
-    const count = typeof res.count === "number" ? res.count : 0;
-    if (count > 0) {
-      badgeTrash.hidden = false;
-      badgeTrash.textContent = String(count);
-    } else {
-      badgeTrash.hidden = true;
-    }
-  } catch {
-    badgeTrash.hidden = true;
   }
 }
 
@@ -1249,7 +1252,6 @@ async function fetchCsrf(force) {
 async function pollLive() {
   if (document.hidden || appEl.hidden) return;
   void updateDlqBadge();
-  void updateTrashBadge();
   if (currentView !== "inbox" && currentView !== "trash") return;
   if (currentMessages.length > 40) return;
   try {
