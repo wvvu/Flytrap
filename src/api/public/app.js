@@ -69,6 +69,8 @@ const badgeDlq = document.querySelector("#badge-dlq");
 // 第二列流头部
 const streamInboxHeader = document.querySelector("#stream-inbox-header");
 const streamTrashHeader = document.querySelector("#stream-trash-header");
+const streamDlqHeader = document.querySelector("#stream-dlq-header");
+const streamSettingsHeader = document.querySelector("#stream-settings-header");
 const trashQueryInput = document.querySelector("#trash-q");
 const trashRefreshBtn = document.querySelector("#btn-trash-refresh");
 const emptyTrashBtn = document.querySelector("#btn-empty-trash");
@@ -85,8 +87,14 @@ const retryAllBtn = document.querySelector("#btn-retry-all");
 const viewMail = document.querySelector("#view-mail");
 const viewDlq = document.querySelector("#view-dlq");
 const viewSettings = document.querySelector("#view-settings");
-const failureListEl = document.querySelector("#failure-list");
+const failureDetailEl = document.querySelector("#failure-detail");
+const dlqEmptyEl = document.querySelector("#dlq-empty");
 const dlqNoticeEl = document.querySelector("#dlq-notice");
+let currentSettingsSection = "names";
+let selectedFailureKey = "";
+let aiModels = [];
+let aiKeyRows = [];
+let aiBaseline = "";
 
 // 邮件阅读器元素
 const mailEmptyEl = document.querySelector("#mail-empty");
@@ -150,6 +158,17 @@ btnTrashMail?.addEventListener("click", () => void handleTrashMail());
 btnRestoreMail?.addEventListener("click", () => void handleRestoreMail());
 btnDeleteMail?.addEventListener("click", () => void handleDeleteMail());
 backListBtn?.addEventListener("click", () => setMobilePane("list"));
+document.querySelector("#btn-back-dlq")?.addEventListener("click", () => setMobilePane("list"));
+document.querySelector("#btn-back-settings")?.addEventListener("click", () => setMobilePane("list"));
+document.querySelector("#btn-save-ai")?.addEventListener("click", () => void saveAiSettings());
+document.querySelector("#btn-add-model")?.addEventListener("click", () => addModelRow());
+document.querySelector("#btn-add-key")?.addEventListener("click", () => addKeyRow());
+document.querySelector("#model-add")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    addModelRow();
+  }
+});
 document.querySelector("#btn-save-prompt")?.addEventListener("click", () => void saveCurrentPrompt());
 document.querySelector("#prompt-editor")?.addEventListener("input", syncPromptSave);
 document.querySelector("#btn-save-notify")?.addEventListener("click", () => void saveNotifySettings());
@@ -226,17 +245,21 @@ detailVerdictSelect?.addEventListener("change", async () => {
       body: { label: newLabel },
     });
     detailVerdictSelect.dataset.label = newLabel;
+    const confidenceChip = document.querySelector(".confidence-chip");
+    if (confidenceChip) confidenceChip.hidden = newLabel === "legit";
     if (detailModelVerdict) {
       const origName = labelName(res.originalLabel);
-      const origConf = typeof res.originalConfidence === "number" ? " " + Math.round(res.originalConfidence * 100) + "%" : "";
-      detailModelVerdict.textContent = `(模型先看成 ${origName}${origConf}，你改过)`;
+      detailModelVerdict.textContent = `(已改分类，原先为 ${origName})`;
     }
     const listItem = findByDataId(listEl, ".mail-item", selectedMailId);
-    if (listItem) {
+    const filter = currentView === "inbox" ? labelInput.value : "";
+    if (listItem && filter && newLabel !== filter) {
+      listItem.remove();
+    } else if (listItem) {
       const tag = listItem.querySelector(".verdict-tag");
       if (tag) {
         tag.dataset.label = newLabel;
-        tag.textContent = labelName(newLabel) + " (你改过)";
+        tag.textContent = labelName(newLabel) + " 已改";
       }
     }
     noticeEl.textContent = "已改成 " + labelName(newLabel);
@@ -244,7 +267,7 @@ detailVerdictSelect?.addEventListener("change", async () => {
       if (noticeEl.textContent.startsWith("已改成")) noticeEl.textContent = "";
     }, 3000);
   } catch (err) {
-    noticeEl.textContent = "改分类失败: " + explain(err);
+    noticeEl.textContent = "修改分类失败: " + explain(err);
   } finally {
     detailVerdictSelect.disabled = false;
   }
@@ -408,10 +431,7 @@ function setViewTitle(view) {
 async function switchNav(view) {
   currentView = view;
   setViewTitle(view);
-  if (appEl) {
-    if (view === "settings" || view === "dlq") appEl.dataset.layout = "page";
-    else delete appEl.dataset.layout;
-  }
+  if (appEl) delete appEl.dataset.layout;
   const navBtns = [navInboxBtn, navTrashBtn, navDlqBtn, navSettingsBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
   const viewPanels = [viewMail, viewDlq, viewSettings];
@@ -419,6 +439,10 @@ async function switchNav(view) {
 
   streamInboxHeader.hidden = true;
   if (streamTrashHeader) streamTrashHeader.hidden = true;
+  if (streamDlqHeader) streamDlqHeader.hidden = true;
+  if (streamSettingsHeader) streamSettingsHeader.hidden = true;
+  if (dlqNoticeEl) dlqNoticeEl.hidden = view !== "dlq";
+  noticeEl.hidden = view === "dlq";
   noticeEl.textContent = "";
   listEl.replaceChildren();
   cursor = null;
@@ -437,12 +461,16 @@ async function switchNav(view) {
     await reloadTrash();
   } else if (view === "dlq") {
     navDlqBtn?.classList.add("active");
+    if (streamDlqHeader) streamDlqHeader.hidden = false;
     if (viewDlq) viewDlq.hidden = false;
     await loadDlqJobs(currentDlqScope);
   } else if (view === "settings") {
     navSettingsBtn?.classList.add("active");
+    if (streamSettingsHeader) streamSettingsHeader.hidden = false;
     if (viewSettings) viewSettings.hidden = false;
     await loadSettingsPage();
+    renderSettingsNav();
+    showSettingsSection(currentSettingsSection, { keepListOnNarrow: true });
   }
 }
 
@@ -566,8 +594,10 @@ function createMailListItem(item) {
   tag.className = "verdict-tag";
   tag.dataset.label = item.label || "none";
   const confText = item.manualOverride
-    ? " (你改过)"
-    : (typeof item.confidence === "number" ? ` ${Math.round(item.confidence * 100)}%` : "");
+    ? " 已改"
+    : item.label && item.label !== "legit" && typeof item.confidence === "number"
+      ? ` ${Math.round(item.confidence * 100)}%`
+      : "";
   tag.textContent = labelName(item.label) + confText;
 
   line3.append(snippet, tag);
@@ -626,25 +656,29 @@ async function selectMail(id, options = {}) {
     if (btnDeleteMail) btnDeleteMail.hidden = !isTrashed;
     if (btnReclassify) btnReclassify.hidden = isTrashed;
 
-    const label = detail.aiResult?.label || detail.label || "gray";
+    const storedLabel = typeof detail.aiResult?.label === "string" ? detail.aiResult.label : "";
+    const label = storedLabel || "legit";
     if (detailVerdictSelect) {
       detailVerdictSelect.value = label;
       detailVerdictSelect.dataset.label = label;
     }
     const confidence = typeof detail.aiResult?.confidence === "number" ? detail.aiResult.confidence : 0;
+    const showProb = Boolean(storedLabel) && storedLabel !== "legit";
+    const confidenceChip = document.querySelector(".confidence-chip");
+    if (confidenceChip) confidenceChip.hidden = !showProb;
     if (detailModelVerdict) {
       if (detail.aiResult?.manualOverride) {
-        const origName = labelName(detail.aiResult.originalLabel);
-        const origConf = typeof detail.aiResult.originalConfidence === "number" ? ` ${Math.round(detail.aiResult.originalConfidence * 100)}%` : "";
-        detailModelVerdict.textContent = `(模型先看成 ${origName}${origConf}，你改过)`;
-      } else {
+        detailModelVerdict.textContent = `(已改分类，原先为 ${labelName(detail.aiResult.originalLabel)})`;
+      } else if (showProb) {
         detailModelVerdict.textContent = `(模型 ${Math.round(confidence * 100)}%)`;
+      } else {
+        detailModelVerdict.textContent = "";
       }
     }
 
     if (verdictBar) verdictBar.style.width = Math.round(confidence * 100) + "%";
     if (verdictPercent) verdictPercent.textContent = Math.round(confidence * 100) + "%";
-    if (detailSummary) detailSummary.textContent = detail.aiResult?.summary || "这封还没分拣";
+    if (detailSummary) detailSummary.textContent = detail.aiResult?.summary || "尚未分类";
     const detailTags = document.querySelector("#detail-tags");
     if (detailTags) {
       detailTags.replaceChildren();
@@ -771,7 +805,7 @@ async function loadMailHtml(id, token) {
     renderSandboxHtml(currentMailHtml);
   } catch {
     if (token !== mailLoadToken) return;
-    currentMailHtml = "<p style='color:#888;padding:20px'>这封没有 HTML 正文</p>";
+    currentMailHtml = "<p style='color:#888;padding:20px'>没有 HTML 正文</p>";
     renderSandboxHtml(currentMailHtml);
   }
 }
@@ -822,7 +856,7 @@ function renderSandboxHtml(html) {
   mailSandbox.setAttribute("srcdoc", doc);
   const hint = document.querySelector("#preview-guard");
   if (hint) {
-    if (remoteCount === 0) hint.textContent = "不执行脚本。这封没有外链图片。";
+    if (remoteCount === 0) hint.textContent = "不执行脚本。没有外链图片。";
     else if (shown) hint.textContent = `不执行脚本。外链图片已显示，共 ${remoteCount} 处。`;
     else hint.textContent = `不执行脚本。外链图片先不加载，共 ${remoteCount} 处。`;
   }
@@ -980,7 +1014,7 @@ async function handleEmptyTrash() {
 
 async function loadDlqJobs(scope = currentDlqScope) {
   currentDlqScope = scope || "open";
-  if (failureListEl) failureListEl.replaceChildren();
+  listEl.replaceChildren();
   if (dlqNoticeEl) dlqNoticeEl.textContent = "正在读取";
   try {
     const [res, summary] = await Promise.all([request(jobsUrl(currentDlqScope)), request("/v1/jobs/summary")]);
@@ -1032,8 +1066,7 @@ function setPillLabel(status, label, count) {
 }
 
 function renderFailureGroups(jobs) {
-  if (!failureListEl) return;
-  failureListEl.replaceChildren();
+  listEl.replaceChildren();
   const needle = dlqQuery;
   const groups = new Map();
   for (const job of jobs) {
@@ -1044,13 +1077,80 @@ function renderFailureGroups(jobs) {
   }
   if (dlqNoticeEl) {
     if (jobs.length === 0) dlqNoticeEl.textContent = emptyDlqCopy(currentDlqScope);
-    else if (groups.size === 0) dlqNoticeEl.textContent = "没有符合搜索的";
+    else if (groups.size === 0) dlqNoticeEl.textContent = "没有符合搜索的记录";
     else dlqNoticeEl.textContent = "";
   }
-  for (const group of groups.values()) {
+  let matched = null;
+  for (const [key, group] of groups) {
     group.sort((a, b) => stepRank(a.type) - stepRank(b.type));
-    failureListEl.append(createFailureLetter(group));
+    if (key === selectedFailureKey) matched = group;
+    listEl.append(createFailureListItem(key, group));
   }
+  if (matched) renderFailureDetail(matched);
+  else if (groups.size > 0 && window.matchMedia("(min-width: 901px)").matches) {
+    const first = groups.entries().next().value;
+    if (first) selectFailure(first[0], first[1], { keepListOnNarrow: true });
+  } else {
+    clearFailureDetail();
+  }
+}
+
+function createFailureListItem(key, jobs) {
+  const first = jobs[0] || {};
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = "mail-item";
+  card.dataset.failureKey = key;
+  if (key === selectedFailureKey) card.classList.add("selected");
+  const line1 = document.createElement("div");
+  line1.className = "item-line1";
+  const subject = document.createElement("span");
+  subject.className = "item-from";
+  subject.textContent = first.messageSubject || "（无主题）";
+  const time = document.createElement("span");
+  time.className = "item-time";
+  time.textContent = formatShortTime(first.updatedAt);
+  line1.append(subject, time);
+  const who = document.createElement("p");
+  who.className = "item-subject";
+  const from = first.messageFrom ? formatFrom(first.messageFrom) : "";
+  who.textContent = from || first.messageTo || "地址尚未解析";
+  const steps = document.createElement("p");
+  steps.className = "item-snippet";
+  steps.textContent = jobs.map((job) => STEP_NAMES[job.type] || job.type).join(" · ");
+  card.append(line1, who, steps);
+  card.addEventListener("click", () => selectFailure(key, jobs));
+  return card;
+}
+
+function selectFailure(key, jobs, options = {}) {
+  selectedFailureKey = key;
+  markFailureSelection();
+  renderFailureDetail(jobs);
+  if (!options.keepListOnNarrow) setMobilePane("detail");
+}
+
+function markFailureSelection() {
+  for (const card of listEl.querySelectorAll(".mail-item")) {
+    card.classList.toggle("selected", card.dataset.failureKey === selectedFailureKey);
+  }
+}
+
+function clearFailureDetail() {
+  selectedFailureKey = "";
+  if (failureDetailEl) {
+    failureDetailEl.replaceChildren();
+    failureDetailEl.hidden = true;
+  }
+  if (dlqEmptyEl) dlqEmptyEl.hidden = false;
+}
+
+function renderFailureDetail(jobs) {
+  if (!failureDetailEl) return;
+  failureDetailEl.replaceChildren(createFailureLetter(jobs));
+  failureDetailEl.hidden = false;
+  if (dlqEmptyEl) dlqEmptyEl.hidden = true;
+  markFailureSelection();
 }
 
 function jobMatches(job, needle) {
@@ -1086,7 +1186,7 @@ function createFailureLetter(jobs) {
     open.type = "button";
     open.className = "letter-open";
     open.textContent = subjectText;
-    open.title = "打开这封信";
+    open.title = "打开邮件";
     open.addEventListener("click", () => void openFailedMail(first.messageId));
     head.append(open);
   } else {
@@ -1100,7 +1200,7 @@ function createFailureLetter(jobs) {
     const retryLetter = document.createElement("button");
     retryLetter.type = "button";
     retryLetter.className = "btn-fit";
-    retryLetter.textContent = "这封再试";
+    retryLetter.textContent = "整封重试";
     retryLetter.addEventListener("click", () => void retryMessage(first.messageId));
     head.append(retryLetter);
   }
@@ -1109,7 +1209,7 @@ function createFailureLetter(jobs) {
   who.className = "muted";
   const from = first.messageFrom ? formatFrom(first.messageFrom) : "";
   const to = first.messageTo ? formatRecipients(first.messageTo) : "";
-  who.textContent = from || to ? [from || "发件人还没解析出来", to].filter(Boolean).join(" → ") : "这封信的地址还没解析出来";
+  who.textContent = from || to ? [from || "发件人尚未解析", to].filter(Boolean).join(" → ") : "地址尚未解析";
 
   article.append(head, who);
   for (const job of jobs) article.append(createFailureStep(job));
@@ -1196,14 +1296,14 @@ async function retrySingleJob(id) {
 }
 
 async function dismissJob(id) {
-  if (!(await askConfirm("这步先放过。信还在，之后还能再试。"))) return;
+  if (!(await askConfirm("此步骤不再自动执行。邮件仍保留，之后可以重试。"))) return;
   try {
     await request("/v1/jobs/" + encodeURIComponent(id) + "/dismiss", { method: "POST", body: {} });
     toast("已放过");
     await loadDlqJobs(currentDlqScope);
     void updateDlqBadge();
   } catch (err) {
-    toast("放过失败: " + explain(err));
+    toast("操作失败: " + explain(err));
   }
 }
 
@@ -1214,7 +1314,7 @@ async function retryMessage(messageId) {
     await loadDlqJobs(currentDlqScope);
     void updateDlqBadge();
   } catch (err) {
-    toast("这封重试失败: " + explain(err));
+    toast("重试失败: " + explain(err));
   }
 }
 
@@ -1228,7 +1328,7 @@ async function copyText(text) {
 }
 
 async function retryAllDead() {
-  if (!(await askConfirm("把已经停住的任务全部再跑一遍？放过的不会动。"))) return;
+  if (!(await askConfirm("重新执行全部已停止的任务？已放过的任务保持不变。"))) return;
   try {
     const res = await request("/v1/jobs/retry-all", { method: "POST", body: {} });
     toast(`已重新排队 ${res.count || 0} 个`);
@@ -1286,20 +1386,62 @@ async function loadSettingsPage() {
     }
     await loadMailboxesView();
     await loadMachineLine();
+    renderAiEditors(settings.aiPool || {});
+    renderSettingsNav();
   } catch (err) {
     toast(explain(err));
   }
 }
 
+const SETTING_SECTIONS = [
+  ["names", "名称"],
+  ["model", "模型"],
+  ["domains", "收信"],
+  ["mailboxes", "地址"],
+  ["notify", "提醒"],
+  ["prompt", "分拣"],
+  ["jobs", "失败"],
+  ["machine", "概况"],
+];
+
+function renderSettingsNav() {
+  if (currentView !== "settings") return;
+  listEl.replaceChildren();
+  for (const [id, label] of SETTING_SECTIONS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "mail-item";
+    button.dataset.section = id;
+    if (id === currentSettingsSection) button.classList.add("selected");
+    const title = document.createElement("span");
+    title.className = "item-from";
+    title.textContent = label;
+    button.append(title);
+    button.addEventListener("click", () => showSettingsSection(id));
+    listEl.append(button);
+  }
+}
+
+function showSettingsSection(id, options = {}) {
+  currentSettingsSection = id;
+  for (const block of document.querySelectorAll("#view-settings .block")) {
+    block.hidden = block.id !== `set-${id}`;
+  }
+  for (const button of listEl.querySelectorAll(".mail-item")) {
+    button.classList.toggle("selected", button.dataset.section === id);
+  }
+  if (!options.keepListOnNarrow) setMobilePane("detail");
+}
+
 function describeAi(ai) {
-  if (!ai || ai.classifier === "fake" || !ai.model) return "还没接模型。提示词先存着，接上之后新来的信按这份分。";
-  const keys = Number(ai.keyCount) === 1 ? "1 个 Key 可用" : `${ai.keyCount || 0} 个 Key 可用`;
+  if (!ai || ai.classifier === "fake" || !ai.model) return "尚未配置模型。提示词会在模型可用后用于新邮件。";
+  const keys = Number(ai.keyCount) === 1 ? "1 个密钥可用" : `${ai.keyCount || 0} 个密钥可用`;
   return `${ai.model} · ${keys}`;
 }
 
 function describeChannels(channels) {
-  const telegram = channels && channels.telegram ? "Telegram 已接上" : "Telegram 没接";
-  const webhook = channels && channels.webhook ? "Webhook 已接上" : "Webhook 没接";
+  const telegram = channels && channels.telegram ? "Telegram 已配置" : "Telegram 未配置";
+  const webhook = channels && channels.webhook ? "Webhook 已配置" : "Webhook 未配置";
   return `${telegram} · ${webhook}`;
 }
 
@@ -1367,7 +1509,7 @@ function renderDomains(domains) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "btn-fit ghost";
-    button.textContent = "去掉";
+    button.textContent = "移除";
     button.addEventListener("click", () => void removeDomain(domain));
     row.append(input, button);
     host.append(row);
@@ -1381,7 +1523,7 @@ async function saveNotifySettings() {
     if (input.checked) labels.push(input.value);
   });
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-    toast("把握要在 0 到 1 之间");
+    toast("置信度要在 0 到 1 之间");
     return;
   }
   try {
@@ -1407,18 +1549,18 @@ async function addDomain() {
     renderDomains(res.acceptDomains || []);
     renderDomainNameRows(res.acceptDomains || [], collectDomainNames());
     syncNamesSave();
-    toast("域名已加上");
+    toast("域名已添加");
   } catch (err) {
-    toast("加上域名失败: " + explain(err));
+    toast("添加域名失败: " + explain(err));
   }
 }
 
 async function removeDomain(domain) {
   if (settingsDomains.length <= 1) {
-    toast("至少留一个域名");
+    toast("至少保留一个域名");
     return;
   }
-  if (!(await askConfirm(`不再收下 ${domain}？`))) return;
+  if (!(await askConfirm(`停止接收 ${domain}？`))) return;
   try {
     const res = await request("/v1/settings/domains", {
       method: "PUT",
@@ -1429,9 +1571,9 @@ async function removeDomain(domain) {
     delete names[domain];
     renderDomainNameRows(res.acceptDomains || [], names);
     syncNamesSave();
-    toast("已去掉 " + domain);
+    toast("已移除 " + domain);
   } catch (err) {
-    toast("去掉域名失败: " + explain(err));
+    toast("移除域名失败: " + explain(err));
   }
 }
 
@@ -1446,7 +1588,7 @@ async function saveAttemptSettings() {
     await request("/v1/settings/jobs", { method: "PUT", body: { maxAttempts } });
     attemptsBaseline = String(maxAttempts);
     syncAttemptSave();
-    toast("之后新来的任务，试满这次数就停");
+    toast("之后的新任务会在达到该次数后停止");
   } catch (err) {
     toast("保存失败: " + explain(err));
   }
@@ -1467,7 +1609,7 @@ async function loadMailboxesView() {
       const tdName = document.createElement("td");
       tdName.textContent = item.displayName || "—";
       const tdNotes = document.createElement("td");
-      tdNotes.textContent = item.notes || "没写备注";
+      tdNotes.textContent = item.notes || "无备注";
       const tdEdit = document.createElement("td");
       const edit = document.createElement("button");
       edit.type = "button";
@@ -1479,7 +1621,7 @@ async function loadMailboxesView() {
       tbody.append(tr);
     }
   } catch (err) {
-    toast("地址备注没读出来: " + explain(err));
+    toast("地址列表读取失败: " + explain(err));
   }
 }
 
@@ -1533,7 +1675,7 @@ async function saveCurrentPrompt() {
     });
     promptBaseline = editor ? editor.value : "";
     syncPromptSave();
-    toast("提示词已保存，下次分类会用这份");
+    toast("提示词已保存，之后的新邮件会使用这份");
   } catch (err) {
     toast("保存提示词失败: " + explain(err));
   }
@@ -1562,7 +1704,7 @@ async function saveMailbox() {
         displayName: document.querySelector("#mb-name")?.value || "",
       },
     });
-    toast("地址已记下");
+    toast("地址已保存");
     const form = document.querySelector("#mailbox-form");
     if (form) form.reset();
     await loadMailboxesView();
@@ -1646,7 +1788,7 @@ function renderDomainNameRows(domains, names) {
   if (list.length === 0) {
     const empty = document.createElement("p");
     empty.className = "muted";
-    empty.textContent = "先在下面加上收信域名。";
+    empty.textContent = "请先添加收信域名。";
     host.append(empty);
     return;
   }
@@ -1675,7 +1817,7 @@ function nameRow(key, value, kind) {
   input.autocomplete = "off";
   input.dataset.nameKey = key;
   input.dataset.nameKind = kind;
-  input.placeholder = kind === "label" ? LABEL_NAMES[key] || "" : "短名，可以空";
+  input.placeholder = kind === "label" ? LABEL_NAMES[key] || "" : "短名，可空";
   input.addEventListener("input", syncNamesSave);
   row.append(caption, input);
   return row;
@@ -1692,12 +1834,12 @@ function senderRow(address, name) {
   nameInput.value = name || "";
   nameInput.maxLength = 40;
   nameInput.dataset.senderName = "1";
-  nameInput.placeholder = "怎么叫";
+  nameInput.placeholder = "名称";
   nameInput.addEventListener("input", syncNamesSave);
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "btn-fit ghost";
-  remove.textContent = "去掉";
+  remove.textContent = "移除";
   remove.addEventListener("click", () => {
     row.remove();
     syncNamesSave();
@@ -1712,11 +1854,11 @@ function addSenderRow() {
   const address = normalizeAddress(addressInput ? addressInput.value : "");
   const name = nameInput ? nameInput.value.trim() : "";
   if (!address) {
-    toast("发件地址看起来不对");
+    toast("发件地址无效");
     return;
   }
   if (!name) {
-    toast("写上怎么叫");
+    toast("请填写名称");
     return;
   }
   const existing = document.querySelector(`#sender-names input[data-sender-address="${cssEscape(address)}"]`);
@@ -1769,7 +1911,7 @@ function syncNamesSave() {
 async function saveNameSettings() {
   const draft = collectNames();
   if (!draft.panelTitle) {
-    toast("面板名字不能空");
+    toast("面板名称不能为空");
     return;
   }
   try {
@@ -1790,9 +1932,145 @@ async function saveNameSettings() {
         if (input && text) text.textContent = labelName(input.value);
       });
     }
-    toast("名字已保存");
+    toast("名称已保存");
   } catch (err) {
-    toast("保存名字失败: " + explain(err));
+    toast("保存名称失败: " + explain(err));
+  }
+}
+
+function renderAiEditors(pool) {
+  aiModels = Array.isArray(pool.models) ? pool.models.slice() : [];
+  aiKeyRows = (Array.isArray(pool.keys) ? pool.keys : []).map((item) => ({
+    id: item.id,
+    tail: item.tail || "",
+  }));
+  paintAiEditors();
+  aiBaseline = aiSnapshot();
+  syncAiSave();
+}
+
+function paintAiEditors() {
+  const models = document.querySelector("#model-list");
+  const keys = document.querySelector("#key-list");
+  if (models) {
+    models.replaceChildren();
+    aiModels.forEach((model, index) => models.append(orderRow(model, index, aiModels.length, "model")));
+  }
+  if (keys) {
+    keys.replaceChildren();
+    if (aiKeyRows.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "没有密钥。";
+      keys.append(empty);
+    }
+    aiKeyRows.forEach((row, index) => keys.append(orderRow(maskKey(row.tail), index, aiKeyRows.length, "key")));
+  }
+}
+
+function maskKey(tail) {
+  return tail ? `····${tail}` : "已保存";
+}
+
+function orderRow(label, index, total, kind) {
+  const row = document.createElement("div");
+  row.className = "name-row order-row";
+  const text = document.createElement("input");
+  text.value = label;
+  text.readOnly = true;
+  const actions = document.createElement("div");
+  actions.className = "step-actions";
+  const up = document.createElement("button");
+  up.type = "button";
+  up.className = "btn-fit ghost";
+  up.textContent = "上移";
+  up.disabled = index === 0;
+  up.addEventListener("click", () => moveAiRow(kind, index, -1));
+  const down = document.createElement("button");
+  down.type = "button";
+  down.className = "btn-fit ghost";
+  down.textContent = "下移";
+  down.disabled = index === total - 1;
+  down.addEventListener("click", () => moveAiRow(kind, index, 1));
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "btn-fit ghost";
+  remove.textContent = "移除";
+  remove.addEventListener("click", () => removeAiRow(kind, index));
+  actions.append(up, down, remove);
+  row.append(text, actions);
+  return row;
+}
+
+function moveAiRow(kind, index, delta) {
+  const list = kind === "model" ? aiModels : aiKeyRows;
+  const next = index + delta;
+  if (next < 0 || next >= list.length) return;
+  const [item] = list.splice(index, 1);
+  list.splice(next, 0, item);
+  paintAiEditors();
+  syncAiSave();
+}
+
+function removeAiRow(kind, index) {
+  if (kind === "model") aiModels.splice(index, 1);
+  else aiKeyRows.splice(index, 1);
+  paintAiEditors();
+  syncAiSave();
+}
+
+function addModelRow() {
+  const input = document.querySelector("#model-add");
+  const model = input ? input.value.trim() : "";
+  if (!/^[A-Za-z0-9._:@/-]{1,80}$/.test(model)) {
+    toast("模型名称无效");
+    return;
+  }
+  if (!aiModels.includes(model)) aiModels.push(model);
+  if (input) input.value = "";
+  paintAiEditors();
+  syncAiSave();
+}
+
+function addKeyRow() {
+  const input = document.querySelector("#key-add");
+  const secret = input ? input.value.trim() : "";
+  if (secret.length < 8 || secret.length > 512 || /\s/.test(secret)) {
+    toast("密钥无效");
+    return;
+  }
+  const tail = secret.length >= 12 ? secret.slice(-4) : "";
+  aiKeyRows.push({ secret, tail });
+  if (input) input.value = "";
+  paintAiEditors();
+  syncAiSave();
+}
+
+function aiSnapshot() {
+  return JSON.stringify({
+    models: aiModels,
+    keys: aiKeyRows.map((row) => (row.secret ? { secret: row.tail, pending: true } : { id: row.id, tail: row.tail })),
+  });
+}
+
+function syncAiSave() {
+  const button = document.querySelector("#btn-save-ai");
+  if (!button) return;
+  button.disabled = aiSnapshot() === aiBaseline;
+}
+
+async function saveAiSettings() {
+  const keys = aiKeyRows.map((row) => (row.secret ? { secret: row.secret } : { id: row.id }));
+  try {
+    const saved = await request("/v1/settings/ai", { method: "PUT", body: { models: aiModels, keys } });
+    for (const row of aiKeyRows) delete row.secret;
+    renderAiEditors(saved.aiPool || {});
+    const status = await request("/v1/ai/status");
+    const aiLine = document.querySelector("#ai-status-line");
+    if (aiLine) aiLine.textContent = describeAi(status);
+    toast("模型已保存");
+  } catch (err) {
+    toast("保存模型失败: " + explain(err));
   }
 }
 

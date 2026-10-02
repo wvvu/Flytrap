@@ -201,7 +201,9 @@ export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] 
     where.push("status = :status");
     params.status = query.status;
   }
-  if (query.label) {
+  if (query.label === "legit") {
+    where.push("(json_extract(ai_result, '$.label') = 'legit' OR json_extract(ai_result, '$.label') IS NULL)");
+  } else if (query.label) {
     where.push("json_extract(ai_result, '$.label') = :label");
     params.label = query.label;
   }

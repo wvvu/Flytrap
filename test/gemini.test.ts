@@ -114,4 +114,39 @@ test("gemini classifier fails over to next key on 429/503 and cools down", async
   const poolStatus = classifier.getKeyPoolStatus();
   assert.equal(poolStatus.keys[0]?.isCoolingDown, true);
   assert.equal(poolStatus.keys[1]?.isCoolingDown, false);
+  assert.equal(JSON.stringify(poolStatus).includes("key-1"), false);
+  assert.equal(JSON.stringify(poolStatus).includes("key-2"), false);
+});
+
+test("gemini tries the next model when the first one is missing", async () => {
+  const models: string[] = [];
+  const stubFetch: typeof fetch = async (input) => {
+    const url = String(input);
+    const model = url.includes("gemini-2.0-flash") ? "gemini-2.0-flash" : "gemini-2.5-flash";
+    models.push(model);
+    if (model === "gemini-2.5-flash") return new Response("NOT_FOUND", { status: 404 });
+    return new Response(
+      JSON.stringify({
+        candidates: [{ content: { parts: [{ text: JSON.stringify({ label: "legit", confidence: 0.9, summary: "ok", tags: [], signals: [] }) }] } }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  const classifier = createGeminiClassifier({
+    resolve: () => ({
+      models: ["gemini-2.5-flash", "gemini-2.0-flash"],
+      keys: [{ id: "k1", secret: "secret-value-1234" }],
+    }),
+    fetchImpl: stubFetch,
+  });
+  const res = await classifier.classify({
+    promptId: "classify-v1",
+    systemPrompt: "sys",
+    userMessage: "msg",
+    facts: {} as any,
+  });
+  assert.equal(res.model, "gemini-2.0-flash");
+  assert.deepEqual(models, ["gemini-2.5-flash", "gemini-2.0-flash"]);
+  assert.equal(JSON.stringify(classifier.getKeyPoolStatus()).includes("secret-value"), false);
+  assert.equal(classifier.getKeyPoolStatus().keys[0]?.tail, "1234");
 });

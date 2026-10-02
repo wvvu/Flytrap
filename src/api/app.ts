@@ -16,7 +16,8 @@ import PostalMime from "postal-mime";
 import { findAttachment, listMessageAttachments } from "../db/repos/attachments.js";
 import { writeAudit } from "../db/repos/audit.js";
 import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, retryAllDeadJobs, retryJob, retryMessageJobs, type JobStatus } from "../db/repos/jobs.js";
-import { readRuntimeSettings, saveAcceptDomains, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, SettingsError } from "../db/repos/settings.js";
+import { fallbackAiPool } from "../ai/pool.js";
+import { presentAiPool, readEffectiveAiPool, saveAcceptDomains, saveAiPool, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
 import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
 import { countTrash, deleteMessage, emptyTrash, getMessage, listMessages, restoreMessage, trashMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
@@ -69,6 +70,14 @@ const nameSettingsBody = z.object({
 
 const retryMessageBody = z.object({
   messageId: z.string().regex(/^[\w-]+$/),
+}).strict();
+
+const aiSettingsBody = z.object({
+  models: z.array(z.string().max(80)).max(8),
+  keys: z.array(z.object({
+    id: z.string().min(1).max(80).optional(),
+    secret: z.string().min(8).max(512).optional(),
+  }).strict()).max(20),
 }).strict();
 
 const historyBody = z.object({
@@ -518,7 +527,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, id });
   });
 
-  app.get("/v1/ai/status", async () => aiStatus(config));
+  app.get("/v1/ai/status", async () => aiStatus(db, config));
 
   app.get("/v1/settings", async () => {
     const runtime = readRuntimeSettings(db, {
@@ -539,8 +548,29 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
         telegram: Boolean(config.telegramBotToken && config.telegramChatId),
         webhook: Boolean(config.notifyWebhookUrl),
       },
-      ai: aiStatus(config),
+      ai: aiStatus(db, config),
+      aiPool: presentAiPool(readEffectiveAiPool(db, fallbackAiPool(config))),
     };
+  });
+
+  app.put("/v1/settings/ai", async (request, reply) => {
+    const body = aiSettingsBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    let saved;
+    try {
+      saved = saveAiPool(db, body.data, fallbackAiPool(config).keys, now());
+    } catch (err) {
+      if (err instanceof SettingsError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "settings_ai",
+      detail: `models=${saved.models.length} keys=${saved.keys.length}`,
+    });
+    return reply.send({ ok: true, aiPool: saved });
   });
 
   app.put("/v1/settings/notify", async (request, reply) => {
@@ -683,11 +713,14 @@ export async function startApi(options: ApiOptions): Promise<RunningApi> {
   return { port, close: () => app.close() };
 }
 
-function aiStatus(config: Config): { classifier: string; model: string; keyCount: number } {
+function aiStatus(db: Db, config: Config): { classifier: string; model: string; keyCount: number } {
+  if (config.classifier === "fake") return { classifier: "fake", model: "fake", keyCount: 0 };
+  const pool = readEffectiveAiPool(db, fallbackAiPool(config));
+  const fallbackModel = config.classifier === "gemini" ? config.geminiModel : config.openaiModel ?? "";
   return {
     classifier: config.classifier,
-    model: config.classifier === "gemini" ? config.geminiModel : config.classifier === "openai-compat" ? config.openaiModel ?? "" : "fake",
-    keyCount: config.classifier === "gemini" ? config.geminiApiKeys.length : config.openaiApiKey ? 1 : 0,
+    model: pool.models[0] || fallbackModel,
+    keyCount: pool.keys.length,
   };
 }
 

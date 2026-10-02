@@ -52,6 +52,7 @@ export async function acceptMessage(deps: AcceptDeps, input: AcceptInput): Promi
     if (!isUnique(err)) throw err;
     const winner = findMessageBySha(deps.db, stored.sha256);
     if (!winner) throw err;
+    mergeEnvelope(deps.db, winner.id, input);
     insertDeliverySoft(deps.db, winner.id, input);
     return { id: winner.id, sha256: stored.sha256, duplicate: true, sizeBytes: stored.sizeBytes };
   }
@@ -60,6 +61,7 @@ export async function acceptMessage(deps: AcceptDeps, input: AcceptInput): Promi
 function record(db: Db, hash: string, rawPath: string, input: AcceptInput): { id: string; duplicate: boolean } {
   const current = findMessageBySha(db, hash);
   if (current) {
+    mergeEnvelope(db, current.id, input);
     insertDeliverySoft(db, current.id, input);
     return { id: current.id, duplicate: true };
   }
@@ -91,6 +93,35 @@ function record(db: Db, hash: string, rawPath: string, input: AcceptInput): { id
     now: input.receivedAtMs,
   });
   return { id, duplicate: false };
+}
+
+function mergeEnvelope(db: Db, messageId: string, input: AcceptInput): void {
+  const row = db
+    .prepare("SELECT envelope_to, domains, received_at FROM messages WHERE id = ?")
+    .get(messageId) as { envelope_to: string; domains: string; received_at: number } | undefined;
+  if (!row) return;
+  const rcpts = parseStringList(row.envelope_to);
+  const domains = parseStringList(row.domains);
+  for (const rcpt of input.meta.rcptTo) {
+    if (!rcpts.some((item) => item.toLowerCase() === rcpt.toLowerCase())) rcpts.push(rcpt);
+  }
+  for (const domain of uniqueDomains(input.meta.rcptTo)) {
+    if (!domains.includes(domain)) domains.push(domain);
+  }
+  const receivedAt = Math.max(row.received_at, input.receivedAtMs);
+  db.prepare(
+    "UPDATE messages SET envelope_to = ?, domains = ?, received_at = ?, updated_at = ? WHERE id = ?",
+  ).run(JSON.stringify(rcpts), JSON.stringify(domains), receivedAt, input.receivedAtMs, messageId);
+}
+
+function parseStringList(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === "string" && item.length > 0);
+  } catch {
+    return [];
+  }
 }
 
 function insertDeliverySoft(db: Db, messageId: string, input: AcceptInput): void {

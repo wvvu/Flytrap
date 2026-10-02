@@ -1,3 +1,5 @@
+import { ulid } from "ulid";
+import { keyTail } from "../../ai/secret.js";
 import { LABELS, type Label } from "../../ai/types.js";
 import { ConfigError, parseAcceptDomains } from "../../config.js";
 import type { Db } from "../index.js";
@@ -10,6 +12,8 @@ export const SETTING_PANEL_TITLE = "panel_title";
 export const SETTING_LABEL_NAMES = "label_names";
 export const SETTING_DOMAIN_NAMES = "domain_names";
 export const SETTING_SENDER_NAMES = "sender_names";
+export const SETTING_AI_MODELS = "ai_models";
+export const SETTING_AI_KEYS = "ai_keys";
 
 export const DEFAULT_JOB_MAX_ATTEMPTS = 5;
 export const MAX_JOB_ATTEMPTS = 20;
@@ -20,6 +24,10 @@ export const MAX_DOMAIN_NAME = 24;
 export const MAX_SENDER_NAMES = 200;
 export const MAX_SENDER_NAME = 40;
 export const MAX_DOMAIN_NAMES = 50;
+export const MAX_AI_MODELS = 8;
+export const MAX_AI_KEYS = 20;
+
+const MODEL_RE = /^[A-Za-z0-9._:@/-]{1,80}$/;
 
 export const DEFAULT_LABEL_NAMES: Record<Label, string> = {
   legit: "正常",
@@ -159,6 +167,170 @@ export function saveJobMaxAttempts(db: Db, maxAttempts: number, now: number): nu
   }
   writeRaw(db, SETTING_JOB_MAX_ATTEMPTS, String(maxAttempts), now);
   return maxAttempts;
+}
+
+export interface StoredAiKey {
+  id: string;
+  secret: string;
+}
+
+export interface AiKeyPublic {
+  id: string;
+  tail: string;
+}
+
+export interface AiPoolSource {
+  models: string[];
+  keys: StoredAiKey[];
+  modelsFrom: "saved" | "env";
+  keysFrom: "saved" | "env";
+}
+
+export interface AiPoolPublic {
+  models: string[];
+  keys: AiKeyPublic[];
+  modelsFrom: "saved" | "env";
+  keysFrom: "saved" | "env";
+}
+
+export function readEffectiveAiPool(
+  db: Db,
+  fallback: { models: readonly string[]; keys: readonly StoredAiKey[] },
+): AiPoolSource {
+  const stored = readStoredAiPool(db);
+  const modelsFrom = stored.models.length > 0 ? "saved" : "env";
+  const keysFrom = stored.keys.length > 0 ? "saved" : "env";
+  return {
+    models: modelsFrom === "saved" ? stored.models : [...fallback.models],
+    keys: keysFrom === "saved" ? stored.keys : fallback.keys.map((item) => ({ id: item.id, secret: item.secret })),
+    modelsFrom,
+    keysFrom,
+  };
+}
+
+export function presentAiPool(pool: AiPoolSource): AiPoolPublic {
+  return {
+    models: pool.models,
+    keys: pool.keys.map((item) => ({ id: item.id, tail: keyTail(item.secret) })),
+    modelsFrom: pool.modelsFrom,
+    keysFrom: pool.keysFrom,
+  };
+}
+
+export function saveAiPool(
+  db: Db,
+  input: { models: readonly string[]; keys: readonly { id?: string; secret?: string }[] },
+  fallback: readonly StoredAiKey[],
+  now: number,
+): AiPoolPublic {
+  const models = normalizeModels(input.models);
+  const keys = normalizeAiKeys(db, input.keys, fallback);
+  const write = db.transaction(() => {
+    writeRaw(db, SETTING_AI_MODELS, JSON.stringify(models), now);
+    writeRaw(db, SETTING_AI_KEYS, JSON.stringify(keys), now);
+  });
+  write();
+  return {
+    models,
+    keys: keys.map((item) => ({ id: item.id, tail: keyTail(item.secret) })),
+    modelsFrom: models.length > 0 ? "saved" : "env",
+    keysFrom: keys.length > 0 ? "saved" : "env",
+  };
+}
+
+function readStoredAiPool(db: Db): { models: string[]; keys: StoredAiKey[] } {
+  return { models: readModelList(db), keys: readKeyList(db) };
+}
+
+function readModelList(db: Db): string[] {
+  const raw = readRaw(db, SETTING_AI_MODELS);
+  if (raw === null) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const out: string[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "string" || !MODEL_RE.test(item)) continue;
+      if (!out.includes(item)) out.push(item);
+    }
+    return out.slice(0, MAX_AI_MODELS);
+  } catch {
+    return [];
+  }
+}
+
+function readKeyList(db: Db): StoredAiKey[] {
+  const raw = readRaw(db, SETTING_AI_KEYS);
+  if (raw === null) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const out: StoredAiKey[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
+      const id = (item as { id?: unknown }).id;
+      const secret = (item as { secret?: unknown }).secret;
+      if (typeof id !== "string" || typeof secret !== "string") continue;
+      const trimmed = secret.trim();
+      if (!id || trimmed.length < 8) continue;
+      out.push({ id, secret: trimmed });
+    }
+    return out.slice(0, MAX_AI_KEYS);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeModels(input: readonly string[]): string[] {
+  if (input.length > MAX_AI_MODELS) throw new SettingsError(`at most ${MAX_AI_MODELS} models`);
+  const out: string[] = [];
+  for (const item of input) {
+    const model = item.trim();
+    if (!model) continue;
+    if (!MODEL_RE.test(model)) throw new SettingsError(`invalid model (${model})`);
+    if (!out.includes(model)) out.push(model);
+  }
+  return out;
+}
+
+function normalizeAiKeys(
+  db: Db,
+  input: readonly { id?: string; secret?: string }[],
+  fallback: readonly StoredAiKey[],
+): StoredAiKey[] {
+  if (input.length > MAX_AI_KEYS) throw new SettingsError(`at most ${MAX_AI_KEYS} keys`);
+  const known = new Map<string, string>();
+  for (const item of readKeyList(db)) known.set(item.id, item.secret);
+  for (const item of fallback) known.set(item.id, item.secret);
+  const out: StoredAiKey[] = [];
+  const seen = new Set<string>();
+  for (const item of input) {
+    const provided = item.secret?.trim() ?? "";
+    const id = item.id?.trim() ?? "";
+    let secret = "";
+    let nextId = "";
+    if (provided) {
+      secret = cleanSecret(provided);
+      nextId = ulid();
+    } else if (id) {
+      const found = known.get(id);
+      if (!found) throw new SettingsError("unknown key");
+      secret = found;
+      nextId = id.startsWith("env:") ? ulid() : id;
+    } else {
+      throw new SettingsError("key needs an id or a secret");
+    }
+    if (seen.has(secret)) continue;
+    seen.add(secret);
+    out.push({ id: nextId, secret });
+  }
+  return out;
+}
+
+function cleanSecret(value: string): string {
+  if (value.length < 8 || value.length > 512) throw new SettingsError("key length");
+  if (CONTROL_RE.test(value) || /\s/.test(value)) throw new SettingsError("key has invalid characters");
+  return value;
 }
 
 function readPanelTitle(db: Db): string {

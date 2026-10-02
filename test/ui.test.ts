@@ -70,6 +70,10 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /不执行脚本/);
     assert.match(page.body, /外链图片先不加载/);
     assert.match(page.body, /id="set-names"/);
+    assert.match(page.body, /value="legit" selected/);
+    assert.match(page.body, /末 4 位/);
+    assert.equal(/[你我他]/.test(page.body), false);
+    assert.equal(/[你我他]/.test(script.body), false);
     assert.match(page.body, /已放过/);
     assert.match(script.body, /stripRemoteImages/);
     assert.match(script.body, /隐藏图片/);

@@ -459,6 +459,22 @@ test("settings override notify, domains, and the failure list", async () => {
     });
     assert.equal(badName.statusCode, 400);
 
+    const secret = "sk-live-secret-value-wxyz";
+    const ai = await client.put(app, "/v1/settings/ai", {
+      models: ["gemini-2.5-flash"],
+      keys: [{ secret }],
+    });
+    assert.equal(ai.statusCode, 200);
+    const aiBody = JSON.stringify(ai.json());
+    assert.equal(aiBody.includes(secret), false);
+    assert.equal(aiBody.includes("sk-live"), false);
+    assert.equal(ai.json().aiPool.keys[0].tail, "wxyz");
+    assert.equal(ai.json().aiPool.keys[0].tail.length, 4);
+    const listed = await client.get(app, "/v1/settings");
+    const listedBody = JSON.stringify(listed.json());
+    assert.equal(listedBody.includes(secret), false);
+    assert.equal(listed.json().aiPool.keys[0].tail, "wxyz");
+
     db.prepare(
       `INSERT INTO messages (id, sha256, raw_path, size_bytes, received_at, envelope_to, domains, smtp_meta, subject, from_addr, status, created_at, updated_at)
        VALUES ('msg-1', ?, 'raw/a', 1, ?, '["a@example.com"]', '["example.com"]', '{}', '工资条', 'payroll@example.com', 'received', ?, ?)`,

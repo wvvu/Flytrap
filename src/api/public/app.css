@@ -518,6 +518,16 @@ input:focus, select:focus, textarea:focus {
   gap: 4px;
 }
 
+button.mail-item {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
 .mail-item:hover {
   background: var(--bg-card-hover);
 }
@@ -1528,6 +1538,10 @@ body,
 
 .name-row.with-action {
   grid-template-columns: minmax(0, 1.3fr) minmax(100px, 0.8fr) auto;
+}
+
+.name-row.order-row {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .name-key {

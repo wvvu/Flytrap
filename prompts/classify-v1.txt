@@ -18,6 +18,7 @@ Authentication:
 - Do not refuse legit, and do not choose phish, only because a check failed or is missing.
 
 Labels, as a person clearing an inbox would use them:
+The default label is legit. Choose any other label only when the message is plainly that kind. Ordinary uncertainty stays legit. Do not use gray, and do not invent a softer label, just because the call is unsure.
 - legit: mail the person may want. Personal mail, receipts, shipping, bills, login codes, replies, calendar, GitHub or CI, a named service they use. If it looks like ordinary mail and you are unsure, choose legit. Missing a real message is worse than letting a dull letter through.
 - spam: unsolicited bulk or ads, with no targeted deception.
 - unsolicited-admin: scanner, certificate, or vendor noise aimed at an admin-style address, with no impersonation and no payload.
