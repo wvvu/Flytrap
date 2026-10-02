@@ -15,8 +15,9 @@ import type { Db } from "../db/index.js";
 import PostalMime from "postal-mime";
 import { findAttachment, listMessageAttachments } from "../db/repos/attachments.js";
 import { writeAudit } from "../db/repos/audit.js";
-import { countJobsByStatus, enqueueJob, hasOpenJob, listJobsWithDetails, retryAllDeadJobs, retryJob, type JobStatus } from "../db/repos/jobs.js";
-import { readRuntimeSettings, saveAcceptDomains, saveJobMaxAttempts, saveNotifySettings, SettingsError } from "../db/repos/settings.js";
+import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, retryAllDeadJobs, retryJob, retryMessageJobs, type JobStatus } from "../db/repos/jobs.js";
+import { fallbackAiPool } from "../ai/pool.js";
+import { presentAiPool, readEffectiveAiPool, saveAcceptDomains, saveAiPool, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
 import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
 import { countTrash, deleteMessage, emptyTrash, getMessage, listMessages, restoreMessage, trashMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
@@ -35,7 +36,7 @@ declare module "fastify" {
 }
 
 const STATUSES = ["received", "authed", "parsed", "classified", "notified", "error"] as const;
-const JOB_STATUSES = ["queued", "running", "done", "failed", "dead"] as const;
+const JOB_STATUSES = ["queued", "running", "done", "failed", "dead", "dismissed"] as const;
 const DOMAIN_RE =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
@@ -57,6 +58,28 @@ const jobSettingsBody = z.object({
   maxAttempts: z.number().int().min(1).max(20),
 }).strict();
 
+const nameSettingsBody = z.object({
+  panelTitle: z.string().min(1).max(40),
+  labelNames: z.record(z.string(), z.string().max(16)),
+  domainNames: z.record(z.string(), z.string().max(24)),
+  senderNames: z.array(z.object({
+    address: z.string().min(3).max(254),
+    name: z.string().min(1).max(40),
+  }).strict()).max(200),
+}).strict();
+
+const retryMessageBody = z.object({
+  messageId: z.string().regex(/^[\w-]+$/),
+}).strict();
+
+const aiSettingsBody = z.object({
+  models: z.array(z.string().max(80)).max(8),
+  keys: z.array(z.object({
+    id: z.string().min(1).max(80).optional(),
+    secret: z.string().min(8).max(512).optional(),
+  }).strict()).max(20),
+}).strict();
+
 const historyBody = z.object({
   domain: z.string().min(1).max(253),
   localpart: z.string().min(1).max(64),
@@ -64,6 +87,7 @@ const historyBody = z.object({
   lastSeen: z.union([z.string(), z.number(), z.null()]).optional(),
   source: z.string().max(32).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
+  displayName: z.string().max(40).nullable().optional(),
 }).strict();
 
 export interface ApiOptions {
@@ -388,6 +412,8 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       .send(bytes);
   });
 
+  app.get("/v1/jobs/summary", async () => failureSummary(db));
+
   app.get("/v1/jobs/count", async (request) => {
     const query = request.query as Record<string, unknown>;
     const status = optionalString(query.status) ?? "dead";
@@ -400,11 +426,11 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const status = optionalString(query.status);
     const scope = optionalString(query.scope);
     const limit = typeof query.limit === "string" ? Number.parseInt(query.limit, 10) : undefined;
-    if (scope && scope !== "open" && scope !== "retrying") throw new HttpError(400);
+    if (scope && scope !== "open" && scope !== "retrying" && scope !== "stopped") throw new HttpError(400);
     if (status && !JOB_STATUSES.includes(status as JobStatus) && status !== "all") throw new HttpError(400);
     const rows = listJobsWithDetails(db, {
       status,
-      scope: scope === "open" || scope === "retrying" ? scope : null,
+      scope: scope === "open" || scope === "retrying" || scope === "stopped" ? scope : null,
       limit,
     });
     return {
@@ -426,6 +452,21 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     };
   });
 
+  app.post("/v1/jobs/retry-message", async (request, reply) => {
+    const body = retryMessageBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    const count = retryMessageJobs(db, body.data.messageId, now());
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "retry_message_jobs",
+      target: body.data.messageId,
+      detail: `count=${count}`,
+    });
+    return reply.send({ ok: true, count });
+  });
+
   app.post("/v1/jobs/:id/retry", async (request, reply) => {
     const params = request.params as Record<string, string>;
     const id = params.id;
@@ -434,6 +475,16 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     if (!ok) throw new HttpError(404, "not_found");
     writeAudit(db, { id: ulid(), at: now(), actor: request.session.user ?? "unknown", action: "retry_job", target: id });
     return reply.send({ ok: true, retried: id });
+  });
+
+  app.post("/v1/jobs/:id/dismiss", async (request, reply) => {
+    const params = request.params as Record<string, string>;
+    const id = params.id;
+    if (!id) throw new HttpError(400);
+    const ok = dismissJob(db, id, now());
+    if (!ok) throw new HttpError(404, "not_found");
+    writeAudit(db, { id: ulid(), at: now(), actor: request.session.user ?? "unknown", action: "dismiss_job", target: id });
+    return reply.send({ ok: true, dismissed: id });
   });
 
   app.post("/v1/jobs/retry-all", async (request, reply) => {
@@ -476,7 +527,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, id });
   });
 
-  app.get("/v1/ai/status", async () => aiStatus(config));
+  app.get("/v1/ai/status", async () => aiStatus(db, config));
 
   app.get("/v1/settings", async () => {
     const runtime = readRuntimeSettings(db, {
@@ -489,12 +540,37 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       notifyMinConfidence: runtime.notifyMinConfidence,
       acceptDomains: runtime.acceptDomains,
       jobMaxAttempts: runtime.jobMaxAttempts,
+      panelTitle: runtime.panelTitle,
+      labelNames: runtime.labelNames,
+      domainNames: runtime.domainNames,
+      senderNames: runtime.senderNames,
       channels: {
         telegram: Boolean(config.telegramBotToken && config.telegramChatId),
         webhook: Boolean(config.notifyWebhookUrl),
       },
-      ai: aiStatus(config),
+      ai: aiStatus(db, config),
+      aiPool: presentAiPool(readEffectiveAiPool(db, fallbackAiPool(config))),
     };
+  });
+
+  app.put("/v1/settings/ai", async (request, reply) => {
+    const body = aiSettingsBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    let saved;
+    try {
+      saved = saveAiPool(db, body.data, fallbackAiPool(config).keys, now());
+    } catch (err) {
+      if (err instanceof SettingsError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "settings_ai",
+      detail: `models=${saved.models.length} keys=${saved.keys.length}`,
+    });
+    return reply.send({ ok: true, aiPool: saved });
   });
 
   app.put("/v1/settings/notify", async (request, reply) => {
@@ -557,6 +633,26 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, jobMaxAttempts: maxAttempts });
   });
 
+  app.put("/v1/settings/names", async (request, reply) => {
+    const body = nameSettingsBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    let saved;
+    try {
+      saved = saveNameSettings(db, body.data, now());
+    } catch (err) {
+      if (err instanceof SettingsError || err instanceof ConfigError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "settings_names",
+      detail: saved.panelTitle,
+    });
+    return reply.send({ ok: true, ...saved });
+  });
+
   app.get("/v1/stats", async () => {
     const start = utcDayStart(now());
     return {
@@ -593,6 +689,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       lastSeen: optionalTime(body.data.lastSeen),
       source: body.data.source ?? null,
       notes: body.data.notes ?? null,
+      displayName: body.data.displayName,
     });
     writeAudit(db, {
       id: ulid(),
@@ -616,11 +713,14 @@ export async function startApi(options: ApiOptions): Promise<RunningApi> {
   return { port, close: () => app.close() };
 }
 
-function aiStatus(config: Config): { classifier: string; model: string; keyCount: number } {
+function aiStatus(db: Db, config: Config): { classifier: string; model: string; keyCount: number } {
+  if (config.classifier === "fake") return { classifier: "fake", model: "fake", keyCount: 0 };
+  const pool = readEffectiveAiPool(db, fallbackAiPool(config));
+  const fallbackModel = config.classifier === "gemini" ? config.geminiModel : config.openaiModel ?? "";
   return {
     classifier: config.classifier,
-    model: config.classifier === "gemini" ? config.geminiModel : config.classifier === "openai-compat" ? config.openaiModel ?? "" : "fake",
-    keyCount: config.classifier === "gemini" ? config.geminiApiKeys.length : config.openaiApiKey ? 1 : 0,
+    model: pool.models[0] || fallbackModel,
+    keyCount: pool.keys.length,
   };
 }
 
@@ -870,7 +970,7 @@ function countLabels(db: Db, since: number | null): Record<string, number> {
   return out;
 }
 
-function toHistory(row: { domain: string; localpart: string; first_seen: number | null; last_seen: number | null; source: string | null; notes: string | null }) {
+function toHistory(row: { domain: string; localpart: string; first_seen: number | null; last_seen: number | null; source: string | null; notes: string | null; display_name: string | null }) {
   return {
     domain: row.domain,
     localpart: row.localpart,
@@ -878,6 +978,7 @@ function toHistory(row: { domain: string; localpart: string; first_seen: number 
     lastSeen: row.last_seen === null ? null : iso(row.last_seen),
     source: row.source,
     notes: row.notes,
+    displayName: row.display_name,
   };
 }
 

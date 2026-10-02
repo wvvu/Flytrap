@@ -190,10 +190,21 @@ test("the api requires a session, hides paths, and pages the list", async () => 
     });
     assert.equal(saved.statusCode, 201);
     const history = await client.get(app, "/v1/mailbox-history?domain=example.com");
-    const items = history.json().items as Array<{ localpart: string; notes: string; firstSeen: string }>;
+    const items = history.json().items as Array<{ localpart: string; notes: string; firstSeen: string; displayName: string | null }>;
     assert.equal(items[0]?.localpart, "admin");
     assert.equal(items[0]?.notes, "旧面板");
     assert.equal(items[0]?.firstSeen, "2019-01-01T00:00:00.000Z");
+    assert.equal(items[0]?.displayName ?? null, null);
+
+    const named = await client.post(app, "/v1/mailbox-history", {
+      domain: "example.com",
+      localpart: "admin",
+      notes: "旧面板",
+      displayName: "管理",
+    });
+    assert.equal(named.statusCode, 201);
+    const namedHistory = await client.get(app, "/v1/mailbox-history?domain=example.com");
+    assert.equal((namedHistory.json().items as Array<{ displayName: string | null }>)[0]?.displayName, "管理");
 
     const patchRes = await client.patch(app, "/v1/messages/msg_visible/label", { label: "legit" });
     assert.equal(patchRes.statusCode, 200);
@@ -425,6 +436,44 @@ test("settings override notify, domains, and the failure list", async () => {
     const saved = await client.get(app, "/v1/settings");
     assert.deepEqual(saved.json().acceptDomains, ["example.com", "other.test"]);
     assert.equal(saved.json().jobMaxAttempts, 3);
+    assert.equal(saved.json().panelTitle, "Flytrap");
+    assert.equal(saved.json().labelNames.phish, "钓鱼");
+
+    const names = await client.put(app, "/v1/settings/names", {
+      panelTitle: "工资箱",
+      labelNames: { phish: "诈骗" },
+      domainNames: { "example.com": "主号" },
+      senderNames: [{ address: "Payroll@Example.com", name: "会计" }],
+    });
+    assert.equal(names.statusCode, 200);
+    assert.equal(names.json().panelTitle, "工资箱");
+    assert.equal(names.json().labelNames.phish, "诈骗");
+    assert.equal(names.json().labelNames.spam, "垃圾");
+    assert.deepEqual(names.json().domainNames, { "example.com": "主号" });
+    assert.deepEqual(names.json().senderNames, [{ address: "payroll@example.com", name: "会计" }]);
+    const badName = await client.put(app, "/v1/settings/names", {
+      panelTitle: "工资箱",
+      labelNames: {},
+      domainNames: {},
+      senderNames: [{ address: "not an email", name: "x" }],
+    });
+    assert.equal(badName.statusCode, 400);
+
+    const secret = "sk-live-secret-value-wxyz";
+    const ai = await client.put(app, "/v1/settings/ai", {
+      models: ["gemini-2.5-flash"],
+      keys: [{ secret }],
+    });
+    assert.equal(ai.statusCode, 200);
+    const aiBody = JSON.stringify(ai.json());
+    assert.equal(aiBody.includes(secret), false);
+    assert.equal(aiBody.includes("sk-live"), false);
+    assert.equal(ai.json().aiPool.keys[0].tail, "wxyz");
+    assert.equal(ai.json().aiPool.keys[0].tail.length, 4);
+    const listed = await client.get(app, "/v1/settings");
+    const listedBody = JSON.stringify(listed.json());
+    assert.equal(listedBody.includes(secret), false);
+    assert.equal(listed.json().aiPool.keys[0].tail, "wxyz");
 
     db.prepare(
       `INSERT INTO messages (id, sha256, raw_path, size_bytes, received_at, envelope_to, domains, smtp_meta, subject, from_addr, status, created_at, updated_at)
@@ -451,6 +500,34 @@ test("settings override notify, domains, and the failure list", async () => {
 
     const retrying = await client.get(app, "/v1/jobs?scope=retrying");
     assert.deepEqual(retrying.json().items.map((item: { id: string }) => item.id), ["job-retry"]);
+
+    const summary = await client.get(app, "/v1/jobs/summary");
+    assert.equal(summary.json().dead, 1);
+    assert.equal(summary.json().retrying, 1);
+    assert.equal(summary.json().open, 2);
+
+    const stopped = await client.get(app, "/v1/jobs?scope=stopped");
+    assert.deepEqual(stopped.json().items.map((item: { id: string }) => item.id), ["job-dead"]);
+
+    const dismiss = await client.post(app, "/v1/jobs/job-dead/dismiss", {});
+    assert.equal(dismiss.statusCode, 200);
+    assert.deepEqual(dismiss.json(), { ok: true, dismissed: "job-dead" });
+    const afterDismiss = await client.get(app, "/v1/jobs/summary");
+    assert.equal(afterDismiss.json().dead, 0);
+    assert.equal(afterDismiss.json().dismissed, 1);
+    assert.equal(afterDismiss.json().open, 1);
+
+    const retryLetter = await client.post(app, "/v1/jobs/retry-message", { messageId: "msg-1" });
+    assert.equal(retryLetter.statusCode, 200);
+    assert.equal(retryLetter.json().count, 0);
+    const revive = await client.post(app, "/v1/jobs/job-dead/retry", {});
+    assert.equal(revive.statusCode, 200);
+    db.prepare("UPDATE jobs SET status = 'dead', attempts = 5 WHERE id = 'job-dead'").run();
+    const again = await client.post(app, "/v1/jobs/retry-message", { messageId: "msg-1" });
+    assert.equal(again.json().count, 1);
+    const revived = db.prepare("SELECT status, attempts FROM jobs WHERE id = 'job-dead'").get() as { status: string; attempts: number };
+    assert.equal(revived.status, "queued");
+    assert.equal(revived.attempts, 0);
   } finally {
     await app.close();
     db.close();

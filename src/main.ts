@@ -7,6 +7,8 @@ import { ensureDataDirs, migrationsDir } from "./paths.js";
 import { fakeClassifier } from "./ai/classifier.js";
 import { createGeminiClassifier } from "./ai/gemini.js";
 import { createOpenAiClassifier } from "./ai/openai-compat.js";
+import { fallbackAiPool } from "./ai/pool.js";
+import { readEffectiveAiPool } from "./db/repos/settings.js";
 import { readPrompt } from "./ai/prompt.js";
 import { createMailauthAuthenticator } from "./mail/auth.js";
 import { createTelegramNotifier } from "./notify/telegram.js";
@@ -137,14 +139,13 @@ async function boot(stops: Array<() => Promise<void>>): Promise<void> {
         ? fakeClassifier()
         : config.classifier === "gemini"
           ? createGeminiClassifier({
-              apiKeys: config.geminiApiKeys,
               model: config.geminiModel,
               baseUrl: config.geminiBaseUrl,
+              resolve: () => readEffectiveAiPool(db, fallbackAiPool(config)),
             })
           : createOpenAiClassifier({
               baseUrl: config.openaiBaseUrl ?? "",
-              apiKey: config.openaiApiKey ?? "",
-              model: config.openaiModel ?? "",
+              resolve: () => readEffectiveAiPool(db, fallbackAiPool(config)),
             });
     const notifiers: Notifier[] = [];
     if (config.notifyWebhookUrl) {

@@ -48,7 +48,7 @@
       <!-- 第一列: 全局主功能轨 (Icon / Global Rail) -->
       <nav class="rail" aria-label="全局导航">
         <div class="rail-top">
-          <div class="logo-mark" title="Flytrap"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></div>
+          <div class="logo-mark" id="rail-mark" title="Flytrap"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></div>
           <button type="button" class="rail-btn active" id="nav-inbox" title="收件箱">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-inbox"></use></svg></span>
             <span class="label">收件箱</span>
@@ -80,6 +80,7 @@
 
       <!-- 第二列: 分流与列表检索 (Contextual Stream) -->
       <aside class="stream">
+        <p id="panel-name" class="stream-eyebrow" hidden></p>
         <!-- 收件箱模式的顶部过滤栏 -->
         <div id="stream-inbox-header" class="stream-header">
           <div class="stream-title-row">
@@ -90,13 +91,13 @@
           </div>
           <form id="filters" class="search-box">
             <input id="q" type="search" maxlength="200" placeholder="搜索主题或发件人">
-            <input id="label" type="hidden" value="">
+            <input id="label" type="hidden" value="legit">
             <input id="status" type="hidden" value="">
           </form>
           <div class="stream-filter-bar">
-            <select id="filter-select" class="stream-filter-select" title="按分类筛选。默认是全部，避免漏看。">
-              <option value="" selected>全部</option>
-              <option value="legit" title="legit">正常</option>
+            <select id="filter-select" class="stream-filter-select" title="按分类筛选。默认显示正常。尚未分类的来信也在这一列。">
+              <option value="legit" selected>正常</option>
+              <option value="">全部</option>
               <option value="phish" title="phish">钓鱼</option>
               <option value="malware" title="malware">恶意</option>
               <option value="spam" title="spam">垃圾</option>
@@ -111,7 +112,7 @@
           <div class="stream-title-row">
             <h2>垃圾桶</h2>
             <div class="stream-actions">
-              <button type="button" id="btn-empty-trash" class="btn-sm btn-danger-ghost" title="清空全部垃圾">清空垃圾桶</button>
+              <button type="button" id="btn-empty-trash" class="btn-sm btn-danger-ghost" title="清空垃圾桶">清空垃圾桶</button>
               <button type="button" id="btn-trash-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
           </div>
@@ -120,7 +121,35 @@
           </form>
         </div>
 
+        <div id="stream-dlq-header" class="stream-header" hidden>
+          <div class="stream-title-row">
+            <h2>处理失败</h2>
+            <div class="stream-actions">
+              <button type="button" id="btn-retry-all" class="btn-sm">全部再试</button>
+              <button type="button" id="btn-dlq-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
+            </div>
+          </div>
+          <form id="dlq-search" class="search-box">
+            <input id="dlq-q" type="search" maxlength="200" placeholder="搜索主题、地址或错误" autocomplete="off">
+          </form>
+          <div class="pills-scroll" id="dlq-pills">
+            <button type="button" class="pill active" data-dlq-status="open">要处理</button>
+            <button type="button" class="pill" data-dlq-status="stopped">已放弃</button>
+            <button type="button" class="pill" data-dlq-status="retrying">还会再试</button>
+            <button type="button" class="pill" data-dlq-status="dismissed">已放过</button>
+          </div>
+          <p id="dlq-summary" class="stream-subtitle">按邮件排列。停止的步骤可以重试或放过。</p>
+        </div>
+
+        <div id="stream-settings-header" class="stream-header" hidden>
+          <div class="stream-title-row">
+            <h2>设置</h2>
+          </div>
+          <p class="stream-subtitle">各分区单独保存。内容未改时，保存为灰色。</p>
+        </div>
+
         <p id="notice" class="stream-notice" role="status"></p>
+        <p id="dlq-notice" class="stream-notice" role="status" hidden></p>
 
         <!-- 列表容器 -->
         <div id="list" class="item-list"></div>
@@ -133,7 +162,7 @@
           <div id="mail-empty" class="empty-state">
             <span class="empty-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></span>
             <h3>选一封信</h3>
-            <p>左边是全部来信。分类只是建议，信都还在。</p>
+            <p>这里是「正常」，包含尚未分类的来信。其余分类用上方筛选。</p>
           </div>
 
           <div id="mail-loading" class="empty-state" hidden>
@@ -167,11 +196,6 @@
                   </div>
                 </div>
               </div>
-              <!-- Infomaniak 风格安全提示栏 -->
-              <div id="security-banner" class="security-banner">
-                <span class="sec-text">预览不执行脚本，外链图片先不加载。</span>
-                <button type="button" id="btn-load-images" class="btn-sec-action">显示图片</button>
-              </div>
             </header>
 
             <!-- 详情 Tab 切换栏与平齐操作区 -->
@@ -195,8 +219,8 @@
               <div class="summary-card">
                 <div class="summary-header">
                   <span class="summary-label">摘要</span>
-                  <div class="confidence-chip" title="模型有多确定">
-                    <span class="chip-label">把握</span>
+                  <div class="confidence-chip" title="模型置信度" hidden>
+                    <span class="chip-label">置信</span>
                     <div class="chip-bar"><div id="verdict-bar" class="chip-fill"></div></div>
                     <span id="verdict-percent" class="chip-percent">0%</span>
                   </div>
@@ -209,7 +233,8 @@
               <section class="inlined-preview-section">
                 <div class="section-subhead">
                   <span class="subhead-title">正文</span>
-                  <span class="subhead-hint">不执行脚本，外链图片先不加载</span>
+                  <p class="preview-guard" id="preview-guard">不执行脚本。外链图片先不加载。</p>
+                  <button type="button" id="btn-load-images" class="btn-sec-action">显示图片</button>
                 </div>
                 <div class="html-container inlined-sandbox-wrap">
                   <iframe id="mail-sandbox" sandbox="" referrerpolicy="no-referrer" title="邮件正文预览"></iframe>
@@ -257,33 +282,68 @@
         </section>
 
         <section id="view-dlq" class="workspace-view" hidden>
-          <div class="page-scroll">
-            <div class="block-head">
-              <div>
-                <h1 class="page-title">处理失败</h1>
-                <p class="muted">按信排。每一行是停住的那一步。</p>
-              </div>
-              <div class="page-tools">
-                <button type="button" id="btn-retry-all" class="btn-fit">停掉的全部再试</button>
-                <button type="button" id="btn-dlq-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
-              </div>
-            </div>
-            <div class="pills-scroll" id="dlq-pills">
-              <button type="button" class="pill active" data-dlq-status="open">要处理</button>
-              <button type="button" class="pill" data-dlq-status="dead">已放弃</button>
-              <button type="button" class="pill" data-dlq-status="retrying">还会再试</button>
-            </div>
-            <p id="dlq-notice" class="muted" role="status"></p>
-            <div id="failure-list" class="letter-list"></div>
+          <button type="button" id="btn-back-dlq" class="btn-sm mobile-back">返回</button>
+          <div id="dlq-empty" class="empty-state">
+            <div class="empty-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"></use></svg></div>
+            <h3>处理失败</h3>
+            <p>从左侧选择一条记录。</p>
           </div>
+          <div id="failure-detail" class="page-scroll" hidden></div>
         </section>
 
         <section id="view-settings" class="workspace-view" hidden>
           <div class="page-scroll">
-            <h1 class="page-title">设置</h1>
-            <p class="page-lead">每一块自己存。字没改的时候，保存是灰的。</p>
+            <button type="button" id="btn-back-settings" class="btn-sm mobile-back">返回</button>
+            <section class="block" id="set-names">
+              <div class="block-head">
+                <div>
+                  <h2>名称</h2>
+                  <p class="muted">只改显示名。分类代号不变，模型与提醒仍按代号判断。</p>
+                </div>
+                <button type="button" id="btn-save-names" class="btn-fit" disabled>保存</button>
+              </div>
+              <label class="name-row">
+                <span class="name-key">面板</span>
+                <input id="panel-title" maxlength="40" autocomplete="off" placeholder="Flytrap">
+              </label>
+              <h3 class="field-title">分类</h3>
+              <div id="label-names" class="name-grid"></div>
+              <h3 class="field-title">收信域名的短名</h3>
+              <p class="muted">收件地址后面会带上这个短名。域名本身在下面「收信域名」里加减。</p>
+              <div id="domain-names" class="name-grid"></div>
+              <h3 class="field-title">发件人</h3>
+              <p class="muted">列表中的发件地址使用这里的名称。</p>
+              <div id="sender-names" class="name-list"></div>
+              <div class="inline-row">
+                <input id="sender-address" placeholder="发件地址" autocomplete="off" maxlength="254">
+                <input id="sender-name" placeholder="名称" maxlength="40" autocomplete="off">
+                <button type="button" id="btn-add-sender" class="btn-fit">添加</button>
+              </div>
+            </section>
 
-            <section class="block">
+            <section class="block" id="set-model" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>模型</h2>
+                  <p class="muted">按列表顺序使用。密钥只显示末 4 位，保存后不能再查看全文。</p>
+                </div>
+                <button type="button" id="btn-save-ai" class="btn-fit" disabled>保存</button>
+              </div>
+              <h3 class="field-title">型号</h3>
+              <div id="model-list" class="name-list"></div>
+              <div class="inline-row">
+                <input id="model-add" placeholder="模型名称" maxlength="80" autocomplete="off">
+                <button type="button" id="btn-add-model" class="btn-fit">添加</button>
+              </div>
+              <h3 class="field-title">密钥</h3>
+              <div id="key-list" class="name-list"></div>
+              <div class="inline-row">
+                <input id="key-add" type="password" placeholder="新密钥" maxlength="512" autocomplete="off">
+                <button type="button" id="btn-add-key" class="btn-fit">添加</button>
+              </div>
+            </section>
+
+            <section class="block" id="set-prompt" hidden>
               <div class="block-head">
                 <div>
                   <h2>分拣</h2>
@@ -292,10 +352,10 @@
                 <button type="button" id="btn-save-prompt" class="btn-fit" disabled>保存</button>
               </div>
               <textarea id="prompt-editor" rows="14" class="code-editor" spellcheck="false"></textarea>
-              <p class="muted">保存后，新来的信按这份分。已经分过的，打开那封再点「重分类」。</p>
+              <p class="muted">保存后，新邮件按这份提示词分类。已经分过的，打开邮件后再点「重分类」。</p>
             </section>
 
-            <section class="block">
+            <section class="block" id="set-notify" hidden>
               <div class="block-head">
                 <div>
                   <h2>提醒</h2>
@@ -305,13 +365,13 @@
               </div>
               <div class="chk-row" id="notify-labels"></div>
               <div class="inline-row">
-                <span class="muted">把握至少</span>
+                <span class="muted">置信至少</span>
                 <input id="notify-confidence" class="field-narrow" inputmode="decimal" autocomplete="off">
                 <span class="muted" id="notify-channels"></span>
               </div>
             </section>
 
-            <section class="block">
+            <section class="block" id="set-domains" hidden>
               <div class="block-head">
                 <div>
                   <h2>收信域名</h2>
@@ -320,16 +380,16 @@
               </div>
               <div id="domain-list" class="domain-list"></div>
               <div class="inline-row">
-                <input id="domain-add" placeholder="再加一个域名" autocomplete="off">
-                <button type="button" id="btn-add-domain" class="btn-fit">加上</button>
+                <input id="domain-add" placeholder="添加域名" autocomplete="off">
+                <button type="button" id="btn-add-domain" class="btn-fit">添加</button>
               </div>
             </section>
 
-            <section class="block">
+            <section class="block" id="set-jobs" hidden>
               <div class="block-head">
                 <div>
                   <h2>失败几次才停</h2>
-                  <p class="muted">只影响之后新来的任务。已经在队列里的，还是原来的次数。</p>
+                  <p class="muted">只影响之后新进入队列的任务。已经在队列里的任务仍使用原来的次数。</p>
                 </div>
                 <button type="button" id="btn-save-attempts" class="btn-fit" disabled>保存</button>
               </div>
@@ -339,31 +399,34 @@
               </div>
             </section>
 
-            <section class="block">
+            <section class="block" id="set-mailboxes" hidden>
               <div class="block-head">
                 <div>
-                  <h2>地址备注</h2>
-                  <p class="muted">你自己的笔记。没有备注不代表那封信未知。</p>
+                  <h2>地址</h2>
+                  <p class="muted">为收件地址填写名称和备注。没有备注并不表示该地址未知。</p>
                 </div>
               </div>
               <form id="mailbox-form" class="inline-row">
                 <input id="mb-domain" placeholder="域名" required autocomplete="off">
                 <input id="mb-localpart" class="field-narrow" placeholder="前缀" required autocomplete="off">
-                <input id="mb-notes" placeholder="备注，可以空" autocomplete="off">
-                <button type="submit" class="btn-fit">记下</button>
+                <input id="mb-name" placeholder="名称，可空" maxlength="40" autocomplete="off">
+                <input id="mb-notes" placeholder="备注，可空" autocomplete="off">
+                <button type="submit" class="btn-fit">保存</button>
               </form>
               <table id="mailboxes-table" class="data-table">
                 <thead>
                   <tr>
                     <th>地址</th>
+                    <th>名字</th>
                     <th>备注</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody id="mailboxes-tbody"></tbody>
               </table>
             </section>
 
-            <section class="block">
+            <section class="block" id="set-machine" hidden>
               <h2>这台机器</h2>
               <p class="muted" id="machine-line">在线</p>
               <details class="machine-trend">

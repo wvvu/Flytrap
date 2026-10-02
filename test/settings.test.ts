@@ -9,9 +9,12 @@ import { migrate } from "../src/db/migrate.js";
 import { enqueueJob } from "../src/db/repos/jobs.js";
 import { insertMessage } from "../src/db/repos/messages.js";
 import {
+  readEffectiveAiPool,
   readRuntimeSettings,
   saveAcceptDomains,
+  saveAiPool,
   saveJobMaxAttempts,
+  saveNameSettings,
   saveNotifySettings,
   SettingsError,
 } from "../src/db/repos/settings.js";
@@ -41,6 +44,82 @@ test("an empty settings table keeps the environment defaults", () => {
     assert.equal(settings.notifyMinConfidence, 0.6);
     assert.deepEqual(settings.acceptDomains, ["example.com"]);
     assert.equal(settings.jobMaxAttempts, 5);
+    assert.equal(settings.panelTitle, "Flytrap");
+    assert.equal(settings.labelNames.phish, "钓鱼");
+    assert.deepEqual(settings.domainNames, {});
+    assert.deepEqual(settings.senderNames, []);
+  } finally {
+    db.close();
+  }
+});
+
+test("names can be renamed, and a bad name is refused", () => {
+  const db = tempDb();
+  try {
+    const saved = saveNameSettings(
+      db,
+      {
+        panelTitle: "  工资箱 ",
+        labelNames: { phish: "诈骗", legit: "正常" },
+        domainNames: { "Example.COM": "工资", "other.test": "" },
+        senderNames: [
+          { address: "Payroll@Example.com", name: "会计" },
+          { address: "payroll@example.com", name: "财务" },
+        ],
+      },
+      7,
+    );
+    assert.equal(saved.panelTitle, "工资箱");
+    assert.equal(saved.labelNames.phish, "诈骗");
+    assert.equal(saved.labelNames.legit, "正常");
+    assert.deepEqual(saved.domainNames, { "example.com": "工资" });
+    assert.deepEqual(saved.senderNames, [{ address: "payroll@example.com", name: "财务" }]);
+    assert.throws(
+      () => saveNameSettings(db, { panelTitle: "ok", labelNames: { nope: "x" }, domainNames: {}, senderNames: [] }, 8),
+      SettingsError,
+    );
+    assert.throws(
+      () => saveNameSettings(db, { panelTitle: "ok", labelNames: {}, domainNames: { "*": "x" }, senderNames: [] }, 8),
+      SettingsError,
+    );
+    assert.throws(() => saveNameSettings(db, { panelTitle: " ", labelNames: {}, domainNames: {}, senderNames: [] }, 9), SettingsError);
+  } finally {
+    db.close();
+  }
+});
+
+test("saved api keys keep their order and the secret is not part of the public tail", () => {
+  const db = tempDb();
+  try {
+    const secret = "sk-live-secret-value-wxyz";
+    const saved = saveAiPool(
+      db,
+      {
+        models: ["gemini-2.5-flash", "gemini-2.0-flash"],
+        keys: [{ id: "env:0" }, { secret }],
+      },
+      [{ id: "env:0", secret: "env-secret-value-abcd" }],
+      11,
+    );
+    assert.deepEqual(saved.models, ["gemini-2.5-flash", "gemini-2.0-flash"]);
+    assert.equal(saved.keys.length, 2);
+    assert.equal(saved.keys[0]?.tail, "abcd");
+    assert.equal(saved.keys[1]?.tail, "wxyz");
+    assert.equal(JSON.stringify(saved).includes(secret), false);
+    assert.equal(JSON.stringify(saved).includes("env-secret-value"), false);
+    const again = saveAiPool(
+      db,
+      { models: ["gemini-2.0-flash"], keys: [{ id: saved.keys[1]!.id }, { id: saved.keys[0]!.id }] },
+      [],
+      12,
+    );
+    assert.deepEqual(again.models, ["gemini-2.0-flash"]);
+    assert.equal(again.keys[0]?.tail, "wxyz");
+    assert.equal(again.keys[1]?.tail, "abcd");
+    const stored = readEffectiveAiPool(db, { models: ["fallback"], keys: [] });
+    assert.equal(stored.keys[0]?.secret, secret);
+    assert.equal(stored.keys[1]?.secret, "env-secret-value-abcd");
+    assert.equal(stored.models[0], "gemini-2.0-flash");
   } finally {
     db.close();
   }
