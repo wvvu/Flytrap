@@ -32,6 +32,11 @@ export const aiResultSchema = z
     signals: z.array(signalSchema).max(30),
     raw: z.record(z.string(), z.unknown()).optional(),
     previous: z.unknown().optional(),
+    manualOverride: z.boolean().optional(),
+    overrideActor: z.string().optional(),
+    overrideAt: z.number().optional(),
+    originalLabel: z.string().nullable().optional(),
+    originalConfidence: z.number().nullable().optional(),
   })
   .strict();
 

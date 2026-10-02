@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { buildUserMessage, readPrompt } from "../src/ai/prompt.js";
 import { createOpenAiClassifier } from "../src/ai/openai-compat.js";
-import { finalizeAiResult, parseModelOutput } from "../src/ai/types.js";
+import { aiResultSchema, finalizeAiResult, parseModelOutput } from "../src/ai/types.js";
 import { applyDeterministicGuardrails } from "../src/worker/job-classify.js";
 import { gzipCodec } from "../src/compress.js";
 import { openDatabase } from "../src/db/index.js";
@@ -43,6 +43,23 @@ test("model output with a missing field, an extra field, or a bad label is rejec
   assert.throws(() => parseModelOutput({ ...valid, label: "phishing" }));
   const parsed = parseModelOutput("```json\n" + JSON.stringify(valid) + "\n```");
   assert.equal(parsed.label, "phish");
+  const finalized = finalizeAiResult({
+    schema: 1,
+    prompt_id: "default",
+    model: "test-model",
+    provider: "fake",
+    at: new Date().toISOString(),
+    ...valid,
+  });
+  const overridden = {
+    ...finalized,
+    manualOverride: true,
+    overrideActor: "admin",
+    overrideAt: Date.now(),
+    originalLabel: "spam",
+    originalConfidence: 0.9,
+  };
+  assert.equal(aiResultSchema.parse(overridden).manualOverride, true);
   const prompt = readPrompt(defaultPromptsDir());
   assert.equal(prompt.includes("unsolicited-admin"), true);
   assert.match(prompt, /A missing note is not a category/);
