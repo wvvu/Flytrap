@@ -863,7 +863,11 @@ function renderSandboxHtml(html) {
   const body = shown ? html : stripRemoteImages(html);
   const imgSrc = shown ? "http: https: data: cid:" : "data: cid:";
   const isDark = document.documentElement.getAttribute("data-theme") !== "light";
-  const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${isDark ? "rgba(255,255,255,0.25) transparent" : "rgba(0,0,0,0.25) transparent"};}::-webkit-scrollbar{width:8px;height:8px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.25)"};border-radius:4px;}::-webkit-scrollbar-thumb:hover{background:${isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)"};}::-webkit-scrollbar-corner{background:transparent;}`;
+  const trackBg = isDark ? "#18181b" : "#f1f5f9";
+  const thumbBg = isDark ? "#52525b" : "#cbd5e1";
+  const thumbHover = isDark ? "#71717a" : "#94a3b8";
+  const thumbActive = isDark ? "#9ca3af" : "#64748b";
+  const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${thumbBg} ${trackBg};}::-webkit-scrollbar{width:10px;height:10px;}::-webkit-scrollbar-track{background:${trackBg};}::-webkit-scrollbar-thumb{background:${thumbBg};border-radius:5px;border:2px solid ${trackBg};}::-webkit-scrollbar-thumb:hover{background:${thumbHover};}::-webkit-scrollbar-thumb:active{background:${thumbActive};}::-webkit-scrollbar-corner,::-webkit-resizer{background:${trackBg};}`;
   const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
   const defaultColor = isDark ? "#e5e5e5" : "#111";
   const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}body{font-family:sans-serif;font-size:14px;line-height:1.6;color:${defaultColor};padding:16px;word-break:break-word;}img{max-width:100%;height:auto;}a{color:#1d4ed8;}</style></head><body>${body}</body></html>`;
