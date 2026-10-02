@@ -88,9 +88,12 @@
   background: #9ca3af;
 }
 
-::-webkit-scrollbar-corner,
-::-webkit-resizer {
+::-webkit-scrollbar-corner {
   background: #18181b;
+}
+
+::-webkit-resizer {
+  background: transparent;
 }
 
 [data-theme="light"] * {
@@ -114,9 +117,12 @@
   background: #64748b;
 }
 
-[data-theme="light"] ::-webkit-scrollbar-corner,
-[data-theme="light"] ::-webkit-resizer {
+[data-theme="light"] ::-webkit-scrollbar-corner {
   background: #f1f5f9;
+}
+
+[data-theme="light"] ::-webkit-resizer {
+  background: transparent;
 }
 
 [hidden] {

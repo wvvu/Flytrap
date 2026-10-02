@@ -867,7 +867,7 @@ function renderSandboxHtml(html) {
   const thumbBg = isDark ? "#52525b" : "#cbd5e1";
   const thumbHover = isDark ? "#71717a" : "#94a3b8";
   const thumbActive = isDark ? "#9ca3af" : "#64748b";
-  const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${thumbBg} ${trackBg};}::-webkit-scrollbar{width:10px;height:10px;}::-webkit-scrollbar-track{background:${trackBg};}::-webkit-scrollbar-thumb{background:${thumbBg};border-radius:5px;border:2px solid ${trackBg};}::-webkit-scrollbar-thumb:hover{background:${thumbHover};}::-webkit-scrollbar-thumb:active{background:${thumbActive};}::-webkit-scrollbar-corner,::-webkit-resizer{background:${trackBg};}`;
+  const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${thumbBg} ${trackBg};}::-webkit-scrollbar{width:10px;height:10px;}::-webkit-scrollbar-track{background:${trackBg};}::-webkit-scrollbar-thumb{background:${thumbBg};border-radius:5px;border:2px solid ${trackBg};}::-webkit-scrollbar-thumb:hover{background:${thumbHover};}::-webkit-scrollbar-thumb:active{background:${thumbActive};}::-webkit-scrollbar-corner{background:${trackBg};}::-webkit-resizer{background:transparent;}`;
   const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
   const defaultColor = isDark ? "#e5e5e5" : "#111";
   const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}body{font-family:sans-serif;font-size:14px;line-height:1.6;color:${defaultColor};padding:16px;word-break:break-word;}img{max-width:100%;height:auto;}a{color:#1d4ed8;}</style></head><body>${body}</body></html>`;
