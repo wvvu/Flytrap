@@ -25,7 +25,8 @@ Flytrap is a small mail inbox you run yourself. It accepts every recipient on yo
 
 - **Keep everything** — SMTP ingest writes the raw EML and the envelope. Any local part on an accepted domain is kept.
 - **AI sorting** — Gemini or OpenAI labels each message `legit`, `spam`, `unsolicited-admin`, `phish`, `malware`, or `gray` (shown as 待看: look at this one).
-- **Read it** — Three-column inbox, sandboxed HTML preview, SPF/DKIM/DMARC, and a manual label when the model is wrong.
+- **Read it** — Three-column inbox, sandboxed HTML preview that never runs scripts, remote images held until you ask, SPF/DKIM/DMARC, and a manual label when the model is wrong.
+- **Name it** — The panel, each category, a receiving domain, a sender, and your own addresses can use the words you want. The stored category ids stay put.
 - **Optional alerts** — Telegram or webhook only for the labels you list. Ordinary mail stays in the inbox.
 - **No extra services** — SQLite and the filesystem. No Postgres, Redis, or Kafka.
 - **One command** — `docker compose up -d`.

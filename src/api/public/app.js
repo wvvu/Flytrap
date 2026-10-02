@@ -30,9 +30,17 @@ let selectedMailId = null;
 let promptBaseline = "";
 let notifyBaseline = "";
 let attemptsBaseline = "";
+let namesBaseline = "";
 let settingsDomains = [];
 let currentMailHtml = "";
 let allowExternalImages = false;
+let labelNames = { ...LABEL_NAMES };
+let panelTitle = "Flytrap";
+let domainNames = {};
+let senderMap = new Map();
+let mailboxNames = new Map();
+let failureCounts = { open: 0, dead: 0, failed: 0, retrying: 0, dismissed: 0, running: 0 };
+let dlqQuery = "";
 let cursor = null;
 let loadingMore = false;
 let currentJobs = [];
@@ -159,6 +167,35 @@ document.querySelector("#mailbox-form")?.addEventListener("submit", (event) => {
   event.preventDefault();
   void saveMailbox();
 });
+document.querySelector("#btn-save-names")?.addEventListener("click", () => void saveNameSettings());
+document.querySelector("#panel-title")?.addEventListener("input", syncNamesSave);
+document.querySelector("#btn-add-sender")?.addEventListener("click", () => addSenderRow());
+document.querySelector("#sender-address")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    addSenderRow();
+  }
+});
+document.querySelector("#sender-name")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    addSenderRow();
+  }
+});
+document.querySelector("#dlq-search")?.addEventListener("submit", (event) => event.preventDefault());
+document.querySelector(".settings-nav")?.addEventListener("click", (event) => {
+  const link = event.target instanceof Element ? event.target.closest("a[href^='#']") : null;
+  if (!link) return;
+  const href = link.getAttribute("href");
+  const target = href ? document.querySelector(href) : null;
+  if (!target) return;
+  event.preventDefault();
+  target.scrollIntoView({ block: "start" });
+});
+document.querySelector("#dlq-q")?.addEventListener("input", () => {
+  dlqQuery = document.querySelector("#dlq-q")?.value.trim().toLowerCase() || "";
+  renderFailureGroups(currentJobs);
+});
 
 document.querySelector("#trash-filters")?.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -190,7 +227,7 @@ detailVerdictSelect?.addEventListener("change", async () => {
     });
     detailVerdictSelect.dataset.label = newLabel;
     if (detailModelVerdict) {
-      const origName = LABEL_NAMES[res.originalLabel] || res.originalLabel || "未分类";
+      const origName = labelName(res.originalLabel);
       const origConf = typeof res.originalConfidence === "number" ? " " + Math.round(res.originalConfidence * 100) + "%" : "";
       detailModelVerdict.textContent = `(模型先看成 ${origName}${origConf}，你改过)`;
     }
@@ -199,10 +236,10 @@ detailVerdictSelect?.addEventListener("change", async () => {
       const tag = listItem.querySelector(".verdict-tag");
       if (tag) {
         tag.dataset.label = newLabel;
-        tag.textContent = (LABEL_NAMES[newLabel] || newLabel) + " (你改过)";
+        tag.textContent = labelName(newLabel) + " (你改过)";
       }
     }
-    noticeEl.textContent = "已改成 " + (LABEL_NAMES[newLabel] || newLabel);
+    noticeEl.textContent = "已改成 " + labelName(newLabel);
     setTimeout(() => {
       if (noticeEl.textContent.startsWith("已改成")) noticeEl.textContent = "";
     }, 3000);
@@ -219,8 +256,8 @@ listEl.addEventListener("scroll", () => {
 
 // DLQ 状态胶囊点击
 document.querySelector("#dlq-pills")?.addEventListener("click", (e) => {
-  const target = e.target;
-  if (!target || !target.matches("button[data-dlq-status]")) return;
+  const target = e.target instanceof Element ? e.target.closest("button[data-dlq-status]") : null;
+  if (!target) return;
   for (const btn of document.querySelectorAll("#dlq-pills button")) btn.classList.remove("active");
   target.classList.add("active");
   const st = target.getAttribute("data-dlq-status") || "open";
@@ -238,12 +275,8 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 });
 
 btnLoadImages?.addEventListener("click", () => {
-  allowExternalImages = true;
+  allowExternalImages = !allowExternalImages;
   renderSandboxHtml(currentMailHtml);
-  if (btnLoadImages) {
-    btnLoadImages.textContent = "图片已显示";
-    btnLoadImages.disabled = true;
-  }
 });
 
 btnReclassify?.addEventListener("click", () => {
@@ -263,6 +296,8 @@ window.addEventListener("keydown", (e) => {
     if (e.key === "j") navigateMail(1);
     else if (e.key === "k") navigateMail(-1);
     else if (e.key === "r") void reloadTrash();
+  } else if (currentView === "dlq" && e.key === "r") {
+    void loadDlqJobs();
   }
 });
 
@@ -274,6 +309,7 @@ async function init() {
   try {
     await request("/v1/me");
     showApp();
+    await loadAppearance();
     await switchNav("inbox");
     void updateDlqBadge();
   } catch {
@@ -326,6 +362,7 @@ async function signIn() {
     document.querySelector("#password").value = "";
     csrfToken = null;
     showApp();
+    await loadAppearance();
     await switchNav("inbox");
     void updateDlqBadge();
   } catch (err) {
@@ -363,9 +400,14 @@ function showApp() {
   appEl.style.display = "grid";
 }
 
+function setViewTitle(view) {
+  document.title = VIEW_TITLES[view] || "收件箱";
+  if (panelTitle !== "Flytrap") document.title = panelTitle + " · " + document.title;
+}
+
 async function switchNav(view) {
   currentView = view;
-  document.title = VIEW_TITLES[view] || "收件箱";
+  setViewTitle(view);
   if (appEl) {
     if (view === "settings" || view === "dlq") appEl.dataset.layout = "page";
     else delete appEl.dataset.layout;
@@ -499,7 +541,9 @@ function createMailListItem(item) {
 
   const from = document.createElement("span");
   from.className = "item-from";
-  from.textContent = item.from || item.envelopeFrom || "没有发件人";
+  const rawFrom = item.from || item.envelopeFrom || "";
+  from.textContent = rawFrom ? formatFrom(rawFrom) : "没有发件人";
+  if (rawFrom) from.title = rawFrom;
 
   const time = document.createElement("span");
   time.className = "item-time";
@@ -524,7 +568,7 @@ function createMailListItem(item) {
   const confText = item.manualOverride
     ? " (你改过)"
     : (typeof item.confidence === "number" ? ` ${Math.round(item.confidence * 100)}%` : "");
-  tag.textContent = (LABEL_NAMES[item.label] || item.label || "未分类") + confText;
+  tag.textContent = labelName(item.label) + confText;
 
   line3.append(snippet, tag);
 
@@ -537,8 +581,13 @@ async function selectMail(id, options = {}) {
   const token = ++mailLoadToken;
   selectedMailId = id;
   allowExternalImages = false;
-  btnLoadImages.textContent = "显示图片";
-  btnLoadImages.disabled = false;
+  if (btnLoadImages) {
+    btnLoadImages.hidden = false;
+    btnLoadImages.disabled = false;
+    btnLoadImages.textContent = "显示图片";
+  }
+  const guard = document.querySelector("#preview-guard");
+  if (guard) guard.textContent = "不执行脚本。外链图片先不加载。";
   if (!options.keepListOnNarrow) setMobilePane("detail");
 
   // 默认折叠威胁指纹与外链
@@ -560,8 +609,15 @@ async function selectMail(id, options = {}) {
     const detail = await request("/v1/messages/" + encodeURIComponent(id));
     if (token !== mailLoadToken) return;
     if (detailSubject) detailSubject.textContent = detail.subject || "(无主题)";
-    if (detailFrom) detailFrom.textContent = detail.from || detail.envelopeFrom || "没有发件人";
-    if (detailTo) detailTo.textContent = Array.isArray(detail.envelopeTo) ? detail.envelopeTo.join(", ") : detail.envelopeTo || "";
+    const rawFrom = detail.from || detail.envelopeFrom || "";
+    if (detailFrom) {
+      detailFrom.textContent = rawFrom ? formatFrom(rawFrom) : "没有发件人";
+      detailFrom.title = rawFrom;
+    }
+    if (detailTo) {
+      detailTo.textContent = formatRecipients(detail.envelopeTo);
+      detailTo.title = Array.isArray(detail.envelopeTo) ? detail.envelopeTo.join(", ") : detail.envelopeTo || "";
+    }
     if (detailTime) detailTime.textContent = formatFullTime(detail.receivedAt);
 
     const isTrashed = Boolean(detail.trashedAt || currentView === "trash");
@@ -578,7 +634,7 @@ async function selectMail(id, options = {}) {
     const confidence = typeof detail.aiResult?.confidence === "number" ? detail.aiResult.confidence : 0;
     if (detailModelVerdict) {
       if (detail.aiResult?.manualOverride) {
-        const origName = LABEL_NAMES[detail.aiResult.originalLabel] || detail.aiResult.originalLabel || "未分类";
+        const origName = labelName(detail.aiResult.originalLabel);
         const origConf = typeof detail.aiResult.originalConfidence === "number" ? ` ${Math.round(detail.aiResult.originalConfidence * 100)}%` : "";
         detailModelVerdict.textContent = `(模型先看成 ${origName}${origConf}，你改过)`;
       } else {
@@ -731,12 +787,50 @@ async function loadRawHeaders(id, token, detail) {
   }
 }
 
+function countRemoteImages(html) {
+  if (!html) return 0;
+  const patterns = [
+    /\s(?:src|poster)\s*=\s*['"]\s*https?:\/\//gi,
+    /\s(?:src|poster)\s*=\s*https?:\/\//gi,
+    /\ssrcset\s*=\s*['"][^'"]*https?:\/\//gi,
+    /url\(\s*['"]?https?:\/\//gi,
+  ];
+  let count = 0;
+  for (const pattern of patterns) {
+    const found = html.match(pattern);
+    if (found) count += found.length;
+  }
+  return count;
+}
+
+function stripRemoteImages(html) {
+  return html
+    .replace(/(\s(?:src|poster)\s*=\s*)(['"])\s*https?:\/\/[^'"]*\2/gi, "$1$2$2")
+    .replace(/(\s(?:src|poster)\s*=\s*)https?:\/\/[^\s>]+/gi, '$1""')
+    .replace(/\ssrcset\s*=\s*(['"])[^'"]*https?:\/\/[^'"]*\1/gi, " srcset=$1$1")
+    .replace(/\ssrcset\s*=\s*[^\s>]*https?:\/\/[^\s>]+/gi, ' srcset=""')
+    .replace(/url\(\s*(['"]?)https?:\/\/[^)'"]*\1\s*\)/gi, "url('')");
+}
+
 function renderSandboxHtml(html) {
-  const csp = allowExternalImages
-    ? "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src * data: cid:; font-src data:;\">"
-    : "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data: cid:; font-src data:;\">";
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>body{font-family:sans-serif;font-size:14px;line-height:1.6;color:#111;padding:16px;word-break:break-word;}img{max-width:100%;height:auto;}</style></head><body>${html}</body></html>`;
+  const remoteCount = countRemoteImages(html);
+  const shown = allowExternalImages && remoteCount > 0;
+  const body = shown ? html : stripRemoteImages(html);
+  const imgSrc = shown ? "http: https: data: cid:" : "data: cid:";
+  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>body{font-family:sans-serif;font-size:14px;line-height:1.6;color:#111;padding:16px;word-break:break-word;}img{max-width:100%;height:auto;}a{color:#1d4ed8;}</style></head><body>${body}</body></html>`;
   mailSandbox.setAttribute("srcdoc", doc);
+  const hint = document.querySelector("#preview-guard");
+  if (hint) {
+    if (remoteCount === 0) hint.textContent = "不执行脚本。这封没有外链图片。";
+    else if (shown) hint.textContent = `不执行脚本。外链图片已显示，共 ${remoteCount} 处。`;
+    else hint.textContent = `不执行脚本。外链图片先不加载，共 ${remoteCount} 处。`;
+  }
+  if (btnLoadImages) {
+    btnLoadImages.hidden = remoteCount === 0;
+    btnLoadImages.disabled = false;
+    btnLoadImages.textContent = shown ? "隐藏图片" : "显示图片";
+  }
 }
 
 function switchTab(tab) {
@@ -889,10 +983,9 @@ async function loadDlqJobs(scope = currentDlqScope) {
   if (failureListEl) failureListEl.replaceChildren();
   if (dlqNoticeEl) dlqNoticeEl.textContent = "正在读取";
   try {
-    const url = jobsUrl(currentDlqScope);
-    const res = await request(url);
+    const [res, summary] = await Promise.all([request(jobsUrl(currentDlqScope)), request("/v1/jobs/summary")]);
     currentJobs = Array.isArray(res.items) ? res.items : [];
-    if (dlqNoticeEl) dlqNoticeEl.textContent = currentJobs.length === 0 ? "没有要处理的任务" : "";
+    paintDlqCounts(summary);
     renderFailureGroups(currentJobs);
   } catch (err) {
     if (dlqNoticeEl) dlqNoticeEl.textContent = explain(err);
@@ -900,24 +993,79 @@ async function loadDlqJobs(scope = currentDlqScope) {
 }
 
 function jobsUrl(scope) {
-  if (scope === "dead") return "/v1/jobs?status=dead";
+  if (scope === "stopped") return "/v1/jobs?scope=stopped";
+  if (scope === "dismissed") return "/v1/jobs?status=dismissed";
   if (scope === "retrying") return "/v1/jobs?scope=retrying";
   return "/v1/jobs?scope=open";
+}
+
+function paintDlqCounts(summary) {
+  failureCounts = {
+    open: summary.open || 0,
+    dead: summary.dead || 0,
+    failed: summary.failed || 0,
+    retrying: summary.retrying || 0,
+    dismissed: summary.dismissed || 0,
+    running: summary.running || 0,
+  };
+  const stopped = failureCounts.dead + failureCounts.failed;
+  setPillLabel("open", "要处理", failureCounts.open);
+  setPillLabel("stopped", "已放弃", stopped);
+  setPillLabel("retrying", "还会再试", failureCounts.retrying);
+  setPillLabel("dismissed", "已放过", failureCounts.dismissed);
+  const summaryEl = document.querySelector("#dlq-summary");
+  if (summaryEl) {
+    const waiting = failureCounts.retrying ? `还有 ${failureCounts.retrying} 步会自己再试。` : "";
+    summaryEl.textContent = stopped
+      ? `停住 ${stopped} 步。再试会重新排队，放过则先不动这步。${waiting}`
+      : `没有停住的步骤。${waiting}`;
+  }
+  if (retryAllBtn) retryAllBtn.disabled = stopped === 0;
+}
+
+function setPillLabel(status, label, count) {
+  const button = document.querySelector(`#dlq-pills button[data-dlq-status="${status}"]`);
+  if (!button) return;
+  const active = button.classList.contains("active");
+  button.textContent = count > 0 ? `${label} ${count}` : label;
+  if (active) button.classList.add("active");
 }
 
 function renderFailureGroups(jobs) {
   if (!failureListEl) return;
   failureListEl.replaceChildren();
+  const needle = dlqQuery;
   const groups = new Map();
   for (const job of jobs) {
+    if (needle && !jobMatches(job, needle)) continue;
     const key = job.messageId || job.id;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(job);
+  }
+  if (dlqNoticeEl) {
+    if (jobs.length === 0) dlqNoticeEl.textContent = emptyDlqCopy(currentDlqScope);
+    else if (groups.size === 0) dlqNoticeEl.textContent = "没有符合搜索的";
+    else dlqNoticeEl.textContent = "";
   }
   for (const group of groups.values()) {
     group.sort((a, b) => stepRank(a.type) - stepRank(b.type));
     failureListEl.append(createFailureLetter(group));
   }
+}
+
+function jobMatches(job, needle) {
+  const haystack = [job.messageSubject, job.messageFrom, job.messageTo, job.lastError, STEP_NAMES[job.type] || job.type]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(needle);
+}
+
+function emptyDlqCopy(scope) {
+  if (scope === "stopped") return "没有已经放弃的步骤";
+  if (scope === "retrying") return "没有还在等的步骤";
+  if (scope === "dismissed") return "没有放过的步骤";
+  return "没有要处理的任务";
 }
 
 function stepRank(type) {
@@ -930,17 +1078,40 @@ function createFailureLetter(jobs) {
   const article = document.createElement("article");
   article.className = "letter";
 
-  const subject = document.createElement("p");
-  subject.className = "letter-subject";
-  subject.textContent = first.messageSubject || "（无主题）";
+  const head = document.createElement("div");
+  head.className = "letter-head";
+  const subjectText = first.messageSubject || "（无主题）";
+  if (first.messageId) {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "letter-open";
+    open.textContent = subjectText;
+    open.title = "打开这封信";
+    open.addEventListener("click", () => void openFailedMail(first.messageId));
+    head.append(open);
+  } else {
+    const subject = document.createElement("p");
+    subject.className = "letter-subject";
+    subject.textContent = subjectText;
+    head.append(subject);
+  }
+  const stopped = jobs.filter((job) => job.status === "dead" || job.status === "failed");
+  if (stopped.length > 1 && first.messageId) {
+    const retryLetter = document.createElement("button");
+    retryLetter.type = "button";
+    retryLetter.className = "btn-fit";
+    retryLetter.textContent = "这封再试";
+    retryLetter.addEventListener("click", () => void retryMessage(first.messageId));
+    head.append(retryLetter);
+  }
 
   const who = document.createElement("p");
   who.className = "muted";
-  const from = first.messageFrom || "";
-  const to = first.messageTo || "";
+  const from = first.messageFrom ? formatFrom(first.messageFrom) : "";
+  const to = first.messageTo ? formatRecipients(first.messageTo) : "";
   who.textContent = from || to ? [from || "发件人还没解析出来", to].filter(Boolean).join(" → ") : "这封信的地址还没解析出来";
 
-  article.append(subject, who);
+  article.append(head, who);
   for (const job of jobs) article.append(createFailureStep(job));
   return article;
 }
@@ -961,26 +1132,56 @@ function createFailureStep(job) {
   state.textContent = stepState(job);
   copy.append(name, error, state);
 
+  const actions = document.createElement("div");
+  actions.className = "step-actions";
   const stopped = job.status === "dead" || job.status === "failed";
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = stopped ? "btn-fit" : "btn-fit ghost";
-  button.textContent = stopped ? "再试一次" : "等它自己试";
-  button.disabled = !stopped;
-  if (stopped) button.addEventListener("click", () => void retrySingleJob(job.id));
+  const dismissed = job.status === "dismissed";
+  if (stopped || dismissed) {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn-fit";
+    retry.textContent = "再试一次";
+    retry.addEventListener("click", () => void retrySingleJob(job.id));
+    actions.append(retry);
+  }
+  if (stopped) {
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "btn-fit ghost";
+    dismiss.textContent = "放过";
+    dismiss.addEventListener("click", () => void dismissJob(job.id));
+    actions.append(dismiss);
+  }
+  if (job.lastError) {
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "btn-fit ghost";
+    copyBtn.textContent = "复制错误";
+    copyBtn.addEventListener("click", () => void copyText(job.lastError));
+    actions.append(copyBtn);
+  }
 
-  row.append(copy, button);
+  row.append(copy, actions);
   return row;
 }
 
 function stepState(job) {
+  const when = job.updatedAt ? ` · ${formatFullTime(job.updatedAt)}` : "";
+  if (job.status === "dismissed") return `已放过 · 试了 ${job.attempts}/${job.maxAttempts} 次${when}`;
   if (job.status === "dead" || job.status === "failed") {
-    return `已放弃 · 试了 ${job.attempts}/${job.maxAttempts} 次`;
+    return `已放弃 · 试了 ${job.attempts}/${job.maxAttempts} 次${when}`;
   }
+  if (job.status === "running") return "正在跑";
   if (job.status === "queued" && job.runAfter) {
     return `还会再试 · 下次 ${formatFullTime(job.runAfter)}`;
   }
   return "还会再试";
+}
+
+async function openFailedMail(id) {
+  selectedMailId = id;
+  await switchNav("inbox");
+  await selectMail(id);
 }
 
 async function retrySingleJob(id) {
@@ -994,8 +1195,40 @@ async function retrySingleJob(id) {
   }
 }
 
+async function dismissJob(id) {
+  if (!(await askConfirm("这步先放过。信还在，之后还能再试。"))) return;
+  try {
+    await request("/v1/jobs/" + encodeURIComponent(id) + "/dismiss", { method: "POST", body: {} });
+    toast("已放过");
+    await loadDlqJobs(currentDlqScope);
+    void updateDlqBadge();
+  } catch (err) {
+    toast("放过失败: " + explain(err));
+  }
+}
+
+async function retryMessage(messageId) {
+  try {
+    const res = await request("/v1/jobs/retry-message", { method: "POST", body: { messageId } });
+    toast(`已重新排队 ${res.count || 0} 步`);
+    await loadDlqJobs(currentDlqScope);
+    void updateDlqBadge();
+  } catch (err) {
+    toast("这封重试失败: " + explain(err));
+  }
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("已复制");
+  } catch {
+    toast("复制失败");
+  }
+}
+
 async function retryAllDead() {
-  if (!(await askConfirm("把已经停掉的任务全部再跑一遍？"))) return;
+  if (!(await askConfirm("把已经停住的任务全部再跑一遍？放过的不会动。"))) return;
   try {
     const res = await request("/v1/jobs/retry-all", { method: "POST", body: {} });
     toast(`已重新排队 ${res.count || 0} 个`);
@@ -1008,14 +1241,15 @@ async function retryAllDead() {
 
 async function updateDlqBadge() {
   try {
-    const res = await request("/v1/jobs/count?status=dead");
-    const count = typeof res.count === "number" ? res.count : 0;
+    const res = await request("/v1/jobs/summary");
+    const count = (res.dead || 0) + (res.failed || 0);
     if (count > 0) {
       badgeDlq.hidden = false;
       badgeDlq.textContent = String(count);
     } else {
       badgeDlq.hidden = true;
     }
+    if (currentView === "dlq") paintDlqCounts(res);
   } catch {
     // ignore
   }
@@ -1026,6 +1260,8 @@ async function updateDlqBadge() {
 async function loadSettingsPage() {
   try {
     const settings = await request("/v1/settings");
+    applyAppearance(settings);
+    renderNameEditors(settings);
     renderNotify(settings);
     renderDomains(settings.acceptDomains || []);
     const attempts = document.querySelector("#job-max-attempts");
@@ -1081,7 +1317,7 @@ function renderNotify(settings) {
     input.checked = selected.has(label);
     input.addEventListener("change", syncNotifySave);
     const text = document.createElement("span");
-    text.textContent = LABEL_NAMES[label] || label;
+    text.textContent = labelName(label);
     wrap.append(input, text);
     host.append(wrap);
   }
@@ -1169,6 +1405,8 @@ async function addDomain() {
     });
     if (input) input.value = "";
     renderDomains(res.acceptDomains || []);
+    renderDomainNameRows(res.acceptDomains || [], collectDomainNames());
+    syncNamesSave();
     toast("域名已加上");
   } catch (err) {
     toast("加上域名失败: " + explain(err));
@@ -1187,6 +1425,10 @@ async function removeDomain(domain) {
       body: { domains: settingsDomains.filter((item) => item !== domain) },
     });
     renderDomains(res.acceptDomains || []);
+    const names = collectDomainNames();
+    delete names[domain];
+    renderDomainNameRows(res.acceptDomains || [], names);
+    syncNamesSave();
     toast("已去掉 " + domain);
   } catch (err) {
     toast("去掉域名失败: " + explain(err));
@@ -1217,13 +1459,23 @@ async function loadMailboxesView() {
     const tbody = document.querySelector("#mailboxes-tbody");
     if (!tbody) return;
     tbody.replaceChildren();
+    rememberMailboxes(items);
     for (const item of items) {
       const tr = document.createElement("tr");
       const tdAddr = document.createElement("td");
       tdAddr.textContent = `${item.localpart}@${item.domain}`;
+      const tdName = document.createElement("td");
+      tdName.textContent = item.displayName || "—";
       const tdNotes = document.createElement("td");
       tdNotes.textContent = item.notes || "没写备注";
-      tr.append(tdAddr, tdNotes);
+      const tdEdit = document.createElement("td");
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "btn-fit ghost";
+      edit.textContent = "改";
+      edit.addEventListener("click", () => fillMailboxForm(item));
+      tdEdit.append(edit);
+      tr.append(tdAddr, tdName, tdNotes, tdEdit);
       tbody.append(tr);
     }
   } catch (err) {
@@ -1259,10 +1511,10 @@ function renderTrend(days) {
     bar.className = "trend-bar";
     const total = day.total || 0;
     bar.style.height = Math.max(2, Math.round((total / max) * 100)) + "%";
-    const labelName = (key) => LABEL_NAMES[key] || key;
+    const labelNameOf = (key) => labelName(key);
     const parts = Object.entries(day.labels || {})
       .filter(([, n]) => n > 0)
-      .map(([key, n]) => `${labelName(key)} ${n}`);
+      .map(([key, n]) => `${labelNameOf(key)} ${n}`);
     bar.title = `${day.day} 共 ${total} 封` + (parts.length ? " · " + parts.join("，") : "");
     const caption = document.createElement("span");
     caption.className = "trend-label";
@@ -1287,6 +1539,18 @@ async function saveCurrentPrompt() {
   }
 }
 
+function fillMailboxForm(item) {
+  const domain = document.querySelector("#mb-domain");
+  const localpart = document.querySelector("#mb-localpart");
+  const name = document.querySelector("#mb-name");
+  const notes = document.querySelector("#mb-notes");
+  if (domain) domain.value = item.domain || "";
+  if (localpart) localpart.value = item.localpart || "";
+  if (name) name.value = item.displayName || "";
+  if (notes) notes.value = item.notes || "";
+  domain?.focus();
+}
+
 async function saveMailbox() {
   try {
     await request("/v1/mailbox-history", {
@@ -1295,13 +1559,284 @@ async function saveMailbox() {
         domain: document.querySelector("#mb-domain").value,
         localpart: document.querySelector("#mb-localpart").value,
         notes: document.querySelector("#mb-notes").value,
+        displayName: document.querySelector("#mb-name")?.value || "",
       },
     });
-    toast("备注已保存");
+    toast("地址已记下");
+    const form = document.querySelector("#mailbox-form");
+    if (form) form.reset();
     await loadMailboxesView();
   } catch (err) {
-    toast("保存备注失败: " + explain(err));
+    toast("保存地址失败: " + explain(err));
   }
+}
+
+async function loadAppearance() {
+  try {
+    const settings = await request("/v1/settings");
+    applyAppearance(settings);
+    const history = await request("/v1/mailbox-history");
+    rememberMailboxes(history.items || []);
+  } catch {
+    // Built-in names still work if this read fails.
+  }
+}
+
+function applyAppearance(settings) {
+  panelTitle = (settings && settings.panelTitle) || "Flytrap";
+  labelNames = { ...LABEL_NAMES, ...(settings && settings.labelNames ? settings.labelNames : {}) };
+  domainNames = (settings && settings.domainNames) || {};
+  senderMap = new Map(
+    ((settings && settings.senderNames) || [])
+      .filter((item) => item && item.address)
+      .map((item) => [String(item.address).toLowerCase(), item.name]),
+  );
+  const mark = document.querySelector("#rail-mark");
+  if (mark) mark.title = panelTitle;
+  const eyebrow = document.querySelector("#panel-name");
+  if (eyebrow) {
+    const custom = panelTitle !== "Flytrap";
+    eyebrow.hidden = !custom;
+    eyebrow.textContent = custom ? panelTitle : "";
+  }
+  for (const select of [filterSelect, detailVerdictSelect]) {
+    if (!select) continue;
+    for (const option of select.options) {
+      if (!option.value) continue;
+      option.textContent = labelName(option.value);
+    }
+  }
+  if (currentView && !appEl.hidden) setViewTitle(currentView);
+}
+
+function rememberMailboxes(items) {
+  mailboxNames = new Map();
+  for (const item of items) {
+    if (!item || !item.displayName) continue;
+    mailboxNames.set(`${item.localpart}@${item.domain}`.toLowerCase(), item.displayName);
+  }
+}
+
+function labelName(id) {
+  if (!id) return "未分类";
+  return labelNames[id] || LABEL_NAMES[id] || id;
+}
+
+function renderNameEditors(settings) {
+  const title = document.querySelector("#panel-title");
+  if (title) title.value = settings.panelTitle || "Flytrap";
+  const labels = document.querySelector("#label-names");
+  if (labels) {
+    labels.replaceChildren();
+    for (const id of LABELS) {
+      labels.append(nameRow(id, labelName(id), "label"));
+    }
+  }
+  renderDomainNameRows(settings.acceptDomains || [], settings.domainNames || {});
+  renderSenderRows(settings.senderNames || []);
+  namesBaseline = JSON.stringify(collectNames());
+  syncNamesSave();
+}
+
+function renderDomainNameRows(domains, names) {
+  const host = document.querySelector("#domain-names");
+  if (!host) return;
+  host.replaceChildren();
+  const list = Array.isArray(domains) ? domains : [];
+  if (list.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "先在下面加上收信域名。";
+    host.append(empty);
+    return;
+  }
+  for (const domain of list) {
+    host.append(nameRow(domain, (names && names[domain]) || "", "domain"));
+  }
+}
+
+function renderSenderRows(senders) {
+  const host = document.querySelector("#sender-names");
+  if (!host) return;
+  host.replaceChildren();
+  for (const item of senders) host.append(senderRow(item.address, item.name));
+}
+
+function nameRow(key, value, kind) {
+  const row = document.createElement("label");
+  row.className = "name-row";
+  const caption = document.createElement("span");
+  caption.className = "name-key";
+  caption.textContent = key;
+  caption.title = key;
+  const input = document.createElement("input");
+  input.value = value || "";
+  input.maxLength = kind === "label" ? 16 : 24;
+  input.autocomplete = "off";
+  input.dataset.nameKey = key;
+  input.dataset.nameKind = kind;
+  input.placeholder = kind === "label" ? LABEL_NAMES[key] || "" : "短名，可以空";
+  input.addEventListener("input", syncNamesSave);
+  row.append(caption, input);
+  return row;
+}
+
+function senderRow(address, name) {
+  const row = document.createElement("div");
+  row.className = "name-row with-action";
+  const addressInput = document.createElement("input");
+  addressInput.value = address;
+  addressInput.readOnly = true;
+  addressInput.dataset.senderAddress = address;
+  const nameInput = document.createElement("input");
+  nameInput.value = name || "";
+  nameInput.maxLength = 40;
+  nameInput.dataset.senderName = "1";
+  nameInput.placeholder = "怎么叫";
+  nameInput.addEventListener("input", syncNamesSave);
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "btn-fit ghost";
+  remove.textContent = "去掉";
+  remove.addEventListener("click", () => {
+    row.remove();
+    syncNamesSave();
+  });
+  row.append(addressInput, nameInput, remove);
+  return row;
+}
+
+function addSenderRow() {
+  const addressInput = document.querySelector("#sender-address");
+  const nameInput = document.querySelector("#sender-name");
+  const address = normalizeAddress(addressInput ? addressInput.value : "");
+  const name = nameInput ? nameInput.value.trim() : "";
+  if (!address) {
+    toast("发件地址看起来不对");
+    return;
+  }
+  if (!name) {
+    toast("写上怎么叫");
+    return;
+  }
+  const existing = document.querySelector(`#sender-names input[data-sender-address="${cssEscape(address)}"]`);
+  if (existing) {
+    const row = existing.closest(".name-row");
+    const field = row ? row.querySelector("input[data-sender-name]") : null;
+    if (field) field.value = name;
+  } else {
+    document.querySelector("#sender-names")?.append(senderRow(address, name));
+  }
+  if (addressInput) addressInput.value = "";
+  if (nameInput) nameInput.value = "";
+  syncNamesSave();
+}
+
+function collectNames() {
+  const labelNamesOut = {};
+  document.querySelectorAll('#label-names input[data-name-kind="label"]').forEach((input) => {
+    labelNamesOut[input.dataset.nameKey] = input.value.trim();
+  });
+  const senderNames = [];
+  document.querySelectorAll("#sender-names .name-row").forEach((row) => {
+    const address = row.querySelector("input[data-sender-address]")?.value.trim() || "";
+    const name = row.querySelector("input[data-sender-name]")?.value.trim() || "";
+    if (address && name) senderNames.push({ address, name });
+  });
+  return {
+    panelTitle: document.querySelector("#panel-title")?.value.trim() || "",
+    labelNames: labelNamesOut,
+    domainNames: collectDomainNames(),
+    senderNames,
+  };
+}
+
+function collectDomainNames() {
+  const domainNamesOut = {};
+  document.querySelectorAll('#domain-names input[data-name-kind="domain"]').forEach((input) => {
+    domainNamesOut[input.dataset.nameKey] = input.value.trim();
+  });
+  return domainNamesOut;
+}
+
+function syncNamesSave() {
+  const button = document.querySelector("#btn-save-names");
+  if (!button) return;
+  const draft = collectNames();
+  button.disabled = !draft.panelTitle || JSON.stringify(draft) === namesBaseline;
+}
+
+async function saveNameSettings() {
+  const draft = collectNames();
+  if (!draft.panelTitle) {
+    toast("面板名字不能空");
+    return;
+  }
+  try {
+    const saved = await request("/v1/settings/names", { method: "PUT", body: draft });
+    applyAppearance(saved);
+    renderNameEditors({
+      panelTitle: saved.panelTitle,
+      labelNames: saved.labelNames,
+      domainNames: saved.domainNames,
+      senderNames: saved.senderNames,
+      acceptDomains: settingsDomains,
+    });
+    const notifyHost = document.querySelector("#notify-labels");
+    if (notifyHost) {
+      notifyHost.querySelectorAll("label.chk").forEach((wrap) => {
+        const input = wrap.querySelector("input");
+        const text = wrap.querySelector("span");
+        if (input && text) text.textContent = labelName(input.value);
+      });
+    }
+    toast("名字已保存");
+  } catch (err) {
+    toast("保存名字失败: " + explain(err));
+  }
+}
+
+function extractEmail(raw) {
+  if (!raw) return "";
+  const text = String(raw).trim().toLowerCase();
+  const angled = text.match(/<([^>]+)>/);
+  const candidate = (angled ? angled[1] : text).trim();
+  return candidate.includes("@") ? candidate : "";
+}
+
+function formatFrom(raw) {
+  const email = extractEmail(raw);
+  const named = email ? senderMap.get(email) : "";
+  if (named && email) return `${named} · ${email}`;
+  return raw || "没有发件人";
+}
+
+function formatRecipients(value) {
+  const list = Array.isArray(value)
+    ? value.filter((item) => typeof item === "string")
+    : String(value || "").split(",").map((part) => part.trim()).filter(Boolean);
+  if (list.length === 0) return "";
+  return list.map(formatRecipient).join(", ");
+}
+
+function formatRecipient(raw) {
+  const email = extractEmail(raw);
+  if (!email) return raw;
+  const named = mailboxNames.get(email);
+  if (named) return `${named} · ${email}`;
+  const domain = email.split("@")[1];
+  if (domain && domainNames[domain]) return `${email}（${domainNames[domain]}）`;
+  return raw;
+}
+
+function normalizeAddress(raw) {
+  const text = String(raw || "").trim().toLowerCase();
+  if (!/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[a-z0-9.-]+\.[a-z0-9-]{2,}$/.test(text)) return "";
+  return text;
+}
+
+function cssEscape(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 // ==================== 通用网络与工具函数 ====================

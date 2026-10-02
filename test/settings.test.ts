@@ -12,6 +12,7 @@ import {
   readRuntimeSettings,
   saveAcceptDomains,
   saveJobMaxAttempts,
+  saveNameSettings,
   saveNotifySettings,
   SettingsError,
 } from "../src/db/repos/settings.js";
@@ -41,6 +42,45 @@ test("an empty settings table keeps the environment defaults", () => {
     assert.equal(settings.notifyMinConfidence, 0.6);
     assert.deepEqual(settings.acceptDomains, ["example.com"]);
     assert.equal(settings.jobMaxAttempts, 5);
+    assert.equal(settings.panelTitle, "Flytrap");
+    assert.equal(settings.labelNames.phish, "钓鱼");
+    assert.deepEqual(settings.domainNames, {});
+    assert.deepEqual(settings.senderNames, []);
+  } finally {
+    db.close();
+  }
+});
+
+test("names can be renamed, and a bad name is refused", () => {
+  const db = tempDb();
+  try {
+    const saved = saveNameSettings(
+      db,
+      {
+        panelTitle: "  工资箱 ",
+        labelNames: { phish: "诈骗", legit: "正常" },
+        domainNames: { "Example.COM": "工资", "other.test": "" },
+        senderNames: [
+          { address: "Payroll@Example.com", name: "会计" },
+          { address: "payroll@example.com", name: "财务" },
+        ],
+      },
+      7,
+    );
+    assert.equal(saved.panelTitle, "工资箱");
+    assert.equal(saved.labelNames.phish, "诈骗");
+    assert.equal(saved.labelNames.legit, "正常");
+    assert.deepEqual(saved.domainNames, { "example.com": "工资" });
+    assert.deepEqual(saved.senderNames, [{ address: "payroll@example.com", name: "财务" }]);
+    assert.throws(
+      () => saveNameSettings(db, { panelTitle: "ok", labelNames: { nope: "x" }, domainNames: {}, senderNames: [] }, 8),
+      SettingsError,
+    );
+    assert.throws(
+      () => saveNameSettings(db, { panelTitle: "ok", labelNames: {}, domainNames: { "*": "x" }, senderNames: [] }, 8),
+      SettingsError,
+    );
+    assert.throws(() => saveNameSettings(db, { panelTitle: " ", labelNames: {}, domainNames: {}, senderNames: [] }, 9), SettingsError);
   } finally {
     db.close();
   }

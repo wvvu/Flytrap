@@ -48,7 +48,7 @@
       <!-- 第一列: 全局主功能轨 (Icon / Global Rail) -->
       <nav class="rail" aria-label="全局导航">
         <div class="rail-top">
-          <div class="logo-mark" title="Flytrap"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></div>
+          <div class="logo-mark" id="rail-mark" title="Flytrap"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></div>
           <button type="button" class="rail-btn active" id="nav-inbox" title="收件箱">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-inbox"></use></svg></span>
             <span class="label">收件箱</span>
@@ -80,6 +80,7 @@
 
       <!-- 第二列: 分流与列表检索 (Contextual Stream) -->
       <aside class="stream">
+        <p id="panel-name" class="stream-eyebrow" hidden></p>
         <!-- 收件箱模式的顶部过滤栏 -->
         <div id="stream-inbox-header" class="stream-header">
           <div class="stream-title-row">
@@ -167,11 +168,6 @@
                   </div>
                 </div>
               </div>
-              <!-- Infomaniak 风格安全提示栏 -->
-              <div id="security-banner" class="security-banner">
-                <span class="sec-text">预览不执行脚本，外链图片先不加载。</span>
-                <button type="button" id="btn-load-images" class="btn-sec-action">显示图片</button>
-              </div>
             </header>
 
             <!-- 详情 Tab 切换栏与平齐操作区 -->
@@ -209,7 +205,8 @@
               <section class="inlined-preview-section">
                 <div class="section-subhead">
                   <span class="subhead-title">正文</span>
-                  <span class="subhead-hint">不执行脚本，外链图片先不加载</span>
+                  <p class="preview-guard" id="preview-guard">不执行脚本。外链图片先不加载。</p>
+                  <button type="button" id="btn-load-images" class="btn-sec-action">显示图片</button>
                 </div>
                 <div class="html-container inlined-sandbox-wrap">
                   <iframe id="mail-sandbox" sandbox="" referrerpolicy="no-referrer" title="邮件正文预览"></iframe>
@@ -261,18 +258,22 @@
             <div class="block-head">
               <div>
                 <h1 class="page-title">处理失败</h1>
-                <p class="muted">按信排。每一行是停住的那一步。</p>
+                <p class="muted" id="dlq-summary">按信排。停住的那一步，再试或者放过。</p>
               </div>
               <div class="page-tools">
-                <button type="button" id="btn-retry-all" class="btn-fit">停掉的全部再试</button>
+                <button type="button" id="btn-retry-all" class="btn-fit">停住的全部再试</button>
                 <button type="button" id="btn-dlq-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
               </div>
             </div>
             <div class="pills-scroll" id="dlq-pills">
               <button type="button" class="pill active" data-dlq-status="open">要处理</button>
-              <button type="button" class="pill" data-dlq-status="dead">已放弃</button>
+              <button type="button" class="pill" data-dlq-status="stopped">已放弃</button>
               <button type="button" class="pill" data-dlq-status="retrying">还会再试</button>
+              <button type="button" class="pill" data-dlq-status="dismissed">已放过</button>
             </div>
+            <form id="dlq-search" class="search-box">
+              <input id="dlq-q" type="search" maxlength="200" placeholder="搜主题、地址或错误" autocomplete="off">
+            </form>
             <p id="dlq-notice" class="muted" role="status"></p>
             <div id="failure-list" class="letter-list"></div>
           </div>
@@ -282,8 +283,44 @@
           <div class="page-scroll">
             <h1 class="page-title">设置</h1>
             <p class="page-lead">每一块自己存。字没改的时候，保存是灰的。</p>
+            <nav class="settings-nav" aria-label="设置分区">
+              <a href="#set-names">名字</a>
+              <a href="#set-domains">收信</a>
+              <a href="#set-mailboxes">地址</a>
+              <a href="#set-notify">提醒</a>
+              <a href="#set-prompt">分拣</a>
+              <a href="#set-jobs">失败</a>
+              <a href="#set-machine">概况</a>
+            </nav>
 
-            <section class="block">
+            <section class="block" id="set-names">
+              <div class="block-head">
+                <div>
+                  <h2>名字</h2>
+                  <p class="muted">只改你看见的叫法。分类的代号不变，模型和提醒还是认原来的。</p>
+                </div>
+                <button type="button" id="btn-save-names" class="btn-fit" disabled>保存</button>
+              </div>
+              <label class="name-row">
+                <span class="name-key">面板</span>
+                <input id="panel-title" maxlength="40" autocomplete="off" placeholder="Flytrap">
+              </label>
+              <h3 class="field-title">分类</h3>
+              <div id="label-names" class="name-grid"></div>
+              <h3 class="field-title">收信域名的短名</h3>
+              <p class="muted">收件地址后面会带上这个短名。域名本身在下面「收信域名」里加减。</p>
+              <div id="domain-names" class="name-grid"></div>
+              <h3 class="field-title">发件人</h3>
+              <p class="muted">看到这个地址时，用你写的名字。</p>
+              <div id="sender-names" class="name-list"></div>
+              <div class="inline-row">
+                <input id="sender-address" placeholder="发件地址" autocomplete="off" maxlength="254">
+                <input id="sender-name" placeholder="怎么叫" maxlength="40" autocomplete="off">
+                <button type="button" id="btn-add-sender" class="btn-fit">加上</button>
+              </div>
+            </section>
+
+            <section class="block" id="set-prompt">
               <div class="block-head">
                 <div>
                   <h2>分拣</h2>
@@ -295,7 +332,7 @@
               <p class="muted">保存后，新来的信按这份分。已经分过的，打开那封再点「重分类」。</p>
             </section>
 
-            <section class="block">
+            <section class="block" id="set-notify">
               <div class="block-head">
                 <div>
                   <h2>提醒</h2>
@@ -311,7 +348,7 @@
               </div>
             </section>
 
-            <section class="block">
+            <section class="block" id="set-domains">
               <div class="block-head">
                 <div>
                   <h2>收信域名</h2>
@@ -325,7 +362,7 @@
               </div>
             </section>
 
-            <section class="block">
+            <section class="block" id="set-jobs">
               <div class="block-head">
                 <div>
                   <h2>失败几次才停</h2>
@@ -339,16 +376,17 @@
               </div>
             </section>
 
-            <section class="block">
+            <section class="block" id="set-mailboxes">
               <div class="block-head">
                 <div>
-                  <h2>地址备注</h2>
-                  <p class="muted">你自己的笔记。没有备注不代表那封信未知。</p>
+                  <h2>地址</h2>
+                  <p class="muted">给你自己的收件地址起名字，顺便写备注。没有备注不代表那封信未知。</p>
                 </div>
               </div>
               <form id="mailbox-form" class="inline-row">
                 <input id="mb-domain" placeholder="域名" required autocomplete="off">
                 <input id="mb-localpart" class="field-narrow" placeholder="前缀" required autocomplete="off">
+                <input id="mb-name" placeholder="名字，可以空" maxlength="40" autocomplete="off">
                 <input id="mb-notes" placeholder="备注，可以空" autocomplete="off">
                 <button type="submit" class="btn-fit">记下</button>
               </form>
@@ -356,14 +394,16 @@
                 <thead>
                   <tr>
                     <th>地址</th>
+                    <th>名字</th>
                     <th>备注</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody id="mailboxes-tbody"></tbody>
               </table>
             </section>
 
-            <section class="block">
+            <section class="block" id="set-machine">
               <h2>这台机器</h2>
               <p class="muted" id="machine-line">在线</p>
               <details class="machine-trend">

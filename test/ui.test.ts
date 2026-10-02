@@ -62,6 +62,17 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /<title>登录<\/title>/);
     assert.match(page.body, /失败几次才停/);
     assert.match(page.body, /收信域名/);
+    assert.equal(page.body.includes("security-banner"), false);
+    assert.equal(page.body.includes("allow-scripts"), false);
+    const guardAt = page.body.indexOf('id="preview-guard"');
+    const imageAt = page.body.indexOf('id="btn-load-images"');
+    assert.ok(guardAt > 0 && imageAt > guardAt);
+    assert.match(page.body, /不执行脚本/);
+    assert.match(page.body, /外链图片先不加载/);
+    assert.match(page.body, /id="set-names"/);
+    assert.match(page.body, /已放过/);
+    assert.match(script.body, /stripRemoteImages/);
+    assert.match(script.body, /隐藏图片/);
     assert.match(page.body, /class="btn-fit"/);
     assert.match(script.body, /document\.title = "登录"/);
     assert.match(script.body, /document\.title = VIEW_TITLES\[view\]/);

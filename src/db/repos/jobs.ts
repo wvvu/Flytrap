@@ -2,7 +2,7 @@ import type { Db } from "../index.js";
 import { readJobMaxAttempts } from "./settings.js";
 
 export type JobType = "auth" | "parse" | "classify" | "notify" | "rebuild";
-export type JobStatus = "queued" | "running" | "done" | "failed" | "dead";
+export type JobStatus = "queued" | "running" | "done" | "failed" | "dead" | "dismissed";
 
 export interface JobRow {
   id: string;
@@ -189,9 +189,18 @@ export function retryAllDeadJobs(db: Db, now: number): number {
 
 export interface ListJobsOptions {
   status?: string | null;
-  /** open: gave up, or queued again after a failure. retrying: queued with attempts already spent. */
-  scope?: "open" | "retrying" | null;
+  /** open: gave up, or queued again after a failure. stopped: gave up. retrying: queued with attempts already spent. */
+  scope?: "open" | "stopped" | "retrying" | null;
   limit?: number;
+}
+
+export interface FailureSummary {
+  dead: number;
+  failed: number;
+  retrying: number;
+  dismissed: number;
+  running: number;
+  open: number;
 }
 
 export interface JobDetailRow extends JobRow {
@@ -203,6 +212,62 @@ export interface JobDetailRow extends JobRow {
 export function countJobsByStatus(db: Db, status: JobStatus): number {
   const row = db.prepare("SELECT COUNT(*) AS c FROM jobs WHERE status = ?").get(status) as { c: number };
   return row.c;
+}
+
+export function failureSummary(db: Db): FailureSummary {
+  const row = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END), 0) AS dead,
+         COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+         COALESCE(SUM(CASE WHEN status = 'queued' AND attempts > 0 THEN 1 ELSE 0 END), 0) AS retrying,
+         COALESCE(SUM(CASE WHEN status = 'dismissed' THEN 1 ELSE 0 END), 0) AS dismissed,
+         COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running
+       FROM jobs`,
+    )
+    .get() as { dead: number; failed: number; retrying: number; dismissed: number; running: number };
+  return {
+    dead: row.dead,
+    failed: row.failed,
+    retrying: row.retrying,
+    dismissed: row.dismissed,
+    running: row.running,
+    open: row.dead + row.failed + row.retrying,
+  };
+}
+
+/** Leave a stopped step alone. The letter stays. A later retry can pick the step up again. */
+export function dismissJob(db: Db, id: string, now: number): boolean {
+  const result = db
+    .prepare(
+      `UPDATE jobs
+       SET status = 'dismissed', locked_at = NULL, locked_by = NULL, updated_at = ?
+       WHERE id = ? AND status IN ('dead', 'failed')`,
+    )
+    .run(now, id);
+  return result.changes === 1;
+}
+
+/** Requeue every stopped step for one letter, and clear its error flag if that is all that was wrong. */
+export function retryMessageJobs(db: Db, messageId: string, now: number): number {
+  return db.transaction(() => {
+    const result = db
+      .prepare(
+        `UPDATE jobs
+         SET status = 'queued', attempts = 0, run_after = ?, locked_at = NULL, locked_by = NULL,
+             last_error = NULL, updated_at = ?
+         WHERE message_id = ? AND status IN ('dead', 'failed')`,
+      )
+      .run(now, now, messageId);
+    if (result.changes > 0) {
+      db.prepare(
+        `UPDATE messages
+         SET status = 'received', error = NULL, updated_at = ?
+         WHERE id = ? AND status = 'error'`,
+      ).run(now, messageId);
+    }
+    return result.changes;
+  })();
 }
 
 const JOB_DETAIL_FROM = `SELECT j.*, m.subject as message_subject, m.from_addr as message_from, m.envelope_to as message_to
@@ -217,6 +282,16 @@ export function listJobsWithDetails(db: Db, options: ListJobsOptions = {}): JobD
         `${JOB_DETAIL_FROM}
          WHERE j.status IN ('dead', 'failed')
             OR (j.status = 'queued' AND j.attempts > 0)
+         ORDER BY j.updated_at DESC
+         LIMIT ?`,
+      )
+      .all(limit) as JobDetailRow[];
+  }
+  if (options.scope === "stopped") {
+    return db
+      .prepare(
+        `${JOB_DETAIL_FROM}
+         WHERE j.status IN ('dead', 'failed')
          ORDER BY j.updated_at DESC
          LIMIT ?`,
       )
