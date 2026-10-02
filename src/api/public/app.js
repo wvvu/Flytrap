@@ -169,6 +169,14 @@ document.querySelector("#model-add")?.addEventListener("keydown", (event) => {
     addModelRow();
   }
 });
+document.querySelector("#model-add")?.addEventListener("input", syncAiSave);
+document.querySelector("#key-add")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    addKeyRow();
+  }
+});
+document.querySelector("#key-add")?.addEventListener("input", syncAiSave);
 document.querySelector("#btn-save-prompt")?.addEventListener("click", () => void saveCurrentPrompt());
 document.querySelector("#prompt-editor")?.addEventListener("input", syncPromptSave);
 document.querySelector("#btn-save-notify")?.addEventListener("click", () => void saveNotifySettings());
@@ -365,6 +373,9 @@ function toggleTheme() {
   document.documentElement.setAttribute("data-theme", next);
   localStorage.setItem("flytrap_theme", next);
   setGlyph(themeIcon, next === "dark" ? "sun" : "moon");
+  if (currentMailHtml) {
+    renderSandboxHtml(currentMailHtml);
+  }
 }
 
 async function signIn() {
@@ -851,8 +862,11 @@ function renderSandboxHtml(html) {
   const shown = allowExternalImages && remoteCount > 0;
   const body = shown ? html : stripRemoteImages(html);
   const imgSrc = shown ? "http: https: data: cid:" : "data: cid:";
+  const isDark = document.documentElement.getAttribute("data-theme") !== "light";
+  const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${isDark ? "rgba(255,255,255,0.25) transparent" : "rgba(0,0,0,0.25) transparent"};}::-webkit-scrollbar{width:8px;height:8px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.25)"};border-radius:4px;}::-webkit-scrollbar-thumb:hover{background:${isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)"};}::-webkit-scrollbar-corner{background:transparent;}`;
   const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>body{font-family:sans-serif;font-size:14px;line-height:1.6;color:#111;padding:16px;word-break:break-word;}img{max-width:100%;height:auto;}a{color:#1d4ed8;}</style></head><body>${body}</body></html>`;
+  const defaultColor = isDark ? "#e5e5e5" : "#111";
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}body{font-family:sans-serif;font-size:14px;line-height:1.6;color:${defaultColor};padding:16px;word-break:break-word;}img{max-width:100%;height:auto;}a{color:#1d4ed8;}</style></head><body>${body}</body></html>`;
   mailSandbox.setAttribute("srcdoc", doc);
   const hint = document.querySelector("#preview-guard");
   if (hint) {
@@ -2022,28 +2036,38 @@ function removeAiRow(kind, index) {
 function addModelRow() {
   const input = document.querySelector("#model-add");
   const model = input ? input.value.trim() : "";
+  if (!model) {
+    toast("请输入模型名称");
+    return false;
+  }
   if (!/^[A-Za-z0-9._:@/-]{1,80}$/.test(model)) {
     toast("模型名称无效");
-    return;
+    return false;
   }
   if (!aiModels.includes(model)) aiModels.push(model);
   if (input) input.value = "";
   paintAiEditors();
   syncAiSave();
+  return true;
 }
 
 function addKeyRow() {
   const input = document.querySelector("#key-add");
   const secret = input ? input.value.trim() : "";
+  if (!secret) {
+    toast("请输入密钥");
+    return false;
+  }
   if (secret.length < 8 || secret.length > 512 || /\s/.test(secret)) {
     toast("密钥无效");
-    return;
+    return false;
   }
   const tail = secret.length >= 12 ? secret.slice(-4) : "";
   aiKeyRows.push({ secret, tail });
   if (input) input.value = "";
   paintAiEditors();
   syncAiSave();
+  return true;
 }
 
 function aiSnapshot() {
@@ -2056,10 +2080,22 @@ function aiSnapshot() {
 function syncAiSave() {
   const button = document.querySelector("#btn-save-ai");
   if (!button) return;
-  button.disabled = aiSnapshot() === aiBaseline;
+  const pendingModel = document.querySelector("#model-add")?.value.trim();
+  const pendingKey = document.querySelector("#key-add")?.value.trim();
+  button.disabled = aiSnapshot() === aiBaseline && !pendingModel && !pendingKey;
 }
 
 async function saveAiSettings() {
+  const modelInput = document.querySelector("#model-add");
+  const pendingModel = modelInput ? modelInput.value.trim() : "";
+  if (pendingModel) {
+    if (!addModelRow()) return;
+  }
+  const keyInput = document.querySelector("#key-add");
+  const pendingKey = keyInput ? keyInput.value.trim() : "";
+  if (pendingKey) {
+    if (!addKeyRow()) return;
+  }
   const keys = aiKeyRows.map((row) => (row.secret ? { secret: row.secret } : { id: row.id }));
   try {
     const saved = await request("/v1/settings/ai", { method: "PUT", body: { models: aiModels, keys } });
@@ -2120,21 +2156,24 @@ function cssEscape(value) {
 // ==================== 通用网络与工具函数 ====================
 
 async function request(url, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
   const send = async (force) => {
     const headers = new Headers();
-    if (options.body !== undefined) {
-      headers.set("content-type", "application/json");
+    if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
       headers.set("x-csrf-token", await fetchCsrf(force));
     }
+    if (options.body !== undefined) {
+      headers.set("content-type", "application/json");
+    }
     return fetch(url, {
-      method: options.method || "GET",
+      method,
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       credentials: "same-origin",
     });
   };
   let response = await send(false);
-  if (response.status === 403 && options.body !== undefined) {
+  if (response.status === 403 && method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
     await response.text().catch(() => "");
     csrfToken = null;
     response = await send(true);
