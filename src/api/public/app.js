@@ -368,7 +368,7 @@ async function init() {
   } catch {
     showLogin();
   }
-  window.setInterval(() => void pollLive(), 30000);
+  window.setInterval(() => void pollLive(), 15000);
 }
 
 function setGlyph(el, name) {
@@ -713,12 +713,12 @@ async function selectMail(id, options = {}) {
   selectedMailId = id;
   allowExternalImages = false;
   if (btnLoadImages) {
-    btnLoadImages.hidden = false;
+    btnLoadImages.hidden = true;
     btnLoadImages.disabled = false;
     btnLoadImages.textContent = "显示图片";
   }
   const guard = document.querySelector("#preview-guard");
-  if (guard) guard.textContent = "不执行脚本。外链图片先不加载。";
+  if (guard) guard.textContent = "";
   if (!options.keepListOnNarrow) setMobilePane("detail");
 
   // 默认折叠威胁指纹与外链
@@ -981,9 +981,9 @@ function renderSandboxHtml(html) {
   mailSandbox.setAttribute("srcdoc", doc);
   const hint = document.querySelector("#preview-guard");
   if (hint) {
-    if (remoteCount === 0) hint.textContent = "不执行脚本。没有外链图片。";
-    else if (shown) hint.textContent = `不执行脚本。外链图片已显示，共 ${remoteCount} 处。`;
-    else hint.textContent = `不执行脚本。外链图片先不加载，共 ${remoteCount} 处。`;
+    hint.textContent = shown
+      ? "共 " + remoteCount + " 处外链资源已加载"
+      : "共 " + remoteCount + " 处外链资源未加载";
   }
   if (btnLoadImages) {
     btnLoadImages.hidden = remoteCount === 0;
