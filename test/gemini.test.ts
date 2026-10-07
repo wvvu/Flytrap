@@ -55,6 +55,32 @@ test("gemini classifier completes json format and parses result", async () => {
   assert.equal(calledBody.generationConfig.responseMimeType, "application/json");
   assert.ok(calledBody.generationConfig.responseSchema);
   assert.equal(calledBody.generationConfig.responseSchema.type, "OBJECT");
+  assert.equal(calledBody.generationConfig.thinkingConfig, undefined);
+});
+
+test("gemini sends a thinking budget when a level is set", async () => {
+  let calledBody: any = null;
+  const stubFetch: typeof fetch = async (_input, init) => {
+    calledBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: JSON.stringify({
+        label: "legit", confidence: 0.4, summary: "普通来信", tags: [], signals: [],
+      }) }] } }],
+    }), { status: 200 });
+  };
+  const classifier = createGeminiClassifier({
+    apiKeys: ["secret-value-1234"],
+    model: "gemini-2.5-flash",
+    fetchImpl: stubFetch,
+    thinking: () => "low",
+  });
+  await classifier.classify({
+    promptId: "classify-v1",
+    systemPrompt: "sort",
+    userMessage: "mail",
+    facts: {} as any,
+  });
+  assert.equal(calledBody.generationConfig.thinkingConfig.thinkingBudget, 1024);
 });
 
 

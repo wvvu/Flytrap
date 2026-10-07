@@ -594,6 +594,10 @@ button.mail-item {
   text-align: left;
 }
 
+.mail-item.unread {
+  background: var(--bg-card-hover);
+}
+
 .mail-item:hover {
   background: var(--bg-card-hover);
 }
@@ -1307,7 +1311,7 @@ details[open] > .collapsible-summary::before {
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--bg-canvas);
 }
 
 .html-container iframe {
@@ -1441,8 +1445,22 @@ details[open] > .collapsible-summary::before {
   border: 1px solid var(--border-subtle);
 }
 
-.auth-chip.pass { color: var(--legit); border-color: rgba(16, 185, 129, 0.4); }
+.auth-chip.pass { color: var(--legit); border-color: rgba(16, 185, 129, 0.4); background: var(--legit-bg); }
 .auth-chip.fail { color: var(--phish); border-color: rgba(239, 68, 68, 0.4); }
+
+.log-view {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 /* DLQ Job 详情卡片 */
 .dlq-job-item {

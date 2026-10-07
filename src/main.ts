@@ -8,7 +8,7 @@ import { fakeClassifier } from "./ai/classifier.js";
 import { createGeminiClassifier } from "./ai/gemini.js";
 import { createOpenAiClassifier } from "./ai/openai-compat.js";
 import { fallbackAiPool } from "./ai/pool.js";
-import { readEffectiveAiPool } from "./db/repos/settings.js";
+import { readAiThinking, readEffectiveAiPool } from "./db/repos/settings.js";
 import { readPrompt } from "./ai/prompt.js";
 import { createMailauthAuthenticator } from "./mail/auth.js";
 import { createTelegramNotifier } from "./notify/telegram.js";
@@ -34,7 +34,7 @@ const config: Config = (() => {
   }
 })();
 
-const log = createLogger(config.logLevel);
+const log = createLogger(config.logLevel, true);
 
 if (config.nodeEnv !== "test" && config.roles.includes("api")) {
   if (config.sessionSecret === PLACEHOLDER_SESSION_SECRET) {
@@ -142,6 +142,7 @@ async function boot(stops: Array<() => Promise<void>>): Promise<void> {
               model: config.geminiModel,
               baseUrl: config.geminiBaseUrl,
               resolve: () => readEffectiveAiPool(db, fallbackAiPool(config)),
+              thinking: () => readAiThinking(db),
             })
           : createOpenAiClassifier({
               baseUrl: config.openaiBaseUrl ?? "",

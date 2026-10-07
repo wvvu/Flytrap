@@ -149,6 +149,10 @@ export function saveParsedMessage(
   );
 }
 
+export function markMessageRead(db: Db, id: string, now: number): void {
+  db.prepare("UPDATE messages SET read_at = ? WHERE id = ? AND read_at IS NULL").run(now, id);
+}
+
 export function saveAiResult(db: Db, id: string, aiResult: string, now: number): void {
   db.prepare(
     `UPDATE messages
@@ -185,6 +189,7 @@ export interface MessageListRow {
   status: string;
   ai_result: string | null;
   trashed_at: number | null;
+  read_at: number | null;
 }
 
 export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] {
@@ -237,7 +242,7 @@ export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] 
     params.cursorId = query.cursorId;
   }
   const sql = `SELECT id, sha256, received_at, size_bytes, envelope_from, envelope_to, message_id,
-                      subject, from_addr, domains, status, ai_result, trashed_at
+                      subject, from_addr, domains, status, ai_result, trashed_at, read_at
                FROM messages
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
                ORDER BY received_at DESC, id DESC

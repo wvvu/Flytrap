@@ -1,3 +1,4 @@
+import { Writable } from "node:stream";
 import pino, { type Logger } from "pino";
 
 export interface AppLog {
@@ -31,11 +32,36 @@ const REDACT_PATHS = [
   "SESSION_SECRET",
 ];
 
-export function createLogger(level: string): Logger {
-  return pino({
+const RECENT_LIMIT = 200;
+const recentLines: string[] = [];
+
+export function recentLogs(): string[] {
+  return recentLines.slice();
+}
+
+export function createLogger(level: string, capture = false): Logger {
+  const options = {
     level,
     redact: { paths: REDACT_PATHS, censor: "[redacted]" },
     base: undefined,
     timestamp: pino.stdTimeFunctions.isoTime,
+  };
+  if (!capture) return pino(options);
+  const captureStream = new Writable({
+    write(chunk, _encoding, callback) {
+      const text = chunk.toString("utf8").trim();
+      if (text) {
+        for (const line of text.split(/\n/)) {
+          if (!line) continue;
+          recentLines.push(line.slice(0, 500));
+        }
+        while (recentLines.length > RECENT_LIMIT) recentLines.shift();
+      }
+      callback();
+    },
   });
+  return pino(options, pino.multistream([
+    { stream: pino.destination(1) },
+    { stream: captureStream },
+  ]));
 }

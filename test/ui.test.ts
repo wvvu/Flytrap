@@ -72,6 +72,11 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /id="set-names"/);
     assert.match(page.body, /value="legit" selected/);
     assert.match(page.body, /末 4 位/);
+    assert.match(page.body, /启用分拣/);
+    assert.match(page.body, /id="password-next"/);
+    assert.match(page.body, /id="log-view"/);
+    assert.match(script.body, /mail-item unread|classList\.add\("unread"\)/);
+    assert.match(script.body, /value === "pass" \|\| value === "none"/);
     assert.equal(/[你我他]/.test(page.body), false);
     assert.equal(/[你我他]/.test(script.body), false);
     assert.match(page.body, /已放过/);

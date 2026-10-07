@@ -474,11 +474,42 @@ test("settings override notify, domains, and the failure list", async () => {
     const listedBody = JSON.stringify(listed.json());
     assert.equal(listedBody.includes(secret), false);
     assert.equal(listed.json().aiPool.keys[0].tail, "wxyz");
+    assert.equal(listed.json().aiEnabled, true);
+    assert.equal(listed.json().aiThinking, "low");
+    assert.equal(listed.json().passwordSet, false);
+    const behavior = await client.put(app, "/v1/settings/ai", {
+      models: ["gemini-2.5-flash"],
+      keys: [{ id: listed.json().aiPool.keys[0].id }],
+      enabled: false,
+      thinking: "high",
+    });
+    assert.equal(behavior.statusCode, 200);
+    assert.equal(behavior.json().aiEnabled, false);
+    assert.equal(behavior.json().aiThinking, "high");
+    const changed = await client.put(app, "/v1/settings/password", {
+      current: password,
+      next: "replacement-password",
+    });
+    assert.equal(changed.statusCode, 200);
+    const stale = await client.post(app, "/v1/login", { username: "admin", password });
+    assert.equal(stale.statusCode, 401);
+    const renewed = await client.post(app, "/v1/login", { username: "admin", password: "replacement-password" });
+    assert.equal(renewed.statusCode, 200);
+    await client.csrf(app);
+    assert.equal(JSON.stringify((await client.get(app, "/v1/settings")).json()).includes("scrypt:"), false);
 
     db.prepare(
       `INSERT INTO messages (id, sha256, raw_path, size_bytes, received_at, envelope_to, domains, smtp_meta, subject, from_addr, status, created_at, updated_at)
        VALUES ('msg-1', ?, 'raw/a', 1, ?, '["a@example.com"]', '["example.com"]', '{}', '工资条', 'payroll@example.com', 'received', ?, ?)`,
     ).run("ab".repeat(32), now, now, now);
+    const unread = await client.get(app, "/v1/messages?limit=10");
+    const unreadItems = unread.json().items as Array<{ id: string; read: boolean }>;
+    assert.equal(unreadItems.find((item) => item.id === "msg-1")?.read, false);
+    const seen = await client.post(app, "/v1/messages/msg-1/read", {});
+    assert.equal(seen.statusCode, 200);
+    const read = await client.get(app, "/v1/messages?limit=10");
+    const readItems = read.json().items as Array<{ id: string; read: boolean }>;
+    assert.equal(readItems.find((item) => item.id === "msg-1")?.read, true);
     const insertJob = (id: string, type: string, status: string, attempts: number) => {
       db.prepare(
         `INSERT INTO jobs (id, type, message_id, status, attempts, max_attempts, run_after, last_error, created_at, updated_at)

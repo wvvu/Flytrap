@@ -100,6 +100,21 @@ export function recoverRunning(db: Db, now: number): number {
   return result.changes;
 }
 
+/** Put a running job back without spending an attempt. Used while classification is switched off. */
+export function releaseJob(db: Db, id: string, runAfter: number, now: number): void {
+  db.prepare(
+    `UPDATE jobs
+     SET status = 'queued', run_after = ?, locked_at = NULL, locked_by = NULL, updated_at = ?
+     WHERE id = ? AND status = 'running'`,
+  ).run(runAfter, now, id);
+}
+
+export function wakeClassifyJobs(db: Db, now: number): void {
+  db.prepare(
+    `UPDATE jobs SET run_after = ? WHERE type = 'classify' AND status = 'queued' AND run_after > ?`,
+  ).run(now, now);
+}
+
 export function requeueJob(db: Db, id: string, workerId: string, now: number): boolean {
   const result = db
     .prepare(

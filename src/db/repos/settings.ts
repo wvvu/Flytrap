@@ -14,6 +14,13 @@ export const SETTING_DOMAIN_NAMES = "domain_names";
 export const SETTING_SENDER_NAMES = "sender_names";
 export const SETTING_AI_MODELS = "ai_models";
 export const SETTING_AI_KEYS = "ai_keys";
+export const SETTING_AI_ENABLED = "ai_enabled";
+export const SETTING_AI_THINKING = "ai_thinking";
+export const SETTING_PASSWORD_HASH = "password_hash";
+
+export const THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "low";
 
 export const DEFAULT_JOB_MAX_ATTEMPTS = 5;
 export const MAX_JOB_ATTEMPTS = 20;
@@ -529,6 +536,37 @@ function normalizeLabels(values: readonly string[], strict: boolean): Label[] {
 function clampConfidence(value: number): number {
   if (!Number.isFinite(value)) return 0.6;
   return Math.min(1, Math.max(0, value));
+}
+
+export function readAiEnabled(db: Db): boolean {
+  const raw = readRaw(db, SETTING_AI_ENABLED);
+  if (raw === null) return true;
+  return raw === "1";
+}
+
+export function readAiThinking(db: Db): ThinkingLevel {
+  const raw = readRaw(db, SETTING_AI_THINKING);
+  if (raw && THINKING_LEVELS.includes(raw as ThinkingLevel)) return raw as ThinkingLevel;
+  return DEFAULT_THINKING_LEVEL;
+}
+
+export function saveAiControls(db: Db, enabled: boolean, thinking: ThinkingLevel, now: number): void {
+  if (!THINKING_LEVELS.includes(thinking)) throw new SettingsError("unknown thinking level");
+  const write = db.transaction(() => {
+    writeRaw(db, SETTING_AI_ENABLED, enabled ? "1" : "0", now);
+    writeRaw(db, SETTING_AI_THINKING, thinking, now);
+  });
+  write();
+}
+
+export function readPasswordHash(db: Db): string | null {
+  const raw = readRaw(db, SETTING_PASSWORD_HASH);
+  if (!raw || !raw.startsWith("scrypt:")) return null;
+  return raw;
+}
+
+export function savePasswordHash(db: Db, hash: string, now: number): void {
+  writeRaw(db, SETTING_PASSWORD_HASH, hash, now);
 }
 
 function readRaw(db: Db, key: string): string | null {

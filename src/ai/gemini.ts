@@ -1,4 +1,18 @@
 import { scrubSecrets, keyTail } from "./secret.js";
+
+export type ThinkingLevel = "off" | "low" | "medium" | "high";
+
+export function geminiThinkingConfig(
+  model: string,
+  level: ThinkingLevel,
+): { thinkingBudget: number } | { thinkingLevel: string } {
+  if (/gemini-3/i.test(model)) {
+    const name = { off: "MINIMAL", low: "LOW", medium: "MEDIUM", high: "HIGH" }[level];
+    return { thinkingLevel: name };
+  }
+  const budget = { off: 0, low: 1024, medium: 8192, high: 24576 }[level];
+  return { thinkingBudget: budget };
+}
 import { finalizeAiResult, parseModelJson, parseModelOutput } from "./types.js";
 import type { Classifier, ClassifyInput } from "./classifier.js";
 
@@ -23,6 +37,7 @@ export interface GeminiClassifierOptions {
   models?: string[];
   /** Read on every call so a settings change applies without a restart. */
   resolve?: () => { models: string[]; keys: GeminiPoolKey[] };
+  thinking?: () => ThinkingLevel;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -125,7 +140,8 @@ export function createGeminiClassifier(options: GeminiClassifierOptions): Gemini
           picked.state.totalCalls += 1;
           picked.state.lastUsedAt = now();
           try {
-            const content = await callGemini(fetchImpl, baseUrl, modelName, picked.item.secret, input, timeoutMs);
+            const thinking = options.thinking ? geminiThinkingConfig(modelName, options.thinking()) : undefined;
+            const content = await callGemini(fetchImpl, baseUrl, modelName, picked.item.secret, input, timeoutMs, thinking);
             const output = parseModelOutput(parseModelJson(content));
             picked.state.successCalls += 1;
             return finalizeAiResult({
@@ -200,6 +216,7 @@ async function callGemini(
   apiKey: string,
   input: ClassifyInput,
   timeoutMs: number,
+  thinking?: { thinkingBudget: number } | { thinkingLevel: string },
 ): Promise<string> {
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 const GEMINI_RESPONSE_SCHEMA = {
@@ -250,6 +267,7 @@ const GEMINI_RESPONSE_SCHEMA = {
       temperature: 0,
       responseMimeType: "application/json",
       responseSchema: GEMINI_RESPONSE_SCHEMA,
+      ...(thinking ? { thinkingConfig: thinking } : {}),
     },
   };
 
