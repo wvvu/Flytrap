@@ -1311,7 +1311,7 @@ details[open] > .collapsible-summary::before {
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--bg-canvas);
 }
 
 .html-container iframe {

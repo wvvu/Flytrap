@@ -33,6 +33,7 @@ let attemptsBaseline = "";
 let namesBaseline = "";
 let settingsDomains = [];
 let currentMailHtml = "";
+let currentMailPlain = "";
 let allowExternalImages = false;
 let labelNames = { ...LABEL_NAMES };
 let panelTitle = "Flytrap";
@@ -273,6 +274,7 @@ detailVerdictSelect?.addEventListener("change", async () => {
         tag.dataset.label = newLabel;
         tag.hidden = newLabel === "legit";
         tag.textContent = newLabel === "legit" ? "" : labelName(newLabel) + " 已改";
+        if (tag.parentElement) tag.parentElement.hidden = newLabel === "legit";
       }
     }
     noticeEl.textContent = "已改成 " + labelName(newLabel);
@@ -605,7 +607,9 @@ function createMailListItem(item) {
 
   const snippet = document.createElement("span");
   snippet.className = "item-snippet";
-  snippet.textContent = item.summary || "";
+  // 列表先不放摘要。需要时把下一行接回去。
+  // snippet.textContent = item.summary || "";
+  snippet.hidden = true;
 
   const tag = document.createElement("span");
   tag.className = "verdict-tag";
@@ -621,6 +625,7 @@ function createMailListItem(item) {
   tag.hidden = !named;
   tag.textContent = named ? labelName(item.label) + (item.manualOverride ? " 已改" : "") : "";
 
+  line3.hidden = !named;
   line3.append(snippet, tag);
 
   card.append(line1, subject, line3);
@@ -800,7 +805,8 @@ async function selectMail(id, options = {}) {
     }
 
     // 纯文本正文与原始头
-    plainTextBody.textContent = detail.parsed?.text || "(正文为空)";
+    currentMailPlain = detail.parsed?.text || "";
+    plainTextBody.textContent = currentMailPlain || "(正文为空)";
     rawHeaders.textContent = formatRawHeaders(detail);
     if (mailLoadingEl) mailLoadingEl.hidden = true;
     mailDetailEl.hidden = false;
@@ -868,20 +874,35 @@ function stripRemoteImages(html) {
     .replace(/url\(\s*(['"]?)https?:\/\/[^)'"]*\1\s*\)/gi, "url('')");
 }
 
+function escapeHtml(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function mailBringsItsOwnCanvas(html) {
+  return /<style[\s>]/i.test(html) || /bgcolor\s*=/i.test(html) || /background(?:-color)?\s*:/i.test(html);
+}
+
 function renderSandboxHtml(html) {
   const remoteCount = countRemoteImages(html);
   const shown = allowExternalImages && remoteCount > 0;
-  const body = shown ? html : stripRemoteImages(html);
+  const source = html && html.trim() ? html : escapeHtml(currentMailPlain).replace(/\n/g, "<br>");
+  const body = shown ? source : stripRemoteImages(source);
+  const unstyled = !mailBringsItsOwnCanvas(body);
   const imgSrc = shown ? "http: https: data: cid:" : "data: cid:";
   const isDark = document.documentElement.getAttribute("data-theme") !== "light";
-  const trackBg = isDark ? "#18181b" : "#f1f5f9";
+  const pageBg = isDark ? "#0a0a0a" : "#ffffff";
+  const textColor = isDark ? "#e5e5e5" : "#111111";
+  const linkColor = isDark ? "#93c5fd" : "#1d4ed8";
+  const trackBg = unstyled ? pageBg : (isDark ? "#18181b" : "#f1f5f9");
   const thumbBg = isDark ? "#52525b" : "#cbd5e1";
   const thumbHover = isDark ? "#71717a" : "#94a3b8";
   const thumbActive = isDark ? "#9ca3af" : "#64748b";
+  const canvasCss = unstyled
+    ? `html,body{background:${pageBg};color:${textColor};}a{color:${linkColor};}`
+    : `html{background:${pageBg};}`;
   const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${thumbBg} ${trackBg};}::-webkit-scrollbar{width:10px;height:10px;}::-webkit-scrollbar-track{background:${trackBg};}::-webkit-scrollbar-thumb{background:${thumbBg};border-radius:5px;border:2px solid ${trackBg};}::-webkit-scrollbar-thumb:hover{background:${thumbHover};}::-webkit-scrollbar-thumb:active{background:${thumbActive};}::-webkit-scrollbar-corner{background:${trackBg};}::-webkit-resizer{background:transparent;}`;
   const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
-  const defaultColor = isDark ? "#e5e5e5" : "#111";
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}body{font-family:sans-serif;font-size:14px;line-height:1.6;color:${defaultColor};padding:16px;word-break:break-word;}img{max-width:100%;height:auto;}a{color:#1d4ed8;}</style></head><body>${body}</body></html>`;
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:sans-serif;font-size:14px;line-height:1.6;padding:16px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${body}</body></html>`;
   mailSandbox.setAttribute("srcdoc", doc);
   const hint = document.querySelector("#preview-guard");
   if (hint) {
