@@ -329,6 +329,17 @@
                 </div>
                 <button type="button" id="btn-save-ai" class="btn-fit" disabled>保存</button>
               </div>
+              <div class="inline-row">
+                <label class="chk"><input id="ai-enabled" type="checkbox" checked> 启用分拣</label>
+                <span class="muted">思考</span>
+                <select id="ai-thinking">
+                  <option value="off">关</option>
+                  <option value="low" selected>低</option>
+                  <option value="medium">中</option>
+                  <option value="high">高</option>
+                </select>
+              </div>
+              <p class="muted">关掉之后不再调用模型，已经收下的信仍在。思考等级只给 Gemini 用。</p>
               <h3 class="field-title">型号</h3>
               <div id="model-list" class="name-list"></div>
               <div class="inline-row">
@@ -424,6 +435,31 @@
                 </thead>
                 <tbody id="mailboxes-tbody"></tbody>
               </table>
+            </section>
+
+            <section class="block" id="set-account" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>账号</h2>
+                  <p class="muted">改掉登录密码。至少 8 位。</p>
+                </div>
+                <button type="button" id="btn-save-password" class="btn-fit">保存</button>
+              </div>
+              <div class="inline-row">
+                <input id="password-current" type="password" placeholder="当前密码" autocomplete="current-password">
+                <input id="password-next" type="password" placeholder="新密码" maxlength="200" autocomplete="new-password">
+              </div>
+            </section>
+
+            <section class="block" id="set-logs" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>日志</h2>
+                  <p class="muted">最近的运行记录，只留在这次进程里。</p>
+                </div>
+                <button type="button" id="btn-refresh-logs" class="btn-fit">刷新</button>
+              </div>
+              <pre id="log-view" class="log-view"></pre>
             </section>
 
             <section class="block" id="set-machine" hidden>

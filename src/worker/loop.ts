@@ -1,7 +1,8 @@
 import { hostname } from "node:os";
 import { ulid } from "ulid";
 import type { Db } from "../db/index.js";
-import { claimJob, completeJob, failJob, recoverRunning, requeueJob, type JobRow } from "../db/repos/jobs.js";
+import { claimJob, completeJob, failJob, recoverRunning, releaseJob, requeueJob, type JobRow } from "../db/repos/jobs.js";
+import { readAiEnabled } from "../db/repos/settings.js";
 import { markMessageError } from "../db/repos/messages.js";
 import type { Codec } from "../compress.js";
 import type { Classifier } from "../ai/classifier.js";
@@ -102,6 +103,10 @@ export async function processNext(options: WorkerOptions, workerId: string): Pro
 }
 
 async function runClaimed(options: WorkerOptions, job: JobRow, now: () => number): Promise<void> {
+  if (job.type === "classify" && !readAiEnabled(options.db)) {
+    releaseJob(options.db, job.id, now() + 60_000, now());
+    return;
+  }
   try {
     await dispatch(options, job, now);
     completeJob(options.db, job.id, now());

@@ -15,18 +15,19 @@ import type { Db } from "../db/index.js";
 import PostalMime from "postal-mime";
 import { findAttachment, listMessageAttachments } from "../db/repos/attachments.js";
 import { writeAudit } from "../db/repos/audit.js";
-import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, retryAllDeadJobs, retryJob, retryMessageJobs, type JobStatus } from "../db/repos/jobs.js";
+import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, retryAllDeadJobs, retryJob, retryMessageJobs, wakeClassifyJobs, type JobStatus } from "../db/repos/jobs.js";
 import { fallbackAiPool } from "../ai/pool.js";
-import { presentAiPool, readEffectiveAiPool, saveAcceptDomains, saveAiPool, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
+import { presentAiPool, readAiEnabled, readAiThinking, readEffectiveAiPool, readPasswordHash, saveAcceptDomains, saveAiControls, saveAiPool, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
 import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
-import { countTrash, deleteMessage, emptyTrash, getMessage, listMessages, restoreMessage, trashMessage } from "../db/repos/messages.js";
+import { countTrash, deleteMessage, emptyTrash, getMessage, listMessages, markMessageRead, restoreMessage, trashMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
 import { readRaw } from "../ingest/read-raw.js";
 import { removeStoredFiles } from "../ingest/remove-stored.js";
 import { rfc822HeaderBlock } from "../mail/headers.js";
 import { PathEscapeError, resolveInside } from "../paths.js";
 import { actorName, contentDisposition, decodeCursor, encodeCursor, errorName, HttpError, iso, parseJson, publicError, safeMime } from "./http.js";
-import { credentialsMatch } from "./password.js";
+import { hashPassword, loginOk } from "./password.js";
+import { recentLogs } from "../log.js";
 import { isPanelAsset, registerPanel } from "./static.js";
 
 declare module "fastify" {
@@ -78,6 +79,13 @@ const aiSettingsBody = z.object({
     id: z.string().min(1).max(80).optional(),
     secret: z.string().min(8).max(512).optional(),
   }).strict()).max(20),
+  enabled: z.boolean().optional(),
+  thinking: z.enum(["off", "low", "medium", "high"]).optional(),
+}).strict();
+
+const passwordBody = z.object({
+  current: z.string().min(1).max(200),
+  next: z.string().min(8).max(200),
 }).strict();
 
 const historyBody = z.object({
@@ -190,7 +198,13 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   app.post("/v1/login", { config: { rateLimit: { max: 5, timeWindow: "5 minutes" } } }, async (request, reply) => {
     const body = loginBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
-    const ok = credentialsMatch(body.data.username, body.data.password, config.apiUsername, config.apiPassword ?? "");
+    const ok = loginOk(
+      body.data.username,
+      body.data.password,
+      config.apiUsername,
+      config.apiPassword ?? "",
+      readPasswordHash(db),
+    );
     const actor = actorName(body.data.username);
     if (!ok) {
       writeAudit(db, { id: ulid(), at: now(), actor, action: "login_failed" });
@@ -327,6 +341,13 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       originalLabel: ai.originalLabel ?? null,
       originalConfidence: ai.originalConfidence ?? null,
     });
+  });
+
+  app.post("/v1/messages/:id/read", async (request, reply) => {
+    const id = messageId(request);
+    requireMessage(db, id);
+    markMessageRead(db, id, now());
+    return reply.send({ ok: true });
   });
 
   app.post("/v1/messages/:id/trash", async (request, reply) => {
@@ -550,6 +571,9 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       },
       ai: aiStatus(db, config),
       aiPool: presentAiPool(readEffectiveAiPool(db, fallbackAiPool(config))),
+      aiEnabled: readAiEnabled(db),
+      aiThinking: readAiThinking(db),
+      passwordSet: readPasswordHash(db) !== null,
     };
   });
 
@@ -563,6 +587,10 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       if (err instanceof SettingsError) throw new HttpError(400);
       throw err;
     }
+    if (body.data.enabled !== undefined && body.data.thinking !== undefined) {
+      saveAiControls(db, body.data.enabled, body.data.thinking, now());
+      if (body.data.enabled) wakeClassifyJobs(db, now());
+    }
     writeAudit(db, {
       id: ulid(),
       at: now(),
@@ -570,7 +598,38 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       action: "settings_ai",
       detail: `models=${saved.models.length} keys=${saved.keys.length}`,
     });
-    return reply.send({ ok: true, aiPool: saved });
+    return reply.send({
+      ok: true,
+      aiPool: saved,
+      aiEnabled: readAiEnabled(db),
+      aiThinking: readAiThinking(db),
+    });
+  });
+
+  app.put("/v1/settings/password", async (request, reply) => {
+    const body = passwordBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    if (body.data.next === "admin") throw new HttpError(400);
+    const currentOk = loginOk(
+      config.apiUsername,
+      body.data.current,
+      config.apiUsername,
+      config.apiPassword ?? "",
+      readPasswordHash(db),
+    );
+    if (!currentOk) throw new HttpError(401, "unauthorized");
+    savePasswordHash(db, hashPassword(body.data.next), now());
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "password_change",
+    });
+    return reply.send({ ok: true });
+  });
+
+  app.get("/v1/logs", async () => {
+    return { lines: recentLogs().map(redactLogLine) };
   });
 
   app.put("/v1/settings/notify", async (request, reply) => {
@@ -711,6 +770,13 @@ export async function startApi(options: ApiOptions): Promise<RunningApi> {
   const address = app.server.address();
   const port = typeof address === "object" && address ? address.port : options.config.apiPort;
   return { port, close: () => app.close() };
+}
+
+function redactLogLine(line: string): string {
+  return line
+    .replace(/([?&]key=)[^&\s"']+/gi, "$1[redacted]")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[redacted]")
+    .replace(/\bAIza[0-9A-Za-z_-]{10,}\b/g, "[redacted]");
 }
 
 function aiStatus(db: Db, config: Config): { classifier: string; model: string; keyCount: number } {
@@ -858,6 +924,7 @@ function toListItem(row: ReturnType<typeof listMessages>[number]) {
     domains: parseJson(row.domains),
     status: row.status,
     label: ai.label,
+    read: row.read_at != null,
     confidence: ai.confidence,
     summary: ai.summary,
     tags: ai.tags,

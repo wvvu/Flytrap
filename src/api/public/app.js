@@ -161,6 +161,10 @@ backListBtn?.addEventListener("click", () => setMobilePane("list"));
 document.querySelector("#btn-back-dlq")?.addEventListener("click", () => setMobilePane("list"));
 document.querySelector("#btn-back-settings")?.addEventListener("click", () => setMobilePane("list"));
 document.querySelector("#btn-save-ai")?.addEventListener("click", () => void saveAiSettings());
+document.querySelector("#ai-enabled")?.addEventListener("change", syncAiSave);
+document.querySelector("#ai-thinking")?.addEventListener("change", syncAiSave);
+document.querySelector("#btn-save-password")?.addEventListener("click", () => void savePassword());
+document.querySelector("#btn-refresh-logs")?.addEventListener("click", () => void loadLogs());
 document.querySelector("#btn-add-model")?.addEventListener("click", () => addModelRow());
 document.querySelector("#btn-add-key")?.addEventListener("click", () => addKeyRow());
 document.querySelector("#model-add")?.addEventListener("keydown", (event) => {
@@ -267,7 +271,8 @@ detailVerdictSelect?.addEventListener("change", async () => {
       const tag = listItem.querySelector(".verdict-tag");
       if (tag) {
         tag.dataset.label = newLabel;
-        tag.textContent = labelName(newLabel) + " 已改";
+        tag.hidden = newLabel === "legit";
+        tag.textContent = newLabel === "legit" ? "" : labelName(newLabel) + " 已改";
       }
     }
     noticeEl.textContent = "已改成 " + labelName(newLabel);
@@ -573,6 +578,7 @@ function createMailListItem(item) {
   const card = document.createElement("div");
   card.className = "mail-item";
   card.dataset.id = item.id;
+  if (!item.read) card.classList.add("unread");
   if (item.id === selectedMailId) card.classList.add("selected");
 
   const line1 = document.createElement("div");
@@ -604,12 +610,16 @@ function createMailListItem(item) {
   const tag = document.createElement("span");
   tag.className = "verdict-tag";
   tag.dataset.label = item.label || "none";
-  const confText = item.manualOverride
-    ? " 已改"
-    : item.label && item.label !== "legit" && typeof item.confidence === "number"
-      ? ` ${Math.round(item.confidence * 100)}%`
-      : "";
-  tag.textContent = labelName(item.label) + confText;
+  // 列表先不显示置信度，正常也不显示标签。需要时把下面两行接回去。
+  // const confText = item.manualOverride
+  //   ? " 已改"
+  //   : item.label && item.label !== "legit" && typeof item.confidence === "number"
+  //     ? ` ${Math.round(item.confidence * 100)}%`
+  //     : "";
+  // tag.textContent = labelName(item.label) + confText;
+  const named = Boolean(item.label) && item.label !== "legit";
+  tag.hidden = !named;
+  tag.textContent = named ? labelName(item.label) + (item.manualOverride ? " 已改" : "") : "";
 
   line3.append(snippet, tag);
 
@@ -798,6 +808,7 @@ async function selectMail(id, options = {}) {
     // 加载 HTML 与真正的 RFC822 信头
     void loadMailHtml(id, token);
     void loadRawHeaders(id, token, detail);
+    markOpened(id);
   } catch (err) {
     if (token !== mailLoadToken) return;
     console.error("selectMail error:", err);
@@ -1404,6 +1415,10 @@ async function loadSettingsPage() {
     }
     await loadMailboxesView();
     await loadMachineLine();
+    const enabled = document.querySelector("#ai-enabled");
+    if (enabled) enabled.checked = settings.aiEnabled !== false;
+    const thinking = document.querySelector("#ai-thinking");
+    if (thinking) thinking.value = settings.aiThinking || "low";
     renderAiEditors(settings.aiPool || {});
     renderSettingsNav();
   } catch (err) {
@@ -1414,11 +1429,13 @@ async function loadSettingsPage() {
 const SETTING_SECTIONS = [
   ["names", "名称"],
   ["model", "模型"],
+  ["account", "账号"],
   ["domains", "收信"],
   ["mailboxes", "地址"],
   ["notify", "提醒"],
   ["prompt", "分拣"],
   ["jobs", "失败"],
+  ["logs", "日志"],
   ["machine", "概况"],
 ];
 
@@ -1449,6 +1466,7 @@ function showSettingsSection(id, options = {}) {
     button.classList.toggle("selected", button.dataset.section === id);
   }
   if (!options.keepListOnNarrow) setMobilePane("detail");
+  if (id === "logs") void loadLogs();
 }
 
 function describeAi(ai) {
@@ -2075,9 +2093,13 @@ function addKeyRow() {
 }
 
 function aiSnapshot() {
+  const enabled = document.querySelector("#ai-enabled");
+  const thinking = document.querySelector("#ai-thinking");
   return JSON.stringify({
     models: aiModels,
     keys: aiKeyRows.map((row) => (row.secret ? { secret: row.tail, pending: true } : { id: row.id, tail: row.tail })),
+    enabled: enabled ? enabled.checked : true,
+    thinking: thinking ? thinking.value : "low",
   });
 }
 
@@ -2101,13 +2123,23 @@ async function saveAiSettings() {
     if (!addKeyRow()) return;
   }
   const keys = aiKeyRows.map((row) => (row.secret ? { secret: row.secret } : { id: row.id }));
+  const enabled = document.querySelector("#ai-enabled");
+  const thinking = document.querySelector("#ai-thinking");
   try {
-    const saved = await request("/v1/settings/ai", { method: "PUT", body: { models: aiModels, keys } });
+    const saved = await request("/v1/settings/ai", {
+      method: "PUT",
+      body: {
+        models: aiModels,
+        keys,
+        enabled: enabled ? enabled.checked : true,
+        thinking: thinking ? thinking.value : "low",
+      },
+    });
     for (const row of aiKeyRows) delete row.secret;
     renderAiEditors(saved.aiPool || {});
     const status = await request("/v1/ai/status");
     const aiLine = document.querySelector("#ai-status-line");
-    if (aiLine) aiLine.textContent = describeAi(status);
+    if (aiLine) aiLine.textContent = saved.aiEnabled === false ? "分拣已关" : describeAi(status);
     toast("模型已保存");
   } catch (err) {
     toast("保存模型失败: " + explain(err));
@@ -2228,7 +2260,7 @@ async function pollLive() {
     const items = Array.isArray(page.items) ? page.items : [];
     const same =
       items.length === currentMessages.length &&
-      items.every((item, index) => item.id === currentMessages[index]?.id && item.label === currentMessages[index]?.label);
+      items.every((item, index) => item.id === currentMessages[index]?.id && item.label === currentMessages[index]?.label && item.read === currentMessages[index]?.read);
     if (same) return;
     if (currentView === "trash") await reloadTrash();
     else await reloadMessages();
@@ -2322,10 +2354,51 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
 
+function markOpened(id) {
+  const card = findByDataId(listEl, ".mail-item", id);
+  if (card) card.classList.remove("unread");
+  const known = currentMessages.find((item) => item.id === id);
+  if (known) known.read = true;
+  void request("/v1/messages/" + encodeURIComponent(id) + "/read", { method: "POST", body: {} }).catch(() => undefined);
+}
+
+async function savePassword() {
+  const current = document.querySelector("#password-current");
+  const next = document.querySelector("#password-next");
+  const currentValue = current ? current.value : "";
+  const nextValue = next ? next.value : "";
+  if (nextValue.length < 8) {
+    toast("新密码至少 8 位");
+    return;
+  }
+  try {
+    await request("/v1/settings/password", { method: "PUT", body: { current: currentValue, next: nextValue } });
+    if (current) current.value = "";
+    if (next) next.value = "";
+    toast("密码已更新");
+  } catch {
+    toast("密码未更新");
+  }
+}
+
+async function loadLogs() {
+  const view = document.querySelector("#log-view");
+  if (!view) return;
+  try {
+    const res = await request("/v1/logs");
+    const lines = Array.isArray(res.lines) ? res.lines : [];
+    view.textContent = lines.length ? lines.join("\n") : "还没有记录";
+  } catch (err) {
+    view.textContent = explain(err);
+  }
+}
+
 function createAuthChip(label, status) {
+  const value = String(status || "none").toLowerCase();
+  const calm = value === "pass" || value === "none";
   const chip = document.createElement("span");
-  chip.className = "auth-chip " + (status === "pass" ? "pass" : "fail");
-  chip.textContent = `${label}: ${status || "none"}`;
+  chip.className = "auth-chip " + (calm ? "pass" : "fail");
+  chip.textContent = `${label}: ${value}`;
   return chip;
 }
 
