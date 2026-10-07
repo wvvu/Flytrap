@@ -6,7 +6,7 @@ import test from "node:test";
 import { gzipCodec } from "../src/compress.js";
 import { openDatabase } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
-import { listMessages } from "../src/db/repos/messages.js";
+import { countUnread, listMessages } from "../src/db/repos/messages.js";
 import { acceptMessage } from "../src/ingest/accept.js";
 import { migrationsDir } from "../src/paths.js";
 import { buildSmtpMeta } from "../src/smtp/session-meta.js";
@@ -64,6 +64,33 @@ test("the default legit column still shows mail that has not been classified", (
     ).run(id, id.padEnd(64, "a"), id === "ad" ? 1 : 3, ai);
   }
 });
+
+test("not-legit is every classified letter outside the inbox, and unread counts follow the rooms", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-spam-"));
+  const db = openDatabase(path.join(dir, "mail.db"));
+  migrate(db, migrationsDir());
+  try {
+    insertRoom(db, "fresh", null, null, null);
+    insertRoom(db, "ok", JSON.stringify({ label: "legit" }), null, null);
+    insertRoom(db, "ad", JSON.stringify({ label: "spam" }), null, null);
+    insertRoom(db, "fish", JSON.stringify({ label: "phish" }), 5, null);
+    insertRoom(db, "gone", JSON.stringify({ label: "spam" }), null, 9);
+    const spam = listMessages(db, { label: "not-legit", limit: 20 }).map((row) => row.id).sort();
+    assert.deepEqual(spam, ["ad", "fish"]);
+    assert.deepEqual(countUnread(db), { inbox: 2, spam: 1 });
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function insertRoom(db: ReturnType<typeof openDatabase>, id: string, ai: string | null, readAt: number | null, trashedAt: number | null) {
+  db.prepare(
+    `INSERT INTO messages (
+      id, sha256, raw_path, size_bytes, received_at, envelope_to, domains, smtp_meta, ai_result, status, created_at, updated_at, read_at, trashed_at
+    ) VALUES (?, ?, 'raw/a', 1, 3, '[]', '[]', '{}', ?, 'received', 1, 1, ?, ?)`,
+  ).run(id, id.padEnd(64, "a"), ai, readAt, trashedAt);
+}
 
 function meta(rcptTo: string[], receivedAtMs: number) {
   return buildSmtpMeta({

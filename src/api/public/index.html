@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>登录</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='2.5' fill='%23f5f5f5'/></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><g fill='none' stroke='%23f5f5f5' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='5' width='18' height='14' rx='2'/><path d='m3 7 9 6 9-6'/></g></svg>">
     <link rel="stylesheet" href="/app.css">
   </head>
   <body>
@@ -12,6 +12,7 @@
       <defs>
         <symbol id="i-mail" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></g></symbol>
         <symbol id="i-inbox" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3H10L8 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></g></symbol>
+        <symbol id="i-spam" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16l-2 12H6z"/><path d="M9 11h6"/></g></symbol>
         <symbol id="i-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></g></symbol>
         <symbol id="i-alert" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></g></symbol>
         <symbol id="i-sliders" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></g></symbol>
@@ -51,21 +52,22 @@
           <div class="logo-mark" id="rail-mark" title="Flytrap"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></div>
           <button type="button" class="rail-btn active" id="nav-inbox" title="收件箱">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-inbox"></use></svg></span>
-            <span class="label">收件箱</span>
-            <span class="badge" id="badge-inbox" hidden>0</span>
+            <span class="label" id="inbox-label" data-base="收件箱">收件箱</span>
+            <span class="badge badge-count" id="badge-inbox" hidden>0</span>
+          </button>
+          <button type="button" class="rail-btn" id="nav-spam" title="Spam">
+            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spam"></use></svg></span>
+            <span class="label" id="spam-label" data-base="Spam">Spam</span>
+            <span class="badge badge-count" id="badge-spam" hidden>0</span>
           </button>
           <button type="button" class="rail-btn" id="nav-trash" title="垃圾桶">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trash"></use></svg></span>
             <span class="label">垃圾桶</span>
           </button>
-          <button type="button" class="rail-btn" id="nav-dlq" title="处理失败的任务">
-            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"></use></svg></span>
-            <span class="label">失败</span>
-            <span class="badge badge-alert" id="badge-dlq" hidden>0</span>
-          </button>
           <button type="button" class="rail-btn" id="nav-settings" title="设置">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"></use></svg></span>
             <span class="label">设置</span>
+            <span class="badge badge-alert" id="badge-dlq" hidden>0</span>
           </button>
         </div>
         <div class="rail-bottom">
@@ -94,13 +96,22 @@
             <input id="label" type="hidden" value="legit">
             <input id="status" type="hidden" value="">
           </form>
+        </div>
+
+        <div id="stream-spam-header" class="stream-header" hidden>
+          <div class="stream-title-row">
+            <h2>Spam</h2>
+            <div class="stream-actions">
+              <button type="button" id="btn-spam-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
+            </div>
+          </div>
           <div class="stream-filter-bar">
-            <select id="filter-select" class="stream-filter-select" title="按分类筛选。默认显示正常。尚未分类的来信也在这一列。">
-              <option value="legit" selected>正常</option>
+            <select id="filter-select" class="stream-filter-select" title="Spam 里再分。选全部才会看到正常。">
+              <option value="not-legit" selected>非正常</option>
               <option value="">全部</option>
+              <option value="spam" title="spam">垃圾</option>
               <option value="phish" title="phish">钓鱼</option>
               <option value="malware" title="malware">恶意</option>
-              <option value="spam" title="spam">垃圾</option>
               <option value="unsolicited-admin" title="unsolicited-admin">推广</option>
               <option value="gray" title="gray">待看</option>
             </select>
@@ -125,6 +136,7 @@
           <div class="stream-title-row">
             <h2>处理失败</h2>
             <div class="stream-actions">
+              <button type="button" id="btn-dlq-back" class="btn-sm">返回设置</button>
               <button type="button" id="btn-retry-all" class="btn-sm">全部再试</button>
               <button type="button" id="btn-dlq-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
@@ -162,7 +174,7 @@
           <div id="mail-empty" class="empty-state">
             <span class="empty-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></span>
             <h3>选一封信</h3>
-            <p>这里是「正常」，包含尚未分类的来信。其余分类用上方筛选。</p>
+            <p id="mail-empty-copy">这里是收件箱，包含尚未分类的来信。其余在 Spam。</p>
           </div>
 
           <div id="mail-loading" class="empty-state" hidden>
@@ -209,7 +221,7 @@
                 <button type="button" id="btn-reclassify" class="btn-sm" title="按当前提示词再分一次">重分类</button>
                 <a id="btn-download-eml" class="btn-sm btn-link" target="_blank" download title="下载原始 EML">下载</a>
                 <button type="button" id="btn-trash-mail" class="btn-sm btn-danger-ghost" title="移入垃圾桶">移入垃圾桶</button>
-                <button type="button" id="btn-restore-mail" class="btn-sm" title="恢复至收件箱" hidden>恢复</button>
+                <button type="button" id="btn-restore-mail" class="btn-sm" title="从垃圾桶恢复" hidden>恢复</button>
                 <button type="button" id="btn-delete-mail" class="btn-sm btn-danger" title="永久删除" hidden>彻底删除</button>
               </div>
             </div>
@@ -407,6 +419,9 @@
               <div class="inline-row">
                 <input id="job-max-attempts" class="field-narrow" inputmode="numeric" autocomplete="off">
                 <span class="muted">次之后不再自动试</span>
+              </div>
+              <div class="inline-row">
+                <button type="button" id="btn-open-dlq" class="btn-fit">查看处理失败</button>
               </div>
             </section>
 
