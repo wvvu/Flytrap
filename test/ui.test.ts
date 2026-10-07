@@ -67,8 +67,9 @@ test("the panel is static and the mail API stays behind the session", async () =
     const guardAt = page.body.indexOf('id="preview-guard"');
     const imageAt = page.body.indexOf('id="btn-load-images"');
     assert.ok(guardAt > 0 && imageAt > guardAt);
-    assert.match(page.body, /不执行脚本/);
-    assert.match(page.body, /外链图片先不加载/);
+    assert.match(page.body, /共 0 处外链资源未加载/);
+    assert.match(script.body, /处外链资源未加载/);
+    assert.match(script.body, /处外链资源已加载/);
     assert.match(page.body, /id="set-names"/);
     assert.match(page.body, /id="nav-spam"/);
     assert.match(page.body, /value="not-legit" selected/);

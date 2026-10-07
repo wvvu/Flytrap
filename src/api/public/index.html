@@ -228,8 +228,8 @@
 
             <!-- Tab 1: AI 研判视图 (集成单页沙箱正文与特征流) -->
             <div id="panel-ai" class="tab-panel active">
-              <div class="summary-card" hidden>
-                <div class="summary-header">
+              <div class="summary-card">
+                <div class="summary-header" hidden>
                   <span class="summary-label">摘要</span>
                   <div class="confidence-chip" title="模型置信度" hidden>
                     <span class="chip-label">置信</span>
@@ -238,15 +238,17 @@
                   </div>
                 </div>
                 <p id="detail-summary" class="summary-text"></p>
-                <div id="detail-tags" class="tag-row"></div>
+                <div id="detail-tags" class="tag-row" hidden></div>
               </div>
 
               <!-- 原文视觉呈现 (安全沙箱) 直接平铺于正文中 -->
               <section class="inlined-preview-section">
                 <div class="section-subhead">
                   <span class="subhead-title">正文</span>
-                  <p class="preview-guard" id="preview-guard">不执行脚本。外链图片先不加载。</p>
-                  <button type="button" id="btn-load-images" class="btn-sec-action">显示图片</button>
+                  <div class="preview-actions">
+                    <p class="preview-guard" id="preview-guard">共 0 处外链资源未加载</p>
+                    <button type="button" id="btn-load-images" class="btn-sec-action">显示图片</button>
+                  </div>
                 </div>
                 <div class="html-container inlined-sandbox-wrap">
                   <iframe id="mail-sandbox" sandbox="" referrerpolicy="no-referrer" title="邮件正文预览"></iframe>

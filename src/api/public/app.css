@@ -1086,13 +1086,23 @@ button.mail-item {
   color: var(--text-muted);
 }
 
+.preview-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .subhead-hint,
 .preview-guard {
-  flex: 1;
-  min-width: 12em;
   margin: 0;
   font-size: 12px;
   color: var(--text-dim);
+}
+
+.preview-guard {
+  text-align: right;
+  white-space: nowrap;
 }
 
 .btn-sec-action:disabled {
