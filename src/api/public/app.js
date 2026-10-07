@@ -368,7 +368,7 @@ async function init() {
   } catch {
     showLogin();
   }
-  window.setInterval(() => void pollLive(), 30000);
+  window.setInterval(() => void pollLive(), 15000);
 }
 
 function setGlyph(el, name) {
