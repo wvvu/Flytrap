@@ -10,8 +10,9 @@ const LABEL_NAMES = {
 
 const VIEW_TITLES = {
   inbox: "收件箱",
+  spam: "Spam",
   trash: "垃圾桶",
-  dlq: "失败",
+  dlq: "处理失败",
   settings: "设置",
 };
 const STEP_NAMES = {
@@ -60,18 +61,25 @@ const logoutBtn = document.querySelector("#logout");
 const themeBtn = document.querySelector("#btn-theme");
 const themeIcon = document.querySelector("#theme-icon");
 
-// 导航按钮 (收件箱, 垃圾桶, 死信队列, 系统设置)
+// 导航按钮 (收件箱, Spam, 垃圾桶, 设置)
 const navInboxBtn = document.querySelector("#nav-inbox");
+const navSpamBtn = document.querySelector("#nav-spam");
 const navTrashBtn = document.querySelector("#nav-trash");
-const navDlqBtn = document.querySelector("#nav-dlq");
 const navSettingsBtn = document.querySelector("#nav-settings");
 const badgeDlq = document.querySelector("#badge-dlq");
+const inboxLabel = document.querySelector("#inbox-label");
+const spamLabel = document.querySelector("#spam-label");
+const badgeInbox = document.querySelector("#badge-inbox");
+const badgeSpam = document.querySelector("#badge-spam");
 
 // 第二列流头部
 const streamInboxHeader = document.querySelector("#stream-inbox-header");
+const streamSpamHeader = document.querySelector("#stream-spam-header");
 const streamTrashHeader = document.querySelector("#stream-trash-header");
 const streamDlqHeader = document.querySelector("#stream-dlq-header");
 const streamSettingsHeader = document.querySelector("#stream-settings-header");
+const filtersForm = document.querySelector("#filters");
+const mailEmptyCopy = document.querySelector("#mail-empty-copy");
 const trashQueryInput = document.querySelector("#trash-q");
 const trashRefreshBtn = document.querySelector("#btn-trash-refresh");
 const emptyTrashBtn = document.querySelector("#btn-empty-trash");
@@ -81,6 +89,7 @@ const queryInput = document.querySelector("#q");
 const labelInput = document.querySelector("#label");
 const filterSelect = document.querySelector("#filter-select");
 const refreshBtn = document.querySelector("#btn-refresh");
+const spamRefreshBtn = document.querySelector("#btn-spam-refresh");
 const dlqRefreshBtn = document.querySelector("#btn-dlq-refresh");
 const retryAllBtn = document.querySelector("#btn-retry-all");
 
@@ -145,11 +154,14 @@ logoutBtn.addEventListener("click", () => void signOut());
 themeBtn.addEventListener("click", () => toggleTheme());
 
 navInboxBtn?.addEventListener("click", () => switchNav("inbox"));
+navSpamBtn?.addEventListener("click", () => switchNav("spam"));
 navTrashBtn?.addEventListener("click", () => switchNav("trash"));
-navDlqBtn?.addEventListener("click", () => switchNav("dlq"));
 navSettingsBtn?.addEventListener("click", () => switchNav("settings"));
 
 refreshBtn?.addEventListener("click", () => void reloadMessages());
+spamRefreshBtn?.addEventListener("click", () => void reloadMessages());
+document.querySelector("#btn-open-dlq")?.addEventListener("click", () => switchNav("dlq"));
+document.querySelector("#btn-dlq-back")?.addEventListener("click", () => switchNav("settings"));
 trashRefreshBtn?.addEventListener("click", () => void reloadTrash());
 emptyTrashBtn?.addEventListener("click", () => void handleEmptyTrash());
 dlqRefreshBtn?.addEventListener("click", () => void loadDlqJobs());
@@ -244,7 +256,8 @@ document.querySelector("#filters")?.addEventListener("submit", (e) => {
 queryInput?.addEventListener("input", debounce(() => void reloadMessages(), 350));
 
 filterSelect?.addEventListener("change", () => {
-  labelInput.value = filterSelect.value;
+  if (currentView !== "spam") return;
+  syncListLabel();
   void reloadMessages();
 });
 
@@ -265,9 +278,9 @@ detailVerdictSelect?.addEventListener("change", async () => {
       detailModelVerdict.textContent = `(已改分类，原先为 ${origName})`;
     }
     const listItem = findByDataId(listEl, ".mail-item", selectedMailId);
-    const filter = currentView === "inbox" ? labelInput.value : "";
-    if (listItem && filter && newLabel !== filter) {
+    if (listItem && !staysInList(newLabel)) {
       listItem.remove();
+      currentMessages = currentMessages.filter((item) => item.id !== selectedMailId);
     } else if (listItem) {
       const tag = listItem.querySelector(".verdict-tag");
       if (tag) {
@@ -278,6 +291,7 @@ detailVerdictSelect?.addEventListener("change", async () => {
       }
     }
     noticeEl.textContent = "已改成 " + labelName(newLabel);
+    void refreshUnread();
     setTimeout(() => {
       if (noticeEl.textContent.startsWith("已改成")) noticeEl.textContent = "";
     }, 3000);
@@ -289,7 +303,7 @@ detailVerdictSelect?.addEventListener("change", async () => {
 });
 
 listEl.addEventListener("scroll", () => {
-  if (currentView === "inbox" || currentView === "trash") maybeLoadMore();
+  if (currentView === "inbox" || currentView === "spam" || currentView === "trash") maybeLoadMore();
 });
 
 // DLQ 状态胶囊点击
@@ -326,7 +340,7 @@ window.addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (confirmModal && !confirmModal.hidden) return;
   if (isTypingTarget(e.target)) return;
-  if (currentView === "inbox") {
+  if (currentView === "inbox" || currentView === "spam") {
     if (e.key === "j") navigateMail(1);
     else if (e.key === "k") navigateMail(-1);
     else if (e.key === "r") void reloadMessages();
@@ -350,6 +364,7 @@ async function init() {
     await loadAppearance();
     await switchNav("inbox");
     void updateDlqBadge();
+    void refreshUnread();
   } catch {
     showLogin();
   }
@@ -446,16 +461,66 @@ function setViewTitle(view) {
   if (panelTitle !== "Flytrap") document.title = panelTitle + " · " + document.title;
 }
 
+function placeMailSearch(view) {
+  if (!filtersForm) return;
+  if (view === "spam" && streamSpamHeader) streamSpamHeader.append(filtersForm);
+  else if (streamInboxHeader) streamInboxHeader.append(filtersForm);
+}
+
+function setEmptyCopy(view) {
+  if (!mailEmptyCopy) return;
+  if (view === "spam") mailEmptyCopy.textContent = "这里是 Spam。选全部才会看到正常来信。";
+  else if (view === "trash") mailEmptyCopy.textContent = "这里是垃圾桶。";
+  else mailEmptyCopy.textContent = "这里是收件箱，包含尚未分类的来信。其余在 Spam。";
+}
+
+function syncListLabel() {
+  if (!labelInput) return;
+  if (currentView === "inbox") labelInput.value = "legit";
+  else if (currentView === "spam") labelInput.value = filterSelect ? filterSelect.value : "not-legit";
+}
+
+function staysInList(newLabel) {
+  if (currentView === "inbox") return newLabel === "legit";
+  if (currentView !== "spam") return true;
+  const filter = filterSelect ? filterSelect.value : "not-legit";
+  if (!filter) return true;
+  if (filter === "not-legit") return Boolean(newLabel) && newLabel !== "legit";
+  return newLabel === filter;
+}
+
+function paintUnread(label, badge, count) {
+  const n = Number(count) || 0;
+  if (label) {
+    const base = label.dataset.base || "";
+    label.textContent = n > 0 ? base + "(" + n + ")" : base;
+  }
+  if (!badge) return;
+  badge.textContent = String(n);
+  badge.hidden = n < 1;
+}
+
+async function refreshUnread() {
+  try {
+    const counts = await request("/v1/unread");
+    paintUnread(inboxLabel, badgeInbox, counts.inbox);
+    paintUnread(spamLabel, badgeSpam, counts.spam);
+  } catch {
+    // The next poll tries again.
+  }
+}
+
 async function switchNav(view) {
   currentView = view;
   setViewTitle(view);
   if (appEl) delete appEl.dataset.layout;
-  const navBtns = [navInboxBtn, navTrashBtn, navDlqBtn, navSettingsBtn];
+  const navBtns = [navInboxBtn, navSpamBtn, navTrashBtn, navSettingsBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
   const viewPanels = [viewMail, viewDlq, viewSettings];
   viewPanels.forEach((p) => { if (p) p.hidden = true; });
 
   streamInboxHeader.hidden = true;
+  if (streamSpamHeader) streamSpamHeader.hidden = true;
   if (streamTrashHeader) streamTrashHeader.hidden = true;
   if (streamDlqHeader) streamDlqHeader.hidden = true;
   if (streamSettingsHeader) streamSettingsHeader.hidden = true;
@@ -466,11 +531,20 @@ async function switchNav(view) {
   cursor = null;
   loadingMore = false;
   setMobilePane("list");
+  placeMailSearch(view);
+  setEmptyCopy(view);
 
   if (view === "inbox") {
     navInboxBtn?.classList.add("active");
     streamInboxHeader.hidden = false;
     viewMail.hidden = false;
+    syncListLabel();
+    await reloadMessages();
+  } else if (view === "spam") {
+    navSpamBtn?.classList.add("active");
+    if (streamSpamHeader) streamSpamHeader.hidden = false;
+    viewMail.hidden = false;
+    syncListLabel();
     await reloadMessages();
   } else if (view === "trash") {
     navTrashBtn?.classList.add("active");
@@ -478,7 +552,7 @@ async function switchNav(view) {
     viewMail.hidden = false;
     await reloadTrash();
   } else if (view === "dlq") {
-    navDlqBtn?.classList.add("active");
+    navSettingsBtn?.classList.add("active");
     if (streamDlqHeader) streamDlqHeader.hidden = false;
     if (viewDlq) viewDlq.hidden = false;
     await loadDlqJobs(currentDlqScope);
@@ -513,7 +587,7 @@ async function reloadTrash() {
 }
 
 function maybeLoadMore() {
-  if (currentView !== "inbox" && currentView !== "trash") return;
+  if (currentView !== "inbox" && currentView !== "spam" && currentView !== "trash") return;
   if (!cursor || loadingMore) return;
   const remaining = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
   if (remaining < 280) void loadMoreMessages();
@@ -521,7 +595,7 @@ function maybeLoadMore() {
 
 async function loadMoreMessages() {
   if (!cursor || loadingMore) return;
-  if (currentView !== "inbox" && currentView !== "trash") return;
+  if (currentView !== "inbox" && currentView !== "spam" && currentView !== "trash") return;
   const previous = cursor;
   const beforeCount = currentMessages.length;
   loadingMore = true;
@@ -541,6 +615,7 @@ async function loadMessagesPage(replace) {
     if (tq) params.set("q", tq);
   } else {
     params.set("trashed", "false");
+    syncListLabel();
     if (labelInput.value) params.set("label", labelInput.value);
     const q = queryInput ? queryInput.value.trim() : "";
     if (q) params.set("q", q);
@@ -965,6 +1040,7 @@ async function handleTrashMail() {
   try {
     await request("/v1/messages/" + encodeURIComponent(id) + "/trash", { method: "POST", body: {} });
     noticeEl.textContent = "邮件已移入垃圾桶";
+    void refreshUnread();
     setTimeout(() => { if (noticeEl.textContent === "邮件已移入垃圾桶") noticeEl.textContent = ""; }, 3000);
     const card = findByDataId(listEl, ".mail-item", id);
     if (card) card.remove();
@@ -991,8 +1067,9 @@ async function handleRestoreMail() {
   if (btnRestoreMail) btnRestoreMail.disabled = true;
   try {
     await request("/v1/messages/" + encodeURIComponent(id) + "/restore", { method: "POST", body: {} });
-    noticeEl.textContent = "邮件已恢复至收件箱";
-    setTimeout(() => { if (noticeEl.textContent === "邮件已恢复至收件箱") noticeEl.textContent = ""; }, 3000);
+    noticeEl.textContent = "已从垃圾桶恢复";
+    void refreshUnread();
+    setTimeout(() => { if (noticeEl.textContent === "已从垃圾桶恢复") noticeEl.textContent = ""; }, 3000);
     const card = findByDataId(listEl, ".mail-item", id);
     if (card) card.remove();
     currentMessages = currentMessages.filter((m) => m.id !== id);
@@ -1020,6 +1097,7 @@ async function handleDeleteMail() {
   try {
     await request("/v1/messages/" + encodeURIComponent(id), { method: "DELETE" });
     noticeEl.textContent = "邮件已彻底删除";
+    void refreshUnread();
     setTimeout(() => { if (noticeEl.textContent === "邮件已彻底删除") noticeEl.textContent = ""; }, 3000);
     const card = findByDataId(listEl, ".mail-item", id);
     if (card) card.remove();
@@ -1801,7 +1879,7 @@ function applyAppearance(settings) {
   for (const select of [filterSelect, detailVerdictSelect]) {
     if (!select) continue;
     for (const option of select.options) {
-      if (!option.value) continue;
+      if (!option.value || !LABEL_NAMES[option.value]) continue;
       option.textContent = labelName(option.value);
     }
   }
@@ -2268,13 +2346,15 @@ async function fetchCsrf(force) {
 async function pollLive() {
   if (document.hidden || appEl.hidden) return;
   void updateDlqBadge();
-  if (currentView !== "inbox" && currentView !== "trash") return;
+  void refreshUnread();
+  if (currentView !== "inbox" && currentView !== "spam" && currentView !== "trash") return;
   if (currentMessages.length > 40) return;
   try {
     const params = new URLSearchParams();
     params.set("trashed", currentView === "trash" ? "true" : "false");
     params.set("limit", "40");
-    if (currentView === "inbox" && labelInput.value) params.set("label", labelInput.value);
+    syncListLabel();
+    if ((currentView === "inbox" || currentView === "spam") && labelInput.value) params.set("label", labelInput.value);
     const q = currentView === "trash" ? (trashQueryInput ? trashQueryInput.value.trim() : "") : (queryInput ? queryInput.value.trim() : "");
     if (q) params.set("q", q);
     const page = await request("/v1/messages?" + params.toString());
@@ -2380,7 +2460,9 @@ function markOpened(id) {
   if (card) card.classList.remove("unread");
   const known = currentMessages.find((item) => item.id === id);
   if (known) known.read = true;
-  void request("/v1/messages/" + encodeURIComponent(id) + "/read", { method: "POST", body: {} }).catch(() => undefined);
+  void request("/v1/messages/" + encodeURIComponent(id) + "/read", { method: "POST", body: {} })
+    .then(() => refreshUnread())
+    .catch(() => undefined);
 }
 
 async function savePassword() {

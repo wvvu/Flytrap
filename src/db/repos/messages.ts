@@ -208,6 +208,8 @@ export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] 
   }
   if (query.label === "legit") {
     where.push("(json_extract(ai_result, '$.label') = 'legit' OR json_extract(ai_result, '$.label') IS NULL)");
+  } else if (query.label === "not-legit") {
+    where.push("(json_extract(ai_result, '$.label') IS NOT NULL AND json_extract(ai_result, '$.label') != 'legit')");
   } else if (query.label) {
     where.push("json_extract(ai_result, '$.label') = :label");
     params.label = query.label;
@@ -371,4 +373,21 @@ function deleteUnlinkedAttachments(db: Db): void {
 export function countTrash(db: Db): number {
   const row = db.prepare("SELECT COUNT(*) AS c FROM messages WHERE trashed_at IS NOT NULL").get() as { c: number };
   return row ? row.c : 0;
+}
+
+export function countUnread(db: Db): { inbox: number; spam: number } {
+  const row = db
+    .prepare(
+      `SELECT
+         SUM(CASE
+           WHEN json_extract(ai_result, '$.label') IS NULL OR json_extract(ai_result, '$.label') = 'legit'
+           THEN 1 ELSE 0 END) AS inbox,
+         SUM(CASE
+           WHEN json_extract(ai_result, '$.label') IS NOT NULL AND json_extract(ai_result, '$.label') != 'legit'
+           THEN 1 ELSE 0 END) AS spam
+       FROM messages
+       WHERE trashed_at IS NULL AND read_at IS NULL`,
+    )
+    .get() as { inbox: number | null; spam: number | null } | undefined;
+  return { inbox: row?.inbox ?? 0, spam: row?.spam ?? 0 };
 }

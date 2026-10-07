@@ -302,21 +302,20 @@ input:focus, select:focus, textarea:focus {
 }
 
 .logo-mark {
-  width: 42px;
-  height: 42px;
+  width: 52px;
+  height: 52px;
   background: transparent;
   color: var(--text-main);
-  border: 1px solid var(--border-strong);
-  border-radius: 2px;
+  border: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .logo-mark .ico {
-  width: 20px;
-  height: 20px;
+  width: 30px;
+  height: 30px;
 }
 
 .rail-btn {
@@ -352,6 +351,11 @@ input:focus, select:focus, textarea:focus {
   font-size: 10px;
   font-weight: 500;
   color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.rail-btn .badge-count {
+  display: none;
 }
 
 .rail-btn:hover {
@@ -689,7 +693,10 @@ button.mail-item {
 .verdict-select {
   font-size: 12px;
   font-weight: 600;
-  padding: 3px 8px;
+  position: relative;
+  top: 4px;
+  padding: 4px 8px;
+  line-height: 1.3;
   border-radius: 6px;
   border: 1px solid transparent;
   cursor: pointer;
@@ -1910,6 +1917,7 @@ input.field-narrow {
   .logo-mark { display: none; }
   .rail-btn { width: 52px; height: 46px; }
   .rail-btn .label { display: none; }
+  .rail-btn .badge-count { display: inline; }
 
   .stream,
   .workspace {

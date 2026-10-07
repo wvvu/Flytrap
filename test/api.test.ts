@@ -135,6 +135,12 @@ test("the api requires a session, hides paths, and pages the list", async () => 
     assert.equal((needle.json() as { items: unknown[] }).items.length, 0);
     const bySubject = await client.get(app, "/v1/messages?q=invoice&label=phish");
     assert.equal((bySubject.json() as { items: Array<{ id: string }> }).items[0]?.id, "msg_visible");
+    const junk = await client.get(app, "/v1/messages?label=not-legit");
+    const junkIds = (junk.json() as { items: Array<{ id: string }> }).items.map((item) => item.id);
+    assert.equal(junkIds.includes("msg_visible"), true);
+    assert.equal(junkIds.includes("msg_hidden"), false);
+    const badLabel = await client.get(app, "/v1/messages?label=nope");
+    assert.equal(badLabel.statusCode, 400);
 
     const detail = await client.get(app, "/v1/messages/msg_visible");
     const body = detail.json() as { parsed: { text: string }; aiResult: { raw: { secret: boolean } }; rawPath?: string };
@@ -505,11 +511,18 @@ test("settings override notify, domains, and the failure list", async () => {
     const unread = await client.get(app, "/v1/messages?limit=10");
     const unreadItems = unread.json().items as Array<{ id: string; read: boolean }>;
     assert.equal(unreadItems.find((item) => item.id === "msg-1")?.read, false);
+    const counts = await client.get(app, "/v1/unread");
+    assert.equal(counts.statusCode, 200);
+    const before = counts.json() as { inbox: number; spam: number };
+    assert.equal(before.inbox >= 1, true);
     const seen = await client.post(app, "/v1/messages/msg-1/read", {});
     assert.equal(seen.statusCode, 200);
     const read = await client.get(app, "/v1/messages?limit=10");
     const readItems = read.json().items as Array<{ id: string; read: boolean }>;
     assert.equal(readItems.find((item) => item.id === "msg-1")?.read, true);
+    const after = (await client.get(app, "/v1/unread")).json() as { inbox: number; spam: number };
+    assert.equal(after.inbox, before.inbox - 1);
+    assert.equal(after.spam, before.spam);
     const insertJob = (id: string, type: string, status: string, attempts: number) => {
       db.prepare(
         `INSERT INTO jobs (id, type, message_id, status, attempts, max_attempts, run_after, last_error, created_at, updated_at)

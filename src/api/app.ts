@@ -19,7 +19,7 @@ import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, 
 import { fallbackAiPool } from "../ai/pool.js";
 import { presentAiPool, readAiEnabled, readAiThinking, readEffectiveAiPool, readPasswordHash, saveAcceptDomains, saveAiControls, saveAiPool, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
 import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
-import { countTrash, deleteMessage, emptyTrash, getMessage, listMessages, markMessageRead, restoreMessage, trashMessage } from "../db/repos/messages.js";
+import { countTrash, countUnread, deleteMessage, emptyTrash, getMessage, listMessages, markMessageRead, restoreMessage, trashMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
 import { readRaw } from "../ingest/read-raw.js";
 import { removeStoredFiles } from "../ingest/remove-stored.js";
@@ -224,6 +224,8 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.get("/v1/me", async (request) => ({ user: request.session.user }));
+
+  app.get("/v1/unread", async () => countUnread(db));
 
   app.get("/v1/messages", async (request) => {
     const query = readListQuery(request.query);
@@ -858,7 +860,7 @@ function readListQuery(query: unknown): {
   const until = optionalString(source.until);
   const limitRaw = optionalString(source.limit);
   const cursor = optionalString(source.cursor);
-  if (label && !LABELS.includes(label as (typeof LABELS)[number])) throw new HttpError(400);
+  if (label && label !== "not-legit" && !LABELS.includes(label as (typeof LABELS)[number])) throw new HttpError(400);
   if (status && !STATUSES.includes(status as (typeof STATUSES)[number])) throw new HttpError(400);
   if (q && q.length > 200) throw new HttpError(400);
   let limit = 50;
