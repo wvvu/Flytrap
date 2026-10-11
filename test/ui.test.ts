@@ -97,9 +97,14 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /class="btn-fit"/);
     assert.match(script.body, /document\.title = "登录"/);
     assert.match(script.body, /document\.title = VIEW_TITLES\[view\]/);
-    assert.match(script.body, /document\.title \+= " \(" \+ unreadCounts\.inbox \+ "\)"/);
-    assert.match(script.body, /收件箱 \(" \+ unreadCounts\.inbox \+ "\)/);
+    assert.match(script.body, /document\.title \+= " \(" \+ unreadInbox \+ "\)"/);
+    assert.match(script.body, /收件箱 \(" \+ unreadInbox \+ "\)/);
+    assert.equal(script.body.includes("unreadCounts.spam"), false);
     assert.equal(script.body.includes('base + "("'), false);
+    const settingsBranch = script.body.slice(script.body.indexOf('view === "settings"'));
+    const navAt = settingsBranch.indexOf("renderSettingsNav()");
+    const loadAt = settingsBranch.indexOf("await loadSettingsPage()");
+    assert.ok(navAt > 0 && loadAt > navAt);
     assert.match(script.body, /is-booting/);
     assert.match(script.body, /身份检查/);
     assert.match(script.body, /重分类/);

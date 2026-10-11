@@ -52,7 +52,7 @@ let csrfToken = null;
 let toastTimer = 0;
 let currentPromptId = "classify-v1";
 let holdBoot = false;
-let unreadCounts = { inbox: 0, spam: 0 };
+let unreadInbox = 0;
 
 // DOM 元素引用
 const appEl = document.querySelector("#app");
@@ -70,7 +70,6 @@ const navTrashBtn = document.querySelector("#nav-trash");
 const navSettingsBtn = document.querySelector("#nav-settings");
 const badgeDlq = document.querySelector("#badge-dlq");
 const streamTitle = document.querySelector("#stream-title");
-const streamSpamTitle = document.querySelector("#stream-spam-title");
 
 // 第二列流头部
 const streamInboxHeader = document.querySelector("#stream-inbox-header");
@@ -469,15 +468,9 @@ function showApp() {
 
 function setViewTitle(view) {
   document.title = VIEW_TITLES[view] || "收件箱";
-  if (view === "inbox" && unreadCounts.inbox > 0) document.title += " (" + unreadCounts.inbox + ")";
-  else if (view === "spam" && unreadCounts.spam > 0) document.title += " (" + unreadCounts.spam + ")";
-  const extra = [];
-  if (view !== "inbox" && unreadCounts.inbox > 0) extra.push("收件箱 (" + unreadCounts.inbox + ")");
-  if (view !== "spam" && unreadCounts.spam > 0) extra.push("Spam (" + unreadCounts.spam + ")");
-  if (extra.length) document.title += " · " + extra.join(" · ");
+  if (view === "inbox" && unreadInbox > 0) document.title += " (" + unreadInbox + ")";
   if (panelTitle !== "Flytrap") document.title = panelTitle + " · " + document.title;
-  if (streamTitle) streamTitle.textContent = unreadCounts.inbox > 0 ? "收件箱 (" + unreadCounts.inbox + ")" : "收件箱";
-  if (streamSpamTitle) streamSpamTitle.textContent = unreadCounts.spam > 0 ? "Spam (" + unreadCounts.spam + ")" : "Spam";
+  if (streamTitle) streamTitle.textContent = unreadInbox > 0 ? "收件箱 (" + unreadInbox + ")" : "收件箱";
 }
 
 function placeMailSearch(view) {
@@ -511,10 +504,7 @@ function staysInList(newLabel) {
 async function refreshUnread() {
   try {
     const counts = await request("/v1/unread");
-    unreadCounts = {
-      inbox: Number(counts.inbox) || 0,
-      spam: Number(counts.spam) || 0,
-    };
+    unreadInbox = Number(counts.inbox) || 0;
     if (appEl && !appEl.hidden) setViewTitle(currentView);
   } catch {
     // The next poll tries again.
@@ -571,9 +561,9 @@ async function switchNav(view) {
     navSettingsBtn?.classList.add("active");
     if (streamSettingsHeader) streamSettingsHeader.hidden = false;
     if (viewSettings) viewSettings.hidden = false;
-    await loadSettingsPage();
     renderSettingsNav();
     showSettingsSection(currentSettingsSection, { keepListOnNarrow: true });
+    await loadSettingsPage();
   }
 }
 
@@ -1533,7 +1523,6 @@ async function loadSettingsPage() {
     const thinking = document.querySelector("#ai-thinking");
     if (thinking) thinking.value = settings.aiThinking || "low";
     renderAiEditors(settings.aiPool || {});
-    renderSettingsNav();
   } catch (err) {
     toast(explain(err));
   }
