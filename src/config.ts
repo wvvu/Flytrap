@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { defaultPromptsDir } from "./paths.js";
@@ -25,6 +26,7 @@ const draftSchema = z.object({
   smtpHost: z.string().min(1),
   smtpPort: z.number().int().min(1).max(65535),
   smtpBanner: z.string().min(1).max(200),
+  smtpEhlo: z.string().min(1).max(253),
   smtpMaxBytes: z.number().int().min(1024).max(100 * 1024 * 1024),
   smtpTlsKeyFile: z.string().optional(),
   smtpTlsCertFile: z.string().optional(),
@@ -100,6 +102,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     smtpHost: pick(env, "SMTP_HOST", "0.0.0.0"),
     smtpPort: pickInt(env, "SMTP_PORT", 25),
     smtpBanner: pick(env, "SMTP_BANNER", "mx"),
+    smtpEhlo: pickEhlo(env, pick(env, "SMTP_BANNER", "mx")),
     smtpMaxBytes: pickInt(env, "SMTP_MAX_BYTES", 20 * 1024 * 1024),
     smtpTlsKeyFile: pickOpt(env, "SMTP_TLS_KEY_FILE"),
     smtpTlsCertFile: pickOpt(env, "SMTP_TLS_CERT_FILE"),
@@ -193,6 +196,15 @@ function assertRoleRequirements(config: z.infer<typeof draftSchema>): void {
     problems.push("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must both be set, or both be empty");
   }
   if (problems.length > 0) throw new ConfigError(problems.join("\n"));
+}
+
+function pickEhlo(env: NodeJS.ProcessEnv, banner: string): string {
+  const explicit = pickOpt(env, "SMTP_EHLO");
+  if (explicit) return explicit.slice(0, 253);
+  const lower = banner.toLowerCase();
+  if (DOMAIN_RE.test(lower)) return lower;
+  const host = hostname().trim();
+  return (host || "localhost").slice(0, 253);
 }
 
 function parseRoles(raw: string): Array<(typeof ROLES)[number]> {

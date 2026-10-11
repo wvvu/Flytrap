@@ -1809,6 +1809,31 @@ input.field-narrow {
   min-width: 0;
 }
 
+.send-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.send-note {
+  margin: 0;
+  color: var(--spam);
+  font-size: 14px;
+}
+
+.send-item {
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.send-item p {
+  margin: 0;
+}
+
 .letter-list {
   display: flex;
   flex-direction: column;

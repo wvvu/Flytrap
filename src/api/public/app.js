@@ -21,8 +21,9 @@ const STEP_NAMES = {
   classify: "分拣",
   notify: "提醒",
   rebuild: "重建",
+  send: "发信",
 };
-const STEP_ORDER = ["auth", "parse", "classify", "notify", "rebuild"];
+const STEP_ORDER = ["auth", "parse", "classify", "notify", "rebuild", "send"];
 
 let currentTab = "ai";
 let currentView = "inbox";
@@ -54,6 +55,7 @@ let currentPromptId = "classify-v1";
 let holdBoot = false;
 let unreadInbox = 0;
 let blockedSenders = [];
+let dkimKeys = [];
 let currentFromAddress = "";
 
 // DOM 元素引用
@@ -204,6 +206,21 @@ document.querySelector("#notify-confidence")?.addEventListener("input", syncNoti
 document.querySelector("#btn-save-attempts")?.addEventListener("click", () => void saveAttemptSettings());
 document.querySelector("#job-max-attempts")?.addEventListener("input", syncAttemptSave);
 document.querySelector("#btn-add-domain")?.addEventListener("click", () => void addDomain());
+document.querySelector("#btn-refresh-send")?.addEventListener("click", () => void loadSendSection());
+document.querySelector("#send-form")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void submitSend();
+});
+document.querySelector("#send-from")?.addEventListener("input", refreshSendNote);
+document.querySelector("#btn-dkim-generate")?.addEventListener("click", () => {
+  const input = document.querySelector("#dkim-domain");
+  const domain = input ? input.value.trim().toLowerCase() : "";
+  if (!domain) {
+    toast("请填写域名");
+    return;
+  }
+  void generateDkim(domain);
+});
 document.querySelector("#btn-add-block")?.addEventListener("click", () => void addBlocked());
 document.querySelector("#block-add")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -1572,6 +1589,7 @@ async function loadSettingsPage() {
     if (thinking) thinking.value = settings.aiThinking || "low";
     renderAiEditors(settings.aiPool || {});
     renderBlockList(settings.blockedSenders || []);
+    await loadSendSection();
   } catch (err) {
     toast(explain(err));
   }
@@ -1582,6 +1600,7 @@ const SETTING_SECTIONS = [
   ["model", "模型"],
   ["account", "账号"],
   ["domains", "收信"],
+  ["send", "发信"],
   ["mailboxes", "地址"],
   ["block", "黑名单"],
   ["notify", "提醒"],
@@ -1619,6 +1638,7 @@ function showSettingsSection(id, options = {}) {
   }
   if (!options.keepListOnNarrow) setMobilePane("detail");
   if (id === "logs") void loadLogs();
+  if (id === "send") void loadSendSection();
 }
 
 function describeAi(ai) {
@@ -2382,6 +2402,196 @@ async function saveAiSettings() {
     toast("模型已保存");
   } catch (err) {
     toast("保存模型失败: " + explain(err));
+  }
+}
+
+async function loadSendSection() {
+  try {
+    const [keys, box] = await Promise.all([request("/v1/dkim"), request("/v1/outbox")]);
+    dkimKeys = Array.isArray(keys.items) ? keys.items : [];
+    renderDkim(dkimKeys);
+    renderOutbox(Array.isArray(box.items) ? box.items : []);
+    refreshSendNote();
+  } catch (err) {
+    toast("读取发信失败: " + explain(err));
+  }
+}
+
+function refreshSendNote() {
+  const note = document.querySelector("#send-domain-note");
+  const input = document.querySelector("#send-from");
+  if (!note || !input) return;
+  const from = normalizeAddress(extractEmail(input.value));
+  const domain = from.includes("@") ? from.split("@")[1] : "";
+  note.hidden = !from || settingsDomains.includes(domain);
+}
+
+async function submitSend() {
+  const fromInput = document.querySelector("#send-from");
+  const toInput = document.querySelector("#send-to");
+  const subjectInput = document.querySelector("#send-subject");
+  const textInput = document.querySelector("#send-text");
+  const button = document.querySelector("#btn-send");
+  const from = normalizeAddress(extractEmail(fromInput ? fromInput.value : ""));
+  const to = splitAddresses(toInput ? toInput.value : "").map((item) => normalizeAddress(extractEmail(item))).filter(Boolean);
+  if (!from || to.length === 0) {
+    toast("请填写发件和收件");
+    return;
+  }
+  if (to.length > 20) {
+    toast("收件太多");
+    return;
+  }
+  if (button) button.disabled = true;
+  try {
+    const queued = await request("/v1/outbox", {
+      method: "POST",
+      body: {
+        from,
+        to,
+        subject: subjectInput ? subjectInput.value : "",
+        text: textInput ? textInput.value : "",
+      },
+    });
+    if (toInput) toInput.value = "";
+    if (subjectInput) subjectInput.value = "";
+    if (textInput) textInput.value = "";
+    toast(queued.dkim === "signed" ? "已排队，并签了 DKIM" : "已排队，没有签名");
+    await loadSendSection();
+  } catch (err) {
+    toast("发出失败: " + explain(err));
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function splitAddresses(raw) {
+  return String(raw || "").split(/[,;\s]+/).map((part) => part.trim()).filter(Boolean);
+}
+
+function renderOutbox(items) {
+  const host = document.querySelector("#outbox-list");
+  const empty = document.querySelector("#outbox-empty");
+  if (!host) return;
+  host.replaceChildren();
+  if (empty) empty.hidden = items.length > 0;
+  for (const item of items) host.append(outboxItem(item));
+}
+
+function outboxItem(item) {
+  const row = document.createElement("div");
+  row.className = "send-item";
+  const subject = document.createElement("strong");
+  subject.textContent = item.subject || "（无主题）";
+  const who = document.createElement("p");
+  who.className = "muted";
+  const to = Array.isArray(item.to) ? item.to.join(", ") : "";
+  who.textContent = `${item.from || ""} → ${to}`;
+  const state = document.createElement("p");
+  state.textContent = `${outboxStatus(item)} · ${item.dkim === "signed" ? "已签名" : "未签名"}`;
+  row.append(subject, who, state);
+  if (item.error) {
+    const error = document.createElement("p");
+    error.className = "muted";
+    error.textContent = item.error;
+    row.append(error);
+  }
+  return row;
+}
+
+function outboxStatus(item) {
+  if (item.status === "sent") return "已发出";
+  if (item.status === "error") return "失败";
+  if (item.error) return "还会再试";
+  return "排队中";
+}
+
+function renderDkim(keys) {
+  const host = document.querySelector("#dkim-list");
+  if (!host) return;
+  host.replaceChildren();
+  const domains = new Set(settingsDomains);
+  for (const key of keys) domains.add(key.domain);
+  const ordered = [...domains].sort();
+  if (ordered.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "还没有域名。";
+    host.append(empty);
+    return;
+  }
+  for (const domain of ordered) {
+    const matches = keys.filter((key) => key.domain === domain);
+    host.append(dkimRow(domain, matches));
+  }
+}
+
+function dkimRow(domain, keys) {
+  const row = document.createElement("div");
+  row.className = "send-item";
+  const title = document.createElement("strong");
+  title.textContent = domain;
+  row.append(title);
+  if (keys.length === 0) {
+    const missing = document.createElement("p");
+    missing.className = "muted";
+    missing.textContent = "还没有密钥";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn-fit";
+    button.textContent = "生成密钥";
+    button.addEventListener("click", () => void generateDkim(domain));
+    row.append(missing, button);
+    return row;
+  }
+  for (const key of keys) {
+    const line = document.createElement("p");
+    line.className = "muted";
+    line.textContent = key.dnsName || key.selector;
+    const actions = document.createElement("div");
+    actions.className = "inline-row";
+    actions.append(
+      dkimButton("复制记录", () => void copyText(`${key.dnsName}\n${key.txt}`)),
+      dkimButton("重新生成", () => void generateDkim(domain, key.selector)),
+      dkimButton("移除", () => void removeDkim(domain, key.selector)),
+    );
+    row.append(line, actions);
+  }
+  return row;
+}
+
+function dkimButton(label, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn-fit ghost";
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+async function generateDkim(domain, selector) {
+  const name = (selector || "flytrap").trim().toLowerCase();
+  const exists = dkimKeys.some((key) => key.domain === domain && key.selector === name);
+  if (exists && !(await askConfirm("重新生成后，原来的 DNS 记录要换成新的。"))) return;
+  try {
+    await request("/v1/dkim", { method: "POST", body: selector ? { domain, selector: name } : { domain } });
+    const extra = document.querySelector("#dkim-domain");
+    if (extra && extra.value.trim().toLowerCase() === domain) extra.value = "";
+    toast("密钥已生成");
+    await loadSendSection();
+  } catch (err) {
+    toast("生成密钥失败: " + explain(err));
+  }
+}
+
+async function removeDkim(domain, selector) {
+  if (!(await askConfirm("移除这把密钥？之后发出的信不再签名。"))) return;
+  try {
+    await request("/v1/dkim/remove", { method: "POST", body: { domain, selector } });
+    toast("密钥已移除");
+    await loadSendSection();
+  } catch (err) {
+    toast("移除密钥失败: " + explain(err));
   }
 }
 

@@ -30,6 +30,11 @@ test("accept domains are normalized and wildcards are rejected", () => {
   assert.throws(() => parseAcceptDomains("not a domain"), ConfigError);
 });
 
+test("the ehlo name follows an explicit value, then a domain banner", () => {
+  assert.equal(loadConfig(env({ SMTP_EHLO: "mail.example.com" })).smtpEhlo, "mail.example.com");
+  assert.equal(loadConfig(env({ SMTP_BANNER: "mail.example.com" })).smtpEhlo, "mail.example.com");
+});
+
 test("smtp-only config loads without an api password", () => {
   const config = loadConfig(env());
   assert.deepEqual(config.roles, ["smtp"]);

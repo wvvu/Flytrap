@@ -427,6 +427,45 @@
               </div>
             </section>
 
+            <section class="block" id="set-send" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>发信</h2>
+                  <p class="muted">先存原文，再排队发出。收信域名上若有密钥就签 DKIM，没有密钥也发。未添加的域名不拦截，发出前提示。</p>
+                </div>
+                <button type="button" id="btn-refresh-send" class="btn-fit ghost">刷新</button>
+              </div>
+              <form id="send-form" class="send-form">
+                <label class="name-row">
+                  <span class="name-key">发件</span>
+                  <input id="send-from" maxlength="254" autocomplete="off" required>
+                </label>
+                <p id="send-domain-note" class="send-note" hidden>这个域名还没加入收信域名。仍然可以发出。</p>
+                <label class="name-row">
+                  <span class="name-key">收件</span>
+                  <input id="send-to" maxlength="2000" autocomplete="off" required placeholder="多个地址用逗号分开">
+                </label>
+                <label class="name-row">
+                  <span class="name-key">主题</span>
+                  <input id="send-subject" maxlength="200" autocomplete="off">
+                </label>
+                <textarea id="send-text" rows="8" class="code-editor" maxlength="100000" placeholder="正文"></textarea>
+                <div class="inline-row">
+                  <button type="submit" id="btn-send" class="btn-fit">发出</button>
+                </div>
+              </form>
+              <h3 class="field-title">最近发出</h3>
+              <div id="outbox-list" class="domain-list"></div>
+              <p id="outbox-empty" class="muted">还没有发出的信。</p>
+              <h3 class="field-title">DKIM</h3>
+              <p class="muted">生成后把记录加到域名的 DNS。换密钥后要改同一条记录。没有记录时照常发信。</p>
+              <div id="dkim-list" class="domain-list"></div>
+              <div class="inline-row">
+                <input id="dkim-domain" placeholder="未添加的域名" autocomplete="off" maxlength="253">
+                <button type="button" id="btn-dkim-generate" class="btn-fit">生成密钥</button>
+              </div>
+            </section>
+
             <section class="block" id="set-jobs" hidden>
               <div class="block-head">
                 <div>

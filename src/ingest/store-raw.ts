@@ -12,6 +12,8 @@ export interface StoreRawInput {
   codec: Codec;
   /** Relative path already recorded for this hash. Skip the write when it still matches. */
   existingRelativePath?: string | null;
+  /** sent/ is outbound mail. rebuild only scans raw/, so a sent letter is not received again. */
+  area?: "raw" | "sent";
 }
 
 export interface StoreRawResult {
@@ -29,7 +31,7 @@ export async function storeRaw(input: StoreRawInput): Promise<StoreRawResult> {
     return { sha256: hash, relativePath: toPosix(input.existingRelativePath), duplicate: true, sizeBytes };
   }
 
-  const relativePath = rawRelativePath(hash, input.receivedAtMs, input.codec.rawExtension);
+  const relativePath = rawRelativePath(hash, input.receivedAtMs, input.codec.rawExtension, input.area ?? "raw");
   const dest = resolveInside(input.dataDir, relativePath);
   try {
     const existing = await readFile(dest);
@@ -54,12 +56,17 @@ export async function storeRaw(input: StoreRawInput): Promise<StoreRawResult> {
   return { sha256: hash, relativePath, duplicate: false, sizeBytes };
 }
 
-export function rawRelativePath(hash: string, receivedAtMs: number, extension: string): string {
+export function rawRelativePath(
+  hash: string,
+  receivedAtMs: number,
+  extension: string,
+  area: "raw" | "sent" = "raw",
+): string {
   const when = new Date(receivedAtMs);
   const yyyy = String(when.getUTCFullYear());
   const mm = String(when.getUTCMonth() + 1).padStart(2, "0");
   const { h0, h1 } = sha256FileParts(hash);
-  return ["raw", yyyy, mm, h0, h1, `${hash}${extension}`].join("/");
+  return [area, yyyy, mm, h0, h1, `${hash}${extension}`].join("/");
 }
 
 export function attachmentRelativePath(hash: string): string {
