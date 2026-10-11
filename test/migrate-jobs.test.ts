@@ -38,7 +38,7 @@ test("migration is idempotent and jobs are claimed atomically", () => {
     insertMessage(db, {
       id: "msg_1",
       sha256: "ab".repeat(32),
-      rawPath: "raw/2026/09/ab/cd/" + "ab".repeat(32) + ".eml.gz",
+      rawPath: "raw/2026/09/ab/" + "ab".repeat(32) + ".eml.gz",
       sizeBytes: 12,
       receivedAt: 10,
       envelopeFrom: "",

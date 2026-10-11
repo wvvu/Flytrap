@@ -65,8 +65,8 @@ export function rawRelativePath(
   const when = new Date(receivedAtMs);
   const yyyy = String(when.getUTCFullYear());
   const mm = String(when.getUTCMonth() + 1).padStart(2, "0");
-  const { h0, h1 } = sha256FileParts(hash);
-  return [area, yyyy, mm, h0, h1, `${hash}${extension}`].join("/");
+  const { h0 } = sha256FileParts(hash);
+  return [area, yyyy, mm, h0, `${hash}${extension}`].join("/");
 }
 
 export function attachmentRelativePath(hash: string): string {

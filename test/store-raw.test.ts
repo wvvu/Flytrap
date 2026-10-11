@@ -23,7 +23,7 @@ test("the same bytes land once", async () => {
     assert.equal(first.duplicate, false);
     assert.equal(second.duplicate, true);
     assert.equal(first.sha256, second.sha256);
-    assert.match(first.relativePath, /^raw\/2026\/09\/[0-9a-f]{2}\/[0-9a-f]{2}\/[0-9a-f]{64}\.eml\.gz$/);
+    assert.match(first.relativePath, /^raw\/2026\/09\/[0-9a-f]{2}\/[0-9a-f]{64}\.eml\.gz$/);
 
     const monthDir = path.join(dir, "raw", "2026", "09");
     const files = await walk(monthDir);
