@@ -79,6 +79,10 @@ test("migration is idempotent and jobs are claimed atomically", () => {
     const retried = claimJob(db, "worker-5", 70 + 60_000);
     assert.equal(retried?.id, "job_c");
     assert.equal(failJob(db, "job_c", "dns timeout", 80), "dead");
+
+    enqueueJob(db, { id: "job_send", type: "send", now: 90 });
+    assert.equal(claimJob(db, "worker-legacy", 90, ["auth", "parse"]), undefined);
+    assert.equal(claimJob(db, "worker-new", 90, ["send"])?.id, "job_send");
   } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

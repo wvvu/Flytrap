@@ -59,9 +59,30 @@ export function enqueueJob(db: Db, input: EnqueueInput): void {
   );
 }
 
-/** One statement. Two workers cannot receive the same row. */
-export function claimJob(db: Db, workerId: string, now: number): JobRow | undefined {
-  return db.prepare(CLAIM_SQL).get(now, workerId, now, now) as JobRow | undefined;
+/** One statement. Two workers cannot receive the same row. Supports type filtering. */
+export function claimJob(
+  db: Db,
+  workerId: string,
+  now: number,
+  types?: readonly string[],
+): JobRow | undefined {
+  if (types && types.length === 0) return undefined;
+  if (!types) {
+    return db.prepare(CLAIM_SQL).get(now, workerId, now, now) as JobRow | undefined;
+  }
+  const placeholders = types.map(() => "?").join(",");
+  const sql = `
+UPDATE jobs
+SET status = 'running', locked_at = ?, locked_by = ?, updated_at = ?
+WHERE id = (
+  SELECT id FROM jobs
+  WHERE status = 'queued' AND run_after <= ? AND type IN (${placeholders})
+  ORDER BY created_at ASC
+  LIMIT 1
+)
+RETURNING *
+`;
+  return db.prepare(sql).get(now, workerId, now, now, ...types) as JobRow | undefined;
 }
 
 export function completeJob(db: Db, id: string, now: number): void {

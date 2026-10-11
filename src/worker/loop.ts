@@ -61,7 +61,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
 
   const loop = (async () => {
     while (!stopped) {
-      const job = claimJob(options.db, workerId, now());
+      const job = claimJob(options.db, workerId, now(), SUPPORTED_JOB_TYPES);
       if (!job) {
         await interruptibleSleep(pollMs, (wake) => {
           wakeSleep = wake;
@@ -102,7 +102,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
 /** Claim and run a single job. Returns false when the queue is empty. */
 export async function processNext(options: WorkerOptions, workerId: string): Promise<boolean> {
   const now = options.now ?? Date.now;
-  const job = claimJob(options.db, workerId, now());
+  const job = claimJob(options.db, workerId, now(), SUPPORTED_JOB_TYPES);
   if (!job) return false;
   await runClaimed(options, job, now);
   return true;
@@ -132,9 +132,11 @@ async function runClaimed(options: WorkerOptions, job: JobRow, now: () => number
   }
 }
 
-async function dispatch(options: WorkerOptions, job: JobRow, now: () => number): Promise<void> {
-  if (job.type === "auth") {
-    await runAuthJob(
+type JobHandler = (options: WorkerOptions, job: JobRow, now: () => number) => Promise<void>;
+
+const JOB_HANDLERS: Record<string, JobHandler> = {
+  auth: (options, job, now) =>
+    runAuthJob(
       {
         db: options.db,
         dataDir: options.dataDir,
@@ -145,25 +147,19 @@ async function dispatch(options: WorkerOptions, job: JobRow, now: () => number):
         now,
       },
       job,
-    );
-    return;
-  }
-  if (job.type === "parse") {
-    await runParseJob(
+    ),
+  parse: (options, job, now) =>
+    runParseJob(
       { db: options.db, dataDir: options.dataDir, codec: options.codec, log: options.log, now },
       job,
-    );
-    return;
-  }
-  if (job.type === "classify") {
-    await runClassifyJob(
+    ),
+  classify: (options, job, now) =>
+    runClassifyJob(
       { db: options.db, promptsDir: options.promptsDir, classifier: options.classifier, log: options.log, now },
       job,
-    );
-    return;
-  }
-  if (job.type === "send") {
-    await runSendJob(
+    ),
+  send: (options, job, now) =>
+    runSendJob(
       {
         db: options.db,
         dataDir: options.dataDir,
@@ -173,11 +169,9 @@ async function dispatch(options: WorkerOptions, job: JobRow, now: () => number):
         now,
       },
       job,
-    );
-    return;
-  }
-  if (job.type === "notify") {
-    await runNotifyJob(
+    ),
+  notify: (options, job, now) =>
+    runNotifyJob(
       {
         db: options.db,
         log: options.log,
@@ -188,10 +182,15 @@ async function dispatch(options: WorkerOptions, job: JobRow, now: () => number):
         panelBaseUrl: options.panelBaseUrl,
       },
       job,
-    );
-    return;
-  }
-  throw new Error(`unsupported job type ${job.type}`);
+    ),
+};
+
+export const SUPPORTED_JOB_TYPES: readonly string[] = Object.keys(JOB_HANDLERS);
+
+async function dispatch(options: WorkerOptions, job: JobRow, now: () => number): Promise<void> {
+  const handler = JOB_HANDLERS[job.type];
+  if (!handler) throw new Error(`unsupported job type ${job.type}`);
+  await handler(options, job, now);
 }
 
 function sleep(ms: number): Promise<void> {
