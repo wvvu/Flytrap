@@ -10,7 +10,7 @@ const LABEL_NAMES = {
 
 const VIEW_TITLES = {
   inbox: "收件箱",
-  spam: "Spam",
+  spam: "已拦截",
   trash: "垃圾桶",
   dlq: "处理失败",
   settings: "设置",
@@ -492,9 +492,9 @@ function placeMailSearch(view) {
 
 function setEmptyCopy(view) {
   if (!mailEmptyCopy) return;
-  if (view === "spam") mailEmptyCopy.textContent = "这里是 Spam。选全部才会看到正常来信。";
+  if (view === "spam") mailEmptyCopy.textContent = "这里是已拦截。选全部才会看到正常来信。";
   else if (view === "trash") mailEmptyCopy.textContent = "这里是垃圾桶。";
-  else mailEmptyCopy.textContent = "这里是收件箱，包含尚未分类的来信。其余在 Spam。";
+  else mailEmptyCopy.textContent = "这里是收件箱，包含尚未分类的来信。其余在已拦截。";
 }
 
 function syncListLabel() {
@@ -1870,16 +1870,50 @@ async function loadMachineLine() {
   try {
     const health = await request("/healthz");
     const stats = await request("/v1/stats");
-    const today = stats.today || {};
-    const sum = Object.values(today).reduce((acc, n) => acc + (typeof n === "number" ? n : 0), 0);
     const line = document.querySelector("#machine-line");
     const dbText = health.db === "ok" ? "SQLite 正常" : "数据库异常";
-    if (line) line.textContent = `在线 · ${dbText} · 今天收了 ${sum} 封`;
+    if (line) line.textContent = `在线 · ${dbText}`;
+    renderOverview(stats);
     renderTrend(Array.isArray(stats.daily) ? stats.daily : []);
   } catch (err) {
     const line = document.querySelector("#machine-line");
     if (line) line.textContent = explain(err);
   }
+}
+
+function renderOverview(stats) {
+  const host = document.querySelector("#stat-cards");
+  if (!host) return;
+  host.replaceChildren();
+  const today = stats && stats.today ? stats.today : {};
+  const total = stats && stats.total ? stats.total : {};
+  host.append(statCard("今天", String(countMapSum(today)), ""));
+  host.append(statCard("累计", String(countMapSum(total)), ""));
+  const keys = ["legit", "spam", "phish", "malware", "unsolicited-admin", "gray", "unlabeled"];
+  for (const key of keys) {
+    const n = Number(today[key]) || 0;
+    if (n < 1) continue;
+    const name = key === "unlabeled" ? "未分类" : labelName(key);
+    const tone = key === "unlabeled" ? "" : key === "unsolicited-admin" ? "promo" : key;
+    host.append(statCard(name, String(n), tone ? "stat-" + tone : ""));
+  }
+}
+
+function countMapSum(map) {
+  return Object.values(map).reduce((acc, n) => acc + (typeof n === "number" ? n : 0), 0);
+}
+
+function statCard(label, value, extra) {
+  const card = document.createElement("div");
+  card.className = extra ? "stat-card " + extra : "stat-card";
+  const num = document.createElement("div");
+  num.className = "stat-num";
+  num.textContent = value;
+  const desc = document.createElement("div");
+  desc.className = "stat-desc";
+  desc.textContent = label;
+  card.append(num, desc);
+  return card;
 }
 
 function renderTrend(days) {

@@ -81,6 +81,9 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(script.body, /处外链资源已加载/);
     assert.match(page.body, /id="set-names"/);
     assert.match(page.body, /id="nav-spam"/);
+    assert.match(page.body, /<span class="label">已拦截<\/span>/);
+    assert.match(page.body, /id="stat-cards"/);
+    assert.equal(page.body.includes("<summary>近 14 天</summary>"), false);
     assert.match(page.body, /value="not-legit" selected/);
     assert.match(page.body, /id="label" type="hidden" value="legit"/);
     assert.match(page.body, /id="btn-open-dlq"/);

@@ -28,6 +28,7 @@ import { PathEscapeError, resolveInside } from "../paths.js";
 import { actorName, contentDisposition, decodeCursor, encodeCursor, errorName, HttpError, iso, parseJson, publicError, safeMime } from "./http.js";
 import { hashPassword, loginOk } from "./password.js";
 import { recentLogs } from "../log.js";
+import { sqliteSessionStore } from "./session-store.js";
 import { isPanelAsset, registerPanel } from "./static.js";
 
 declare module "fastify" {
@@ -150,6 +151,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     secret: config.sessionSecret ?? "",
     cookieName: "flytrap.sid",
     saveUninitialized: false,
+    store: sqliteSessionStore(db),
     cookie: {
       httpOnly: true,
       sameSite: "lax",

@@ -55,9 +55,9 @@
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-inbox"></use></svg></span>
             <span class="label">收件箱</span>
           </button>
-          <button type="button" class="rail-btn" id="nav-spam" title="Spam">
+          <button type="button" class="rail-btn" id="nav-spam" title="已拦截">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spam"></use></svg></span>
-            <span class="label">Spam</span>
+            <span class="label">已拦截</span>
           </button>
           <button type="button" class="rail-btn" id="nav-trash" title="垃圾桶">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trash"></use></svg></span>
@@ -99,13 +99,13 @@
 
         <div id="stream-spam-header" class="stream-header" hidden>
           <div class="stream-title-row">
-            <h2 id="stream-spam-title">Spam</h2>
+            <h2 id="stream-spam-title">已拦截</h2>
             <div class="stream-actions">
               <button type="button" id="btn-spam-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
           </div>
           <div class="stream-filter-bar">
-            <select id="filter-select" class="stream-filter-select" title="Spam 里再分。选全部才会看到正常。">
+            <select id="filter-select" class="stream-filter-select" title="已拦截里再分。选全部才会看到正常。">
               <option value="not-legit" selected>非正常</option>
               <option value="">全部</option>
               <option value="spam" title="spam">垃圾</option>
@@ -173,7 +173,7 @@
           <div id="mail-empty" class="empty-state">
             <span class="empty-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></span>
             <h3>选一封信</h3>
-            <p id="mail-empty-copy">这里是收件箱，包含尚未分类的来信。其余在 Spam。</p>
+            <p id="mail-empty-copy">这里是收件箱，包含尚未分类的来信。其余在已拦截。</p>
           </div>
 
           <div id="mail-loading" class="empty-state" hidden>
@@ -497,12 +497,11 @@
             </section>
 
             <section class="block" id="set-machine" hidden>
-              <h2>这台机器</h2>
+              <h2>概况</h2>
               <p class="muted" id="machine-line">在线</p>
-              <details class="machine-trend">
-                <summary>近 14 天</summary>
-                <div id="stat-trend" class="trend"></div>
-              </details>
+              <div id="stat-cards" class="stats-cards-grid"></div>
+              <h3 class="field-title">近 14 天</h3>
+              <div id="stat-trend" class="trend"></div>
             </section>
           </div>
         </section>
