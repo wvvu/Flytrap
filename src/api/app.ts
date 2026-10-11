@@ -17,7 +17,7 @@ import { findAttachment, listMessageAttachments } from "../db/repos/attachments.
 import { writeAudit } from "../db/repos/audit.js";
 import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, retryAllDeadJobs, retryJob, retryMessageJobs, wakeClassifyJobs, type JobStatus } from "../db/repos/jobs.js";
 import { fallbackAiPool } from "../ai/pool.js";
-import { presentAiPool, readAiEnabled, readAiThinking, readEffectiveAiPool, readPasswordHash, saveAcceptDomains, saveAiControls, saveAiPool, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
+import { presentAiPool, readAiEnabled, readAiThinking, readBlockedSenders, readEffectiveAiPool, readPasswordHash, saveAcceptDomains, saveAiControls, saveAiPool, saveBlockedSenders, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
 import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
 import { countTrash, countUnread, deleteMessage, emptyTrash, getMessage, listMessages, markMessageRead, restoreMessage, trashMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
@@ -86,6 +86,10 @@ const aiSettingsBody = z.object({
 const passwordBody = z.object({
   current: z.string().min(1).max(200),
   next: z.string().min(8).max(200),
+}).strict();
+
+const blocklistBody = z.object({
+  addresses: z.array(z.string().min(1).max(254)).max(500),
 }).strict();
 
 const historyBody = z.object({
@@ -366,6 +370,29 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, id, trashed: true });
   });
 
+  app.post("/v1/messages/:id/block", async (request, reply) => {
+    const id = messageId(request);
+    const message = requireMessage(db, id);
+    if (!message.from_addr) throw new HttpError(400);
+    let blockedSenders;
+    try {
+      blockedSenders = saveBlockedSenders(db, readBlockedSenders(db).concat(message.from_addr), now());
+    } catch (err) {
+      if (err instanceof SettingsError) throw new HttpError(400);
+      throw err;
+    }
+    trashMessage(db, id, now());
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "block_sender",
+      target: id,
+      detail: message.from_addr,
+    });
+    return reply.send({ ok: true, id, blockedSenders, trashed: true });
+  });
+
   app.post("/v1/messages/:id/restore", async (request, reply) => {
     const id = messageId(request);
     requireMessage(db, id);
@@ -575,6 +602,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       aiPool: presentAiPool(readEffectiveAiPool(db, fallbackAiPool(config))),
       aiEnabled: readAiEnabled(db),
       aiThinking: readAiThinking(db),
+      blockedSenders: readBlockedSenders(db),
       passwordSet: readPasswordHash(db) !== null,
     };
   });
@@ -606,6 +634,26 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       aiEnabled: readAiEnabled(db),
       aiThinking: readAiThinking(db),
     });
+  });
+
+  app.put("/v1/settings/blocklist", async (request, reply) => {
+    const body = blocklistBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    let blockedSenders;
+    try {
+      blockedSenders = saveBlockedSenders(db, body.data.addresses, now());
+    } catch (err) {
+      if (err instanceof SettingsError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "settings_blocklist",
+      detail: `count=${blockedSenders.length}`,
+    });
+    return reply.send({ ok: true, blockedSenders });
   });
 
   app.put("/v1/settings/password", async (request, reply) => {

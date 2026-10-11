@@ -219,6 +219,7 @@
               <div class="tab-actions">
                 <button type="button" id="btn-reclassify" class="btn-sm" title="按当前提示词再分一次">重分类</button>
                 <a id="btn-download-eml" class="btn-sm btn-link" target="_blank" download title="下载原始 EML">下载</a>
+                <button type="button" id="btn-block-mail" class="btn-sm btn-danger-ghost" title="以后这个地址来的信直接进垃圾桶" hidden>加入黑名单</button>
                 <button type="button" id="btn-trash-mail" class="btn-sm btn-danger-ghost" title="移入垃圾桶">移入垃圾桶</button>
                 <button type="button" id="btn-restore-mail" class="btn-sm" title="从垃圾桶恢复" hidden>恢复</button>
                 <button type="button" id="btn-delete-mail" class="btn-sm btn-danger" title="永久删除" hidden>彻底删除</button>
@@ -342,15 +343,17 @@
                 </div>
                 <button type="button" id="btn-save-ai" class="btn-fit" disabled>保存</button>
               </div>
-              <div class="inline-row">
+              <div class="model-switch">
                 <label class="chk"><input id="ai-enabled" type="checkbox" checked> 启用分拣</label>
-                <span class="muted">思考</span>
-                <select id="ai-thinking">
-                  <option value="off">关</option>
-                  <option value="low" selected>低</option>
-                  <option value="medium">中</option>
-                  <option value="high">高</option>
-                </select>
+                <label class="thinking-pair">
+                  <span class="muted">思考</span>
+                  <select id="ai-thinking">
+                    <option value="off">关</option>
+                    <option value="low" selected>低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                  </select>
+                </label>
               </div>
               <p class="muted">关掉之后不再调用模型，已经收下的信仍在。思考等级只给 Gemini 用。</p>
               <h3 class="field-title">型号</h3>
@@ -406,6 +409,21 @@
               <div class="inline-row">
                 <input id="domain-add" placeholder="添加域名" autocomplete="off">
                 <button type="button" id="btn-add-domain" class="btn-fit">添加</button>
+              </div>
+            </section>
+
+            <section class="block" id="set-block" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>黑名单</h2>
+                  <p class="muted">这些发件地址来的新信直接进垃圾桶，不分类，也不提醒。原文仍保留。</p>
+                </div>
+              </div>
+              <div id="block-list" class="domain-list"></div>
+              <p id="block-empty" class="muted">还没有地址。</p>
+              <div class="inline-row">
+                <input id="block-add" placeholder="发件地址" autocomplete="off" maxlength="254">
+                <button type="button" id="btn-add-block" class="btn-fit">添加</button>
               </div>
             </section>
 

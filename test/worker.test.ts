@@ -9,6 +9,7 @@ import { gzipCodec } from "../src/compress.js";
 import { openDatabase, type Db } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
 import { enqueueJob } from "../src/db/repos/jobs.js";
+import { saveBlockedSenders } from "../src/db/repos/settings.js";
 import { insertMessage } from "../src/db/repos/messages.js";
 import { storeRaw } from "../src/ingest/store-raw.js";
 import { fakeClassifier } from "../src/ai/classifier.js";
@@ -119,6 +120,31 @@ test("authentication failure still parses, and the same attachment is stored onc
     assert.equal(await processNext(options, "worker-test"), true);
     assert.equal(attachmentFiles(dir).length, 1);
     assert.equal((db.prepare("SELECT COUNT(*) AS n FROM message_attachments").get() as { n: number }).n, 1);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a blocked sender is parsed, then moved to trash without classification", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-block-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  try {
+    saveBlockedSenders(db, ["alice@example.com"], 1);
+    const messageId = await seed(db, dir, multipart());
+    const options = workerOptions(db, dir, async () => failedAuth());
+    assert.equal(await processNext(options, "worker-block"), true);
+    assert.equal(await processNext(options, "worker-block"), true);
+    const row = db.prepare("SELECT from_addr, trashed_at, status FROM messages WHERE id = ?").get(messageId) as {
+      from_addr: string;
+      trashed_at: number | null;
+      status: string;
+    };
+    assert.equal(row.from_addr, "alice@example.com");
+    assert.equal(row.status, "parsed");
+    assert.ok(row.trashed_at);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type = 'classify'").get() as { n: number }).n, 0);
   } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

@@ -53,6 +53,8 @@ let toastTimer = 0;
 let currentPromptId = "classify-v1";
 let holdBoot = false;
 let unreadInbox = 0;
+let blockedSenders = [];
+let currentFromAddress = "";
 
 // DOM 元素引用
 const appEl = document.querySelector("#app");
@@ -137,6 +139,7 @@ const plainTextBody = document.querySelector("#plain-text-body");
 const rawHeaders = document.querySelector("#raw-headers");
 const authChips = document.querySelector("#auth-chips");
 const btnTrashMail = document.querySelector("#btn-trash-mail");
+const btnBlockMail = document.querySelector("#btn-block-mail");
 const btnRestoreMail = document.querySelector("#btn-restore-mail");
 const btnDeleteMail = document.querySelector("#btn-delete-mail");
 const btnReclassify = document.querySelector("#btn-reclassify");
@@ -167,6 +170,7 @@ dlqRefreshBtn?.addEventListener("click", () => void loadDlqJobs());
 retryAllBtn?.addEventListener("click", () => void retryAllDead());
 
 btnTrashMail?.addEventListener("click", () => void handleTrashMail());
+btnBlockMail?.addEventListener("click", () => void handleBlockMail());
 btnRestoreMail?.addEventListener("click", () => void handleRestoreMail());
 btnDeleteMail?.addEventListener("click", () => void handleDeleteMail());
 backListBtn?.addEventListener("click", () => setMobilePane("list"));
@@ -200,6 +204,13 @@ document.querySelector("#notify-confidence")?.addEventListener("input", syncNoti
 document.querySelector("#btn-save-attempts")?.addEventListener("click", () => void saveAttemptSettings());
 document.querySelector("#job-max-attempts")?.addEventListener("input", syncAttemptSave);
 document.querySelector("#btn-add-domain")?.addEventListener("click", () => void addDomain());
+document.querySelector("#btn-add-block")?.addEventListener("click", () => void addBlocked());
+document.querySelector("#block-add")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void addBlocked();
+  }
+});
 document.querySelector("#domain-add")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -754,7 +765,9 @@ async function selectMail(id, options = {}) {
     }
     if (detailTime) detailTime.textContent = formatFullTime(detail.receivedAt);
 
+    currentFromAddress = extractEmail(rawFrom);
     const isTrashed = Boolean(detail.trashedAt || currentView === "trash");
+    if (btnBlockMail) btnBlockMail.hidden = !currentFromAddress;
     if (btnTrashMail) btnTrashMail.hidden = isTrashed;
     if (btnRestoreMail) btnRestoreMail.hidden = !isTrashed;
     if (btnDeleteMail) btnDeleteMail.hidden = !isTrashed;
@@ -1036,6 +1049,41 @@ function navigateMail(delta) {
 }
 
 // ==================== 垃圾桶动作处理 ====================
+
+async function handleBlockMail() {
+  if (!selectedMailId || !currentFromAddress) return;
+  const email = currentFromAddress;
+  const id = selectedMailId;
+  if (!(await askConfirm(`把 ${email} 加入黑名单？之后该地址来的信直接进垃圾桶。`))) return;
+  if (btnBlockMail) btnBlockMail.disabled = true;
+  try {
+    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/block", { method: "POST", body: {} });
+    blockedSenders = Array.isArray(res.blockedSenders) ? res.blockedSenders : blockedSenders;
+    renderBlockList(blockedSenders);
+    toast("已加入黑名单");
+    void refreshUnread();
+    if (currentView === "trash") return;
+    noticeEl.textContent = "邮件已移入垃圾桶";
+    setTimeout(() => { if (noticeEl.textContent === "邮件已移入垃圾桶") noticeEl.textContent = ""; }, 3000);
+    const card = findByDataId(listEl, ".mail-item", id);
+    if (card) card.remove();
+    currentMessages = currentMessages.filter((m) => m.id !== id);
+    const nextCard = listEl.querySelector(".mail-item");
+    if (nextCard && nextCard.getAttribute("data-id")) {
+      void selectMail(nextCard.getAttribute("data-id"));
+    } else {
+      selectedMailId = null;
+      currentFromAddress = "";
+      mailDetailEl.hidden = true;
+      mailEmptyEl.hidden = false;
+      setMobilePane("list");
+    }
+  } catch (err) {
+    noticeEl.textContent = "加入黑名单失败: " + explain(err);
+  } finally {
+    if (btnBlockMail) btnBlockMail.disabled = false;
+  }
+}
 
 async function handleTrashMail() {
   if (!selectedMailId) return;
@@ -1523,6 +1571,7 @@ async function loadSettingsPage() {
     const thinking = document.querySelector("#ai-thinking");
     if (thinking) thinking.value = settings.aiThinking || "low";
     renderAiEditors(settings.aiPool || {});
+    renderBlockList(settings.blockedSenders || []);
   } catch (err) {
     toast(explain(err));
   }
@@ -1534,6 +1583,7 @@ const SETTING_SECTIONS = [
   ["account", "账号"],
   ["domains", "收信"],
   ["mailboxes", "地址"],
+  ["block", "黑名单"],
   ["notify", "提醒"],
   ["prompt", "分拣"],
   ["jobs", "失败"],
@@ -1671,6 +1721,59 @@ async function saveNotifySettings() {
     toast("提醒已保存");
   } catch (err) {
     toast("保存提醒失败: " + explain(err));
+  }
+}
+
+function renderBlockList(addresses) {
+  blockedSenders = Array.isArray(addresses) ? addresses.slice() : [];
+  const host = document.querySelector("#block-list");
+  const empty = document.querySelector("#block-empty");
+  if (empty) empty.hidden = blockedSenders.length > 0;
+  if (!host) return;
+  host.replaceChildren();
+  for (const address of blockedSenders) {
+    const row = document.createElement("div");
+    row.className = "domain-row";
+    const input = document.createElement("input");
+    input.value = address;
+    input.readOnly = true;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn-fit ghost";
+    button.textContent = "移除";
+    button.addEventListener("click", () => void removeBlocked(address));
+    row.append(input, button);
+    host.append(row);
+  }
+}
+
+async function addBlocked() {
+  const input = document.querySelector("#block-add");
+  const address = input ? input.value.trim() : "";
+  if (!address) return;
+  try {
+    const res = await request("/v1/settings/blocklist", {
+      method: "PUT",
+      body: { addresses: blockedSenders.concat([address]) },
+    });
+    if (input) input.value = "";
+    renderBlockList(res.blockedSenders || []);
+    toast("已加入黑名单");
+  } catch {
+    toast("发件地址无效");
+  }
+}
+
+async function removeBlocked(address) {
+  try {
+    const res = await request("/v1/settings/blocklist", {
+      method: "PUT",
+      body: { addresses: blockedSenders.filter((item) => item !== address) },
+    });
+    renderBlockList(res.blockedSenders || []);
+    toast("已移出黑名单");
+  } catch (err) {
+    toast("移出黑名单失败: " + explain(err));
   }
 }
 

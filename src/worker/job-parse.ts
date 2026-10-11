@@ -1,7 +1,8 @@
 import { ulid } from "ulid";
 import type { Db } from "../db/index.js";
 import { enqueueJob, hasOpenJob, type JobRow } from "../db/repos/jobs.js";
-import { getMessage, saveParsedMessage } from "../db/repos/messages.js";
+import { getMessage, saveParsedMessage, trashMessage } from "../db/repos/messages.js";
+import { isBlockedSender } from "../db/repos/settings.js";
 import type { Codec } from "../compress.js";
 import { readRaw } from "../ingest/read-raw.js";
 import type { AppLog } from "../log.js";
@@ -27,15 +28,21 @@ export async function runParseJob(deps: ParseJobDeps, job: JobRow): Promise<void
     messageId: message.id,
     now: deps.now(),
   });
+  const fromAddr = result.parsed.from?.address ?? null;
   saveParsedMessage(deps.db, {
     id: message.id,
     subject: result.parsed.subject || null,
-    fromAddr: result.parsed.from?.address ?? null,
+    fromAddr,
     toAddrs: result.toAddrs,
     messageId: result.messageId,
     parsed: JSON.stringify(result.parsed),
     now: deps.now(),
   });
+  if (isBlockedSender(deps.db, fromAddr)) {
+    trashMessage(deps.db, message.id, deps.now());
+    deps.log.info({ messageId: message.id }, "blocked sender moved to trash");
+    return;
+  }
   const now = deps.now();
   if (!hasOpenJob(deps.db, message.id, "classify")) {
     enqueueJob(deps.db, { id: ulid(), type: "classify", messageId: message.id, now });

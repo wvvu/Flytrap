@@ -1723,6 +1723,32 @@ body,
   opacity: 0.55;
 }
 
+.model-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 28px;
+}
+
+.model-switch .chk {
+  flex: none;
+  white-space: nowrap;
+}
+
+.thinking-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  white-space: nowrap;
+}
+
+.thinking-pair select {
+  width: auto;
+  min-width: 96px;
+  flex: none;
+}
+
 .inline-row {
   display: flex;
   flex-wrap: wrap;
@@ -1757,7 +1783,11 @@ input.field-narrow {
 }
 
 .chk input {
-  width: auto;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  margin: 0;
   padding: 0;
 }
 

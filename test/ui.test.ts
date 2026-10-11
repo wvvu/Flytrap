@@ -63,6 +63,9 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /<script src="\/boot\.js"><\/script>/);
     assert.match(page.body, /id="login" class="login-wrapper" hidden/);
     assert.match(page.body, /id="stream-spam-title"/);
+    assert.match(page.body, /id="set-block"/);
+    assert.match(page.body, /id="btn-block-mail"/);
+    assert.match(page.body, /class="model-switch"/);
     assert.equal(page.body.includes("badge-inbox"), false);
     assert.equal(page.body.includes("badge-spam"), false);
     assert.equal(page.body.includes("autofocus"), false);
