@@ -51,6 +51,8 @@ let mailLoadToken = 0;
 let csrfToken = null;
 let toastTimer = 0;
 let currentPromptId = "classify-v1";
+let holdBoot = false;
+let unreadCounts = { inbox: 0, spam: 0 };
 
 // DOM 元素引用
 const appEl = document.querySelector("#app");
@@ -67,10 +69,8 @@ const navSpamBtn = document.querySelector("#nav-spam");
 const navTrashBtn = document.querySelector("#nav-trash");
 const navSettingsBtn = document.querySelector("#nav-settings");
 const badgeDlq = document.querySelector("#badge-dlq");
-const inboxLabel = document.querySelector("#inbox-label");
-const spamLabel = document.querySelector("#spam-label");
-const badgeInbox = document.querySelector("#badge-inbox");
-const badgeSpam = document.querySelector("#badge-spam");
+const streamTitle = document.querySelector("#stream-title");
+const streamSpamTitle = document.querySelector("#stream-spam-title");
 
 // 第二列流头部
 const streamInboxHeader = document.querySelector("#stream-inbox-header");
@@ -360,15 +360,25 @@ async function init() {
   initTheme();
   try {
     await request("/v1/me");
-    showApp();
-    await loadAppearance();
-    await switchNav("inbox");
-    void updateDlqBadge();
-    void refreshUnread();
+    await revealApp();
   } catch {
     showLogin();
   }
   window.setInterval(() => void pollLive(), 15000);
+}
+
+async function revealApp() {
+  holdBoot = true;
+  appEl.classList.add("is-booting");
+  showApp();
+  try {
+    await loadAppearance();
+    await switchNav("inbox");
+    await Promise.all([updateDlqBadge(), refreshUnread()]);
+  } finally {
+    holdBoot = false;
+    appEl.classList.remove("is-booting");
+  }
 }
 
 function setGlyph(el, name) {
@@ -417,10 +427,7 @@ async function signIn() {
     });
     document.querySelector("#password").value = "";
     csrfToken = null;
-    showApp();
-    await loadAppearance();
-    await switchNav("inbox");
-    void updateDlqBadge();
+    await revealApp();
   } catch (err) {
     loginError.textContent = explain(err);
   } finally {
@@ -443,10 +450,14 @@ async function signOut() {
 
 function showLogin() {
   document.title = "登录";
+  holdBoot = false;
+  if (appEl) appEl.classList.remove("is-booting");
   loginEl.hidden = false;
   loginEl.style.display = "flex";
   appEl.hidden = true;
   appEl.style.display = "none";
+  const username = document.querySelector("#username");
+  if (username instanceof HTMLInputElement) username.focus();
 }
 
 function showApp() {
@@ -458,7 +469,15 @@ function showApp() {
 
 function setViewTitle(view) {
   document.title = VIEW_TITLES[view] || "收件箱";
+  if (view === "inbox" && unreadCounts.inbox > 0) document.title += " (" + unreadCounts.inbox + ")";
+  else if (view === "spam" && unreadCounts.spam > 0) document.title += " (" + unreadCounts.spam + ")";
+  const extra = [];
+  if (view !== "inbox" && unreadCounts.inbox > 0) extra.push("收件箱 (" + unreadCounts.inbox + ")");
+  if (view !== "spam" && unreadCounts.spam > 0) extra.push("Spam (" + unreadCounts.spam + ")");
+  if (extra.length) document.title += " · " + extra.join(" · ");
   if (panelTitle !== "Flytrap") document.title = panelTitle + " · " + document.title;
+  if (streamTitle) streamTitle.textContent = unreadCounts.inbox > 0 ? "收件箱 (" + unreadCounts.inbox + ")" : "收件箱";
+  if (streamSpamTitle) streamSpamTitle.textContent = unreadCounts.spam > 0 ? "Spam (" + unreadCounts.spam + ")" : "Spam";
 }
 
 function placeMailSearch(view) {
@@ -489,22 +508,14 @@ function staysInList(newLabel) {
   return newLabel === filter;
 }
 
-function paintUnread(label, badge, count) {
-  const n = Number(count) || 0;
-  if (label) {
-    const base = label.dataset.base || "";
-    label.textContent = n > 0 ? base + "(" + n + ")" : base;
-  }
-  if (!badge) return;
-  badge.textContent = String(n);
-  badge.hidden = n < 1;
-}
-
 async function refreshUnread() {
   try {
     const counts = await request("/v1/unread");
-    paintUnread(inboxLabel, badgeInbox, counts.inbox);
-    paintUnread(spamLabel, badgeSpam, counts.spam);
+    unreadCounts = {
+      inbox: Number(counts.inbox) || 0,
+      spam: Number(counts.spam) || 0,
+    };
+    if (appEl && !appEl.hidden) setViewTitle(currentView);
   } catch {
     // The next poll tries again.
   }
@@ -640,7 +651,9 @@ async function loadMessagesPage(replace) {
 
     // 桌面端顺手打开第一封。窄屏留在列表，避免一进来就盖住收件流。
     if (replace && items.length > 0 && !selectedMailId) {
-      void selectMail(items[0].id, { keepListOnNarrow: true });
+      const opening = selectMail(items[0].id, { keepListOnNarrow: true });
+      if (holdBoot) await opening;
+      else void opening;
     }
   } catch (err) {
     if (err && err.status === 401) {
@@ -886,10 +899,11 @@ async function selectMail(id, options = {}) {
     if (mailLoadingEl) mailLoadingEl.hidden = true;
     mailDetailEl.hidden = false;
 
-    // 加载 HTML 与真正的 RFC822 信头
-    void loadMailHtml(id, token);
-    void loadRawHeaders(id, token, detail);
-    markOpened(id);
+    // 加载 HTML 与真正的 RFC822 信头。带会话进来时等这一封画完再揭开，避免连闪。
+    const htmlReady = loadMailHtml(id, token);
+    const headersReady = loadRawHeaders(id, token, detail);
+    const opened = markOpened(id);
+    if (holdBoot) await Promise.all([htmlReady, headersReady, opened]);
   } catch (err) {
     if (token !== mailLoadToken) return;
     console.error("selectMail error:", err);
@@ -977,7 +991,7 @@ function renderSandboxHtml(html) {
     : `html{background:${pageBg};}`;
   const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${thumbBg} ${trackBg};}::-webkit-scrollbar{width:10px;height:10px;}::-webkit-scrollbar-track{background:${trackBg};}::-webkit-scrollbar-thumb{background:${thumbBg};border-radius:5px;border:2px solid ${trackBg};}::-webkit-scrollbar-thumb:hover{background:${thumbHover};}::-webkit-scrollbar-thumb:active{background:${thumbActive};}::-webkit-scrollbar-corner{background:${trackBg};}::-webkit-resizer{background:transparent;}`;
   const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:sans-serif;font-size:14px;line-height:1.6;padding:16px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${body}</body></html>`;
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:sans-serif;font-size:16px;line-height:1.6;padding:18px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${body}</body></html>`;
   mailSandbox.setAttribute("srcdoc", doc);
   const hint = document.querySelector("#preview-guard");
   if (hint) {
@@ -2460,7 +2474,7 @@ function markOpened(id) {
   if (card) card.classList.remove("unread");
   const known = currentMessages.find((item) => item.id === id);
   if (known) known.read = true;
-  void request("/v1/messages/" + encodeURIComponent(id) + "/read", { method: "POST", body: {} })
+  return request("/v1/messages/" + encodeURIComponent(id) + "/read", { method: "POST", body: {} })
     .then(() => refreshUnread())
     .catch(() => undefined);
 }
