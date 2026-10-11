@@ -32,15 +32,31 @@ function encodeHeader(value: string): string {
   if (/^[\t\x20-\x7E]*$/.test(value)) return value;
   const bytes = Buffer.from(value, "utf8");
   const words: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += 45) {
-    words.push(`=?UTF-8?B?${bytes.subarray(offset, offset + 45).toString("base64")}?=`);
+  let offset = 0;
+  while (offset < bytes.length) {
+    let next = Math.min(offset + 45, bytes.length);
+    if (next < bytes.length) {
+      while (next > offset && ((bytes[next] ?? 0) & 0xc0) === 0x80) {
+        next--;
+      }
+      if (next === offset) {
+        next = Math.min(offset + 45, bytes.length);
+        while (next < bytes.length && ((bytes[next] ?? 0) & 0xc0) === 0x80) {
+          next++;
+        }
+      }
+    }
+    words.push(`=?UTF-8?B?${bytes.subarray(offset, next).toString("base64")}?=`);
+    offset = next;
   }
   return words.join("\r\n ");
 }
 
 function encodeBody(text: string): { cte: "7bit" | "base64"; body: string } {
   const normalized = text.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
-  if (/^[\t\r\n\x20-\x7E]*$/.test(normalized)) {
+  const isAscii = /^[\t\r\n\x20-\x7E]*$/.test(normalized);
+  const maxLine = normalized.split("\r\n").reduce((max, line) => Math.max(max, line.length), 0);
+  if (isAscii && maxLine <= 998) {
     return { cte: "7bit", body: `${normalized}\r\n` };
   }
   const b64 = Buffer.from(normalized, "utf8").toString("base64");

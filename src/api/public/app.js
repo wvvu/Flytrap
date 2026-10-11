@@ -2547,15 +2547,19 @@ function dkimRow(domain, keys) {
   for (const key of keys) {
     const line = document.createElement("p");
     line.className = "muted";
-    line.textContent = key.dnsName || key.selector;
+    line.textContent = `主机记录: ${key.dnsName || key.selector}`;
+    const txt = document.createElement("div");
+    txt.className = "dkim-txt";
+    txt.textContent = key.txt;
     const actions = document.createElement("div");
     actions.className = "inline-row";
     actions.append(
-      dkimButton("复制记录", () => void copyText(`${key.dnsName}\n${key.txt}`)),
+      dkimButton("复制主机记录", () => void copyText(key.dnsName || key.selector)),
+      dkimButton("复制 TXT", () => void copyText(key.txt)),
       dkimButton("重新生成", () => void generateDkim(domain, key.selector)),
       dkimButton("移除", () => void removeDkim(domain, key.selector)),
     );
-    row.append(line, actions);
+    row.append(line, txt, actions);
   }
   return row;
 }

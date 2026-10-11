@@ -39,7 +39,13 @@ export async function deliverToMx(message: OutboundMessage, deps: MxDeps): Promi
   }
   const responses: string[] = [];
   for (const [domain, recipients] of groups) {
-    const hosts = await mxHosts(domain, deps.resolveMx);
+    let hosts: string[] = [];
+    try {
+      hosts = await mxHosts(domain, deps.resolveMx);
+    } catch (err) {
+      const messageText = err instanceof Error ? err.message : "mx lookup failed";
+      throw new Error(`${domain}: ${messageText}`.slice(0, 400));
+    }
     let last = "no route";
     let accepted = false;
     for (const host of hosts) {

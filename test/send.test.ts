@@ -13,12 +13,16 @@ import { getOutbox } from "../src/db/repos/outbox.js";
 import { rebuildFromRaw } from "../src/ingest/rebuild.js";
 import { readRaw } from "../src/ingest/read-raw.js";
 import { authenticateMessage } from "../src/mail/auth.js";
+import { composeText } from "../src/mail/compose.js";
 import { deliverToMx, type MailSender } from "../src/mail/deliver.js";
 import { submitOutbox } from "../src/mail/submit.js";
 import { migrationsDir } from "../src/paths.js";
 import { fakeClassifier } from "../src/ai/classifier.js";
 import type { AppLog } from "../src/log.js";
 import { processNext, type WorkerOptions } from "../src/worker/loop.js";
+import { retryJob } from "../src/db/repos/jobs.js";
+import { markOutboxDead } from "../src/db/repos/outbox.js";
+import PostalMime from "postal-mime";
 
 const silent: AppLog = {
   debug() {},
@@ -226,6 +230,54 @@ test("the panel can queue a letter for a domain that was not added", async () =>
     assert.equal(listed.json().items.length, 1);
   } finally {
     await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("composeText preserves multi-byte UTF-8 subject and base64 encodes long ASCII lines", async () => {
+  const subject = "Re: " + "测".repeat(20) + " 🚀 " + "测试".repeat(5);
+  const longLine = "a".repeat(1005);
+  const raw = composeText({
+    from: "a@example.com",
+    to: ["b@example.com"],
+    cc: [],
+    subject,
+    text: longLine,
+    messageId: "m1@example.com",
+    date: new Date(1_000_000),
+  });
+  const text = raw.toString("utf8");
+  assert.match(text, /Content-Transfer-Encoding: base64/);
+  const parser = new PostalMime();
+  const parsed = await parser.parse(raw);
+  assert.equal(parsed.subject, subject);
+  assert.equal(parsed.subject?.includes("\uFFFD"), false);
+});
+
+test("retryJob clears the outbox error when reopening a dead send job", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-send-retry-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  try {
+    const outboxId = "01M4TEST000000000000000001";
+    const jobId = "01M4TESTJOB000000000000001";
+    db.prepare(
+      `INSERT INTO outbox (id, sha256, raw_path, size_bytes, from_addr, to_addrs, subject, domain_known, status, error, created_at, updated_at)
+       VALUES (?, 'sha', 'sent/test', 10, 'a@test.com', '["b@test.com"]', 'test', 1, 'error', 'network down', 100, 100)`,
+    ).run(outboxId);
+    db.prepare(
+      `INSERT INTO jobs (id, type, message_id, payload, status, attempts, max_attempts, run_after, created_at, updated_at)
+       VALUES (?, 'send', NULL, ?, 'dead', 5, 5, 100, 100, 100)`,
+    ).run(jobId, JSON.stringify({ outboxId }));
+
+    const ok = retryJob(db, jobId, 200);
+    assert.equal(ok, true);
+    const row = getOutbox(db, outboxId);
+    assert.ok(row);
+    assert.equal(row.status, "queued");
+    assert.equal(row.error, null);
+  } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -1834,6 +1834,19 @@ input.field-narrow {
   margin: 0;
 }
 
+.dkim-txt {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
+  user-select: all;
+  background: var(--bg-hover);
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  margin: 4px 0;
+}
+
 .letter-list {
   display: flex;
   flex-direction: column;

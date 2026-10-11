@@ -93,6 +93,8 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(script.body, /\/v1\/unread/);
     assert.match(page.body, /末 4 位/);
     assert.match(page.body, /启用分拣/);
+    assert.match(script.body, /复制主机记录/);
+    assert.match(script.body, /复制 TXT/);
     assert.match(page.body, /id="password-next"/);
     assert.match(page.body, /id="log-view"/);
     assert.match(script.body, /mail-item unread|classList\.add\("unread"\)/);

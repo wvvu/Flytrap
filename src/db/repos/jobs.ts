@@ -218,7 +218,7 @@ export function outboxIdOf(payload: string | null): string | null {
 function reopenSend(db: Db, payload: string | null, now: number): void {
   const id = outboxIdOf(payload);
   if (!id) return;
-  db.prepare(`UPDATE outbox SET status = 'queued', updated_at = ? WHERE id = ? AND status != 'sent'`).run(now, id);
+  db.prepare(`UPDATE outbox SET status = 'queued', error = NULL, updated_at = ? WHERE id = ? AND status != 'sent'`).run(now, id);
 }
 
 function reopenQueuedSends(db: Db, now: number): void {
