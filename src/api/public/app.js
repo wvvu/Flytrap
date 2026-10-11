@@ -10,7 +10,7 @@ const LABEL_NAMES = {
 
 const VIEW_TITLES = {
   inbox: "收件箱",
-  spam: "Spam",
+  spam: "已拦截",
   trash: "垃圾桶",
   dlq: "处理失败",
   settings: "设置",
@@ -21,8 +21,9 @@ const STEP_NAMES = {
   classify: "分拣",
   notify: "提醒",
   rebuild: "重建",
+  send: "发信",
 };
-const STEP_ORDER = ["auth", "parse", "classify", "notify", "rebuild"];
+const STEP_ORDER = ["auth", "parse", "classify", "notify", "rebuild", "send"];
 
 let currentTab = "ai";
 let currentView = "inbox";
@@ -51,6 +52,11 @@ let mailLoadToken = 0;
 let csrfToken = null;
 let toastTimer = 0;
 let currentPromptId = "classify-v1";
+let holdBoot = false;
+let unreadInbox = 0;
+let blockedSenders = [];
+let dkimKeys = [];
+let currentFromAddress = "";
 
 // DOM 元素引用
 const appEl = document.querySelector("#app");
@@ -67,10 +73,7 @@ const navSpamBtn = document.querySelector("#nav-spam");
 const navTrashBtn = document.querySelector("#nav-trash");
 const navSettingsBtn = document.querySelector("#nav-settings");
 const badgeDlq = document.querySelector("#badge-dlq");
-const inboxLabel = document.querySelector("#inbox-label");
-const spamLabel = document.querySelector("#spam-label");
-const badgeInbox = document.querySelector("#badge-inbox");
-const badgeSpam = document.querySelector("#badge-spam");
+const streamTitle = document.querySelector("#stream-title");
 
 // 第二列流头部
 const streamInboxHeader = document.querySelector("#stream-inbox-header");
@@ -138,6 +141,7 @@ const plainTextBody = document.querySelector("#plain-text-body");
 const rawHeaders = document.querySelector("#raw-headers");
 const authChips = document.querySelector("#auth-chips");
 const btnTrashMail = document.querySelector("#btn-trash-mail");
+const btnBlockMail = document.querySelector("#btn-block-mail");
 const btnRestoreMail = document.querySelector("#btn-restore-mail");
 const btnDeleteMail = document.querySelector("#btn-delete-mail");
 const btnReclassify = document.querySelector("#btn-reclassify");
@@ -168,6 +172,7 @@ dlqRefreshBtn?.addEventListener("click", () => void loadDlqJobs());
 retryAllBtn?.addEventListener("click", () => void retryAllDead());
 
 btnTrashMail?.addEventListener("click", () => void handleTrashMail());
+btnBlockMail?.addEventListener("click", () => void handleBlockMail());
 btnRestoreMail?.addEventListener("click", () => void handleRestoreMail());
 btnDeleteMail?.addEventListener("click", () => void handleDeleteMail());
 backListBtn?.addEventListener("click", () => setMobilePane("list"));
@@ -201,6 +206,28 @@ document.querySelector("#notify-confidence")?.addEventListener("input", syncNoti
 document.querySelector("#btn-save-attempts")?.addEventListener("click", () => void saveAttemptSettings());
 document.querySelector("#job-max-attempts")?.addEventListener("input", syncAttemptSave);
 document.querySelector("#btn-add-domain")?.addEventListener("click", () => void addDomain());
+document.querySelector("#btn-refresh-send")?.addEventListener("click", () => void loadSendSection());
+document.querySelector("#send-form")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void submitSend();
+});
+document.querySelector("#send-from")?.addEventListener("input", refreshSendNote);
+document.querySelector("#btn-dkim-generate")?.addEventListener("click", () => {
+  const input = document.querySelector("#dkim-domain");
+  const domain = input ? input.value.trim().toLowerCase() : "";
+  if (!domain) {
+    toast("请填写域名");
+    return;
+  }
+  void generateDkim(domain);
+});
+document.querySelector("#btn-add-block")?.addEventListener("click", () => void addBlocked());
+document.querySelector("#block-add")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void addBlocked();
+  }
+});
 document.querySelector("#domain-add")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -360,15 +387,25 @@ async function init() {
   initTheme();
   try {
     await request("/v1/me");
-    showApp();
-    await loadAppearance();
-    await switchNav("inbox");
-    void updateDlqBadge();
-    void refreshUnread();
+    await revealApp();
   } catch {
     showLogin();
   }
   window.setInterval(() => void pollLive(), 15000);
+}
+
+async function revealApp() {
+  holdBoot = true;
+  appEl.classList.add("is-booting");
+  showApp();
+  try {
+    await loadAppearance();
+    await switchNav("inbox");
+    await Promise.all([updateDlqBadge(), refreshUnread()]);
+  } finally {
+    holdBoot = false;
+    appEl.classList.remove("is-booting");
+  }
 }
 
 function setGlyph(el, name) {
@@ -417,10 +454,7 @@ async function signIn() {
     });
     document.querySelector("#password").value = "";
     csrfToken = null;
-    showApp();
-    await loadAppearance();
-    await switchNav("inbox");
-    void updateDlqBadge();
+    await revealApp();
   } catch (err) {
     loginError.textContent = explain(err);
   } finally {
@@ -443,10 +477,14 @@ async function signOut() {
 
 function showLogin() {
   document.title = "登录";
+  holdBoot = false;
+  if (appEl) appEl.classList.remove("is-booting");
   loginEl.hidden = false;
   loginEl.style.display = "flex";
   appEl.hidden = true;
   appEl.style.display = "none";
+  const username = document.querySelector("#username");
+  if (username instanceof HTMLInputElement) username.focus();
 }
 
 function showApp() {
@@ -458,7 +496,9 @@ function showApp() {
 
 function setViewTitle(view) {
   document.title = VIEW_TITLES[view] || "收件箱";
+  if (view === "inbox" && unreadInbox > 0) document.title += " (" + unreadInbox + ")";
   if (panelTitle !== "Flytrap") document.title = panelTitle + " · " + document.title;
+  if (streamTitle) streamTitle.textContent = unreadInbox > 0 ? "收件箱 (" + unreadInbox + ")" : "收件箱";
 }
 
 function placeMailSearch(view) {
@@ -469,9 +509,9 @@ function placeMailSearch(view) {
 
 function setEmptyCopy(view) {
   if (!mailEmptyCopy) return;
-  if (view === "spam") mailEmptyCopy.textContent = "这里是 Spam。选全部才会看到正常来信。";
+  if (view === "spam") mailEmptyCopy.textContent = "这里是已拦截。选全部才会看到正常来信。";
   else if (view === "trash") mailEmptyCopy.textContent = "这里是垃圾桶。";
-  else mailEmptyCopy.textContent = "这里是收件箱，包含尚未分类的来信。其余在 Spam。";
+  else mailEmptyCopy.textContent = "这里是收件箱，包含尚未分类的来信。其余在已拦截。";
 }
 
 function syncListLabel() {
@@ -489,22 +529,11 @@ function staysInList(newLabel) {
   return newLabel === filter;
 }
 
-function paintUnread(label, badge, count) {
-  const n = Number(count) || 0;
-  if (label) {
-    const base = label.dataset.base || "";
-    label.textContent = n > 0 ? base + "(" + n + ")" : base;
-  }
-  if (!badge) return;
-  badge.textContent = String(n);
-  badge.hidden = n < 1;
-}
-
 async function refreshUnread() {
   try {
     const counts = await request("/v1/unread");
-    paintUnread(inboxLabel, badgeInbox, counts.inbox);
-    paintUnread(spamLabel, badgeSpam, counts.spam);
+    unreadInbox = Number(counts.inbox) || 0;
+    if (appEl && !appEl.hidden) setViewTitle(currentView);
   } catch {
     // The next poll tries again.
   }
@@ -560,9 +589,9 @@ async function switchNav(view) {
     navSettingsBtn?.classList.add("active");
     if (streamSettingsHeader) streamSettingsHeader.hidden = false;
     if (viewSettings) viewSettings.hidden = false;
-    await loadSettingsPage();
     renderSettingsNav();
     showSettingsSection(currentSettingsSection, { keepListOnNarrow: true });
+    await loadSettingsPage();
   }
 }
 
@@ -640,7 +669,9 @@ async function loadMessagesPage(replace) {
 
     // 桌面端顺手打开第一封。窄屏留在列表，避免一进来就盖住收件流。
     if (replace && items.length > 0 && !selectedMailId) {
-      void selectMail(items[0].id, { keepListOnNarrow: true });
+      const opening = selectMail(items[0].id, { keepListOnNarrow: true });
+      if (holdBoot) await opening;
+      else void opening;
     }
   } catch (err) {
     if (err && err.status === 401) {
@@ -751,7 +782,9 @@ async function selectMail(id, options = {}) {
     }
     if (detailTime) detailTime.textContent = formatFullTime(detail.receivedAt);
 
+    currentFromAddress = extractEmail(rawFrom);
     const isTrashed = Boolean(detail.trashedAt || currentView === "trash");
+    if (btnBlockMail) btnBlockMail.hidden = !currentFromAddress;
     if (btnTrashMail) btnTrashMail.hidden = isTrashed;
     if (btnRestoreMail) btnRestoreMail.hidden = !isTrashed;
     if (btnDeleteMail) btnDeleteMail.hidden = !isTrashed;
@@ -886,10 +919,11 @@ async function selectMail(id, options = {}) {
     if (mailLoadingEl) mailLoadingEl.hidden = true;
     mailDetailEl.hidden = false;
 
-    // 加载 HTML 与真正的 RFC822 信头
-    void loadMailHtml(id, token);
-    void loadRawHeaders(id, token, detail);
-    markOpened(id);
+    // 加载 HTML 与真正的 RFC822 信头。带会话进来时等这一封画完再揭开，避免连闪。
+    const htmlReady = loadMailHtml(id, token);
+    const headersReady = loadRawHeaders(id, token, detail);
+    const opened = markOpened(id);
+    if (holdBoot) await Promise.all([htmlReady, headersReady, opened]);
   } catch (err) {
     if (token !== mailLoadToken) return;
     console.error("selectMail error:", err);
@@ -977,7 +1011,7 @@ function renderSandboxHtml(html) {
     : `html{background:${pageBg};}`;
   const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${thumbBg} ${trackBg};}::-webkit-scrollbar{width:10px;height:10px;}::-webkit-scrollbar-track{background:${trackBg};}::-webkit-scrollbar-thumb{background:${thumbBg};border-radius:5px;border:2px solid ${trackBg};}::-webkit-scrollbar-thumb:hover{background:${thumbHover};}::-webkit-scrollbar-thumb:active{background:${thumbActive};}::-webkit-scrollbar-corner{background:${trackBg};}::-webkit-resizer{background:transparent;}`;
   const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:sans-serif;font-size:14px;line-height:1.6;padding:16px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${body}</body></html>`;
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:sans-serif;font-size:16px;line-height:1.6;padding:18px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${body}</body></html>`;
   mailSandbox.setAttribute("srcdoc", doc);
   const hint = document.querySelector("#preview-guard");
   if (hint) {
@@ -1032,6 +1066,41 @@ function navigateMail(delta) {
 }
 
 // ==================== 垃圾桶动作处理 ====================
+
+async function handleBlockMail() {
+  if (!selectedMailId || !currentFromAddress) return;
+  const email = currentFromAddress;
+  const id = selectedMailId;
+  if (!(await askConfirm(`把 ${email} 加入黑名单？之后该地址来的信直接进垃圾桶。`))) return;
+  if (btnBlockMail) btnBlockMail.disabled = true;
+  try {
+    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/block", { method: "POST", body: {} });
+    blockedSenders = Array.isArray(res.blockedSenders) ? res.blockedSenders : blockedSenders;
+    renderBlockList(blockedSenders);
+    toast("已加入黑名单");
+    void refreshUnread();
+    if (currentView === "trash") return;
+    noticeEl.textContent = "邮件已移入垃圾桶";
+    setTimeout(() => { if (noticeEl.textContent === "邮件已移入垃圾桶") noticeEl.textContent = ""; }, 3000);
+    const card = findByDataId(listEl, ".mail-item", id);
+    if (card) card.remove();
+    currentMessages = currentMessages.filter((m) => m.id !== id);
+    const nextCard = listEl.querySelector(".mail-item");
+    if (nextCard && nextCard.getAttribute("data-id")) {
+      void selectMail(nextCard.getAttribute("data-id"));
+    } else {
+      selectedMailId = null;
+      currentFromAddress = "";
+      mailDetailEl.hidden = true;
+      mailEmptyEl.hidden = false;
+      setMobilePane("list");
+    }
+  } catch (err) {
+    noticeEl.textContent = "加入黑名单失败: " + explain(err);
+  } finally {
+    if (btnBlockMail) btnBlockMail.disabled = false;
+  }
+}
 
 async function handleTrashMail() {
   if (!selectedMailId) return;
@@ -1519,7 +1588,8 @@ async function loadSettingsPage() {
     const thinking = document.querySelector("#ai-thinking");
     if (thinking) thinking.value = settings.aiThinking || "low";
     renderAiEditors(settings.aiPool || {});
-    renderSettingsNav();
+    renderBlockList(settings.blockedSenders || []);
+    await loadSendSection();
   } catch (err) {
     toast(explain(err));
   }
@@ -1530,7 +1600,9 @@ const SETTING_SECTIONS = [
   ["model", "模型"],
   ["account", "账号"],
   ["domains", "收信"],
+  ["send", "发信"],
   ["mailboxes", "地址"],
+  ["block", "黑名单"],
   ["notify", "提醒"],
   ["prompt", "分拣"],
   ["jobs", "失败"],
@@ -1566,6 +1638,7 @@ function showSettingsSection(id, options = {}) {
   }
   if (!options.keepListOnNarrow) setMobilePane("detail");
   if (id === "logs") void loadLogs();
+  if (id === "send") void loadSendSection();
 }
 
 function describeAi(ai) {
@@ -1671,6 +1744,59 @@ async function saveNotifySettings() {
   }
 }
 
+function renderBlockList(addresses) {
+  blockedSenders = Array.isArray(addresses) ? addresses.slice() : [];
+  const host = document.querySelector("#block-list");
+  const empty = document.querySelector("#block-empty");
+  if (empty) empty.hidden = blockedSenders.length > 0;
+  if (!host) return;
+  host.replaceChildren();
+  for (const address of blockedSenders) {
+    const row = document.createElement("div");
+    row.className = "domain-row";
+    const input = document.createElement("input");
+    input.value = address;
+    input.readOnly = true;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn-fit ghost";
+    button.textContent = "移除";
+    button.addEventListener("click", () => void removeBlocked(address));
+    row.append(input, button);
+    host.append(row);
+  }
+}
+
+async function addBlocked() {
+  const input = document.querySelector("#block-add");
+  const address = input ? input.value.trim() : "";
+  if (!address) return;
+  try {
+    const res = await request("/v1/settings/blocklist", {
+      method: "PUT",
+      body: { addresses: blockedSenders.concat([address]) },
+    });
+    if (input) input.value = "";
+    renderBlockList(res.blockedSenders || []);
+    toast("已加入黑名单");
+  } catch {
+    toast("发件地址无效");
+  }
+}
+
+async function removeBlocked(address) {
+  try {
+    const res = await request("/v1/settings/blocklist", {
+      method: "PUT",
+      body: { addresses: blockedSenders.filter((item) => item !== address) },
+    });
+    renderBlockList(res.blockedSenders || []);
+    toast("已移出黑名单");
+  } catch (err) {
+    toast("移出黑名单失败: " + explain(err));
+  }
+}
+
 async function addDomain() {
   const input = document.querySelector("#domain-add");
   const domain = input ? input.value.trim() : "";
@@ -1764,16 +1890,50 @@ async function loadMachineLine() {
   try {
     const health = await request("/healthz");
     const stats = await request("/v1/stats");
-    const today = stats.today || {};
-    const sum = Object.values(today).reduce((acc, n) => acc + (typeof n === "number" ? n : 0), 0);
     const line = document.querySelector("#machine-line");
     const dbText = health.db === "ok" ? "SQLite 正常" : "数据库异常";
-    if (line) line.textContent = `在线 · ${dbText} · 今天收了 ${sum} 封`;
+    if (line) line.textContent = `在线 · ${dbText}`;
+    renderOverview(stats);
     renderTrend(Array.isArray(stats.daily) ? stats.daily : []);
   } catch (err) {
     const line = document.querySelector("#machine-line");
     if (line) line.textContent = explain(err);
   }
+}
+
+function renderOverview(stats) {
+  const host = document.querySelector("#stat-cards");
+  if (!host) return;
+  host.replaceChildren();
+  const today = stats && stats.today ? stats.today : {};
+  const total = stats && stats.total ? stats.total : {};
+  host.append(statCard("今天", String(countMapSum(today)), ""));
+  host.append(statCard("累计", String(countMapSum(total)), ""));
+  const keys = ["legit", "spam", "phish", "malware", "unsolicited-admin", "gray", "unlabeled"];
+  for (const key of keys) {
+    const n = Number(today[key]) || 0;
+    if (n < 1) continue;
+    const name = key === "unlabeled" ? "未分类" : labelName(key);
+    const tone = key === "unlabeled" ? "" : key === "unsolicited-admin" ? "promo" : key;
+    host.append(statCard(name, String(n), tone ? "stat-" + tone : ""));
+  }
+}
+
+function countMapSum(map) {
+  return Object.values(map).reduce((acc, n) => acc + (typeof n === "number" ? n : 0), 0);
+}
+
+function statCard(label, value, extra) {
+  const card = document.createElement("div");
+  card.className = extra ? "stat-card " + extra : "stat-card";
+  const num = document.createElement("div");
+  num.className = "stat-num";
+  num.textContent = value;
+  const desc = document.createElement("div");
+  desc.className = "stat-desc";
+  desc.textContent = label;
+  card.append(num, desc);
+  return card;
 }
 
 function renderTrend(days) {
@@ -2245,6 +2405,200 @@ async function saveAiSettings() {
   }
 }
 
+async function loadSendSection() {
+  try {
+    const [keys, box] = await Promise.all([request("/v1/dkim"), request("/v1/outbox")]);
+    dkimKeys = Array.isArray(keys.items) ? keys.items : [];
+    renderDkim(dkimKeys);
+    renderOutbox(Array.isArray(box.items) ? box.items : []);
+    refreshSendNote();
+  } catch (err) {
+    toast("读取发信失败: " + explain(err));
+  }
+}
+
+function refreshSendNote() {
+  const note = document.querySelector("#send-domain-note");
+  const input = document.querySelector("#send-from");
+  if (!note || !input) return;
+  const from = normalizeAddress(extractEmail(input.value));
+  const domain = from.includes("@") ? from.split("@")[1] : "";
+  note.hidden = !from || settingsDomains.includes(domain);
+}
+
+async function submitSend() {
+  const fromInput = document.querySelector("#send-from");
+  const toInput = document.querySelector("#send-to");
+  const subjectInput = document.querySelector("#send-subject");
+  const textInput = document.querySelector("#send-text");
+  const button = document.querySelector("#btn-send");
+  const from = normalizeAddress(extractEmail(fromInput ? fromInput.value : ""));
+  const to = splitAddresses(toInput ? toInput.value : "").map((item) => normalizeAddress(extractEmail(item))).filter(Boolean);
+  if (!from || to.length === 0) {
+    toast("请填写发件和收件");
+    return;
+  }
+  if (to.length > 20) {
+    toast("收件太多");
+    return;
+  }
+  if (button) button.disabled = true;
+  try {
+    const queued = await request("/v1/outbox", {
+      method: "POST",
+      body: {
+        from,
+        to,
+        subject: subjectInput ? subjectInput.value : "",
+        text: textInput ? textInput.value : "",
+      },
+    });
+    if (toInput) toInput.value = "";
+    if (subjectInput) subjectInput.value = "";
+    if (textInput) textInput.value = "";
+    toast(queued.dkim === "signed" ? "已排队，并签了 DKIM" : "已排队，没有签名");
+    await loadSendSection();
+  } catch (err) {
+    toast("发出失败: " + explain(err));
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function splitAddresses(raw) {
+  return String(raw || "").split(/[,;\s]+/).map((part) => part.trim()).filter(Boolean);
+}
+
+function renderOutbox(items) {
+  const host = document.querySelector("#outbox-list");
+  const empty = document.querySelector("#outbox-empty");
+  if (!host) return;
+  host.replaceChildren();
+  if (empty) empty.hidden = items.length > 0;
+  for (const item of items) host.append(outboxItem(item));
+}
+
+function outboxItem(item) {
+  const row = document.createElement("div");
+  row.className = "send-item";
+  const subject = document.createElement("strong");
+  subject.textContent = item.subject || "（无主题）";
+  const who = document.createElement("p");
+  who.className = "muted";
+  const to = Array.isArray(item.to) ? item.to.join(", ") : "";
+  who.textContent = `${item.from || ""} → ${to}`;
+  const state = document.createElement("p");
+  state.textContent = `${outboxStatus(item)} · ${item.dkim === "signed" ? "已签名" : "未签名"}`;
+  row.append(subject, who, state);
+  if (item.error) {
+    const error = document.createElement("p");
+    error.className = "muted";
+    error.textContent = item.error;
+    row.append(error);
+  }
+  return row;
+}
+
+function outboxStatus(item) {
+  if (item.status === "sent") return "已发出";
+  if (item.status === "error") return "失败";
+  if (item.error) return "还会再试";
+  return "排队中";
+}
+
+function renderDkim(keys) {
+  const host = document.querySelector("#dkim-list");
+  if (!host) return;
+  host.replaceChildren();
+  const domains = new Set(settingsDomains);
+  for (const key of keys) domains.add(key.domain);
+  const ordered = [...domains].sort();
+  if (ordered.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "还没有域名。";
+    host.append(empty);
+    return;
+  }
+  for (const domain of ordered) {
+    const matches = keys.filter((key) => key.domain === domain);
+    host.append(dkimRow(domain, matches));
+  }
+}
+
+function dkimRow(domain, keys) {
+  const row = document.createElement("div");
+  row.className = "send-item";
+  const title = document.createElement("strong");
+  title.textContent = domain;
+  row.append(title);
+  if (keys.length === 0) {
+    const missing = document.createElement("p");
+    missing.className = "muted";
+    missing.textContent = "还没有密钥";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn-fit";
+    button.textContent = "生成密钥";
+    button.addEventListener("click", () => void generateDkim(domain));
+    row.append(missing, button);
+    return row;
+  }
+  for (const key of keys) {
+    const line = document.createElement("p");
+    line.className = "muted";
+    line.textContent = `主机记录: ${key.dnsName || key.selector}`;
+    const txt = document.createElement("div");
+    txt.className = "dkim-txt";
+    txt.textContent = key.txt;
+    const actions = document.createElement("div");
+    actions.className = "inline-row";
+    actions.append(
+      dkimButton("复制主机记录", () => void copyText(key.dnsName || key.selector)),
+      dkimButton("复制 TXT", () => void copyText(key.txt)),
+      dkimButton("重新生成", () => void generateDkim(domain, key.selector)),
+      dkimButton("移除", () => void removeDkim(domain, key.selector)),
+    );
+    row.append(line, txt, actions);
+  }
+  return row;
+}
+
+function dkimButton(label, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn-fit ghost";
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+async function generateDkim(domain, selector) {
+  const name = (selector || "flytrap").trim().toLowerCase();
+  const exists = dkimKeys.some((key) => key.domain === domain && key.selector === name);
+  if (exists && !(await askConfirm("重新生成后，原来的 DNS 记录要换成新的。"))) return;
+  try {
+    await request("/v1/dkim", { method: "POST", body: selector ? { domain, selector: name } : { domain } });
+    const extra = document.querySelector("#dkim-domain");
+    if (extra && extra.value.trim().toLowerCase() === domain) extra.value = "";
+    toast("密钥已生成");
+    await loadSendSection();
+  } catch (err) {
+    toast("生成密钥失败: " + explain(err));
+  }
+}
+
+async function removeDkim(domain, selector) {
+  if (!(await askConfirm("移除这把密钥？之后发出的信不再签名。"))) return;
+  try {
+    await request("/v1/dkim/remove", { method: "POST", body: { domain, selector } });
+    toast("密钥已移除");
+    await loadSendSection();
+  } catch (err) {
+    toast("移除密钥失败: " + explain(err));
+  }
+}
+
 function extractEmail(raw) {
   if (!raw) return "";
   const text = String(raw).trim().toLowerCase();
@@ -2460,7 +2814,7 @@ function markOpened(id) {
   if (card) card.classList.remove("unread");
   const known = currentMessages.find((item) => item.id === id);
   if (known) known.read = true;
-  void request("/v1/messages/" + encodeURIComponent(id) + "/read", { method: "POST", body: {} })
+  return request("/v1/messages/" + encodeURIComponent(id) + "/read", { method: "POST", body: {} })
     .then(() => refreshUnread())
     .catch(() => undefined);
 }

@@ -25,6 +25,7 @@ export async function runClassifyJob(deps: ClassifyJobDeps, job: JobRow): Promis
   if (!job.message_id) throw new Error("classify job has no message");
   const message = getMessage(deps.db, job.message_id);
   if (!message) throw new Error("message missing");
+  if (message.trashed_at) return;
   if (!message.parsed) throw new Error("message is not parsed");
   const parsed = parsedSchema.parse(JSON.parse(message.parsed));
   const auth = message.auth_result ? authResultSchema.parse(JSON.parse(message.auth_result)) : null;

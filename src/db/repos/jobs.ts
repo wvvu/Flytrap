@@ -1,7 +1,7 @@
 import type { Db } from "../index.js";
 import { readJobMaxAttempts } from "./settings.js";
 
-export type JobType = "auth" | "parse" | "classify" | "notify" | "rebuild";
+export type JobType = "auth" | "parse" | "classify" | "notify" | "rebuild" | "send";
 export type JobStatus = "queued" | "running" | "done" | "failed" | "dead" | "dismissed";
 
 export interface JobRow {
@@ -59,9 +59,30 @@ export function enqueueJob(db: Db, input: EnqueueInput): void {
   );
 }
 
-/** One statement. Two workers cannot receive the same row. */
-export function claimJob(db: Db, workerId: string, now: number): JobRow | undefined {
-  return db.prepare(CLAIM_SQL).get(now, workerId, now, now) as JobRow | undefined;
+/** One statement. Two workers cannot receive the same row. Supports type filtering. */
+export function claimJob(
+  db: Db,
+  workerId: string,
+  now: number,
+  types?: readonly string[],
+): JobRow | undefined {
+  if (types && types.length === 0) return undefined;
+  if (!types) {
+    return db.prepare(CLAIM_SQL).get(now, workerId, now, now) as JobRow | undefined;
+  }
+  const placeholders = types.map(() => "?").join(",");
+  const sql = `
+UPDATE jobs
+SET status = 'running', locked_at = ?, locked_by = ?, updated_at = ?
+WHERE id = (
+  SELECT id FROM jobs
+  WHERE status = 'queued' AND run_after <= ? AND type IN (${placeholders})
+  ORDER BY created_at ASC
+  LIMIT 1
+)
+RETURNING *
+`;
+  return db.prepare(sql).get(now, workerId, now, now, ...types) as JobRow | undefined;
 }
 
 export function completeJob(db: Db, id: string, now: number): void {
@@ -144,8 +165,8 @@ export function backoffMs(attempts: number): number {
 
 export function retryJob(db: Db, id: string, now: number): boolean {
   return db.transaction(() => {
-    const job = db.prepare("SELECT id, message_id, status FROM jobs WHERE id = ?").get(id) as
-      | { id: string; message_id: string | null; status: string }
+    const job = db.prepare("SELECT id, type, message_id, payload, status FROM jobs WHERE id = ?").get(id) as
+      | { id: string; type: string; message_id: string | null; payload: string | null; status: string }
       | undefined;
     if (!job) return false;
     const res = db
@@ -163,6 +184,7 @@ export function retryJob(db: Db, id: string, now: number): boolean {
          WHERE id = ? AND status = 'error'`,
       ).run(now, job.message_id);
     }
+    if (res.changes === 1 && job.type === "send") reopenSend(db, job.payload, now);
     return res.changes === 1;
   })();
 }
@@ -198,8 +220,33 @@ export function retryAllDeadJobs(db: Db, now: number): number {
       ).run(now, ...slice);
     }
 
+    reopenQueuedSends(db, now);
     return res.changes;
   })();
+}
+
+/** A send job points at outbox through its payload, not through message_id. */
+export function outboxIdOf(payload: string | null): string | null {
+  if (!payload) return null;
+  try {
+    const parsed = JSON.parse(payload) as { outboxId?: unknown };
+    return typeof parsed.outboxId === "string" && parsed.outboxId.length > 0 ? parsed.outboxId : null;
+  } catch {
+    return null;
+  }
+}
+
+function reopenSend(db: Db, payload: string | null, now: number): void {
+  const id = outboxIdOf(payload);
+  if (!id) return;
+  db.prepare(`UPDATE outbox SET status = 'queued', error = NULL, updated_at = ? WHERE id = ? AND status != 'sent'`).run(now, id);
+}
+
+function reopenQueuedSends(db: Db, now: number): void {
+  const rows = db.prepare(`SELECT payload FROM jobs WHERE type = 'send' AND status = 'queued'`).all() as Array<{
+    payload: string | null;
+  }>;
+  for (const row of rows) reopenSend(db, row.payload, now);
 }
 
 export interface ListJobsOptions {

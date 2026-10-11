@@ -16,6 +16,9 @@ import {
   saveJobMaxAttempts,
   saveNameSettings,
   saveNotifySettings,
+  isBlockedSender,
+  readBlockedSenders,
+  saveBlockedSenders,
   SettingsError,
 } from "../src/db/repos/settings.js";
 import { migrationsDir } from "../src/paths.js";
@@ -48,6 +51,22 @@ test("an empty settings table keeps the environment defaults", () => {
     assert.equal(settings.labelNames.phish, "钓鱼");
     assert.deepEqual(settings.domainNames, {});
     assert.deepEqual(settings.senderNames, []);
+  } finally {
+    db.close();
+  }
+});
+
+test("a blocked sender is stored once, and a bad address is refused", () => {
+  const db = tempDb();
+  try {
+    assert.deepEqual(readBlockedSenders(db), []);
+    assert.equal(isBlockedSender(db, "Alice@Example.com"), false);
+    const saved = saveBlockedSenders(db, ["Alice@Example.com", "alice@example.com"], 9);
+    assert.deepEqual(saved, ["alice@example.com"]);
+    assert.equal(isBlockedSender(db, "alice@example.com"), true);
+    assert.equal(isBlockedSender(db, null), false);
+    assert.throws(() => saveBlockedSenders(db, ["not-an-email"], 10), SettingsError);
+    assert.deepEqual(readBlockedSenders(db), ["alice@example.com"]);
   } finally {
     db.close();
   }

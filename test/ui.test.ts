@@ -60,6 +60,15 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(script.body, /\/v1\/messages\/" \+ encodeURIComponent\(id\) \+ "\/reclassify/);
     assert.match(script.body, /x-csrf-token/);
     assert.match(page.body, /<title>登录<\/title>/);
+    assert.match(page.body, /<script src="\/boot\.js"><\/script>/);
+    assert.match(page.body, /id="login" class="login-wrapper" hidden/);
+    assert.match(page.body, /id="stream-spam-title"/);
+    assert.match(page.body, /id="set-block"/);
+    assert.match(page.body, /id="btn-block-mail"/);
+    assert.match(page.body, /class="model-switch"/);
+    assert.equal(page.body.includes("badge-inbox"), false);
+    assert.equal(page.body.includes("badge-spam"), false);
+    assert.equal(page.body.includes("autofocus"), false);
     assert.match(page.body, /失败几次才停/);
     assert.match(page.body, /收信域名/);
     assert.equal(page.body.includes("security-banner"), false);
@@ -72,6 +81,11 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(script.body, /处外链资源已加载/);
     assert.match(page.body, /id="set-names"/);
     assert.match(page.body, /id="nav-spam"/);
+    assert.match(page.body, /<span class="label">已拦截<\/span>/);
+    assert.match(page.body, /id="stat-cards"/);
+    assert.match(page.body, /id="set-send"/);
+    assert.match(page.body, /id="send-domain-note"/);
+    assert.equal(page.body.includes("<summary>近 14 天</summary>"), false);
     assert.match(page.body, /value="not-legit" selected/);
     assert.match(page.body, /id="label" type="hidden" value="legit"/);
     assert.match(page.body, /id="btn-open-dlq"/);
@@ -79,6 +93,8 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(script.body, /\/v1\/unread/);
     assert.match(page.body, /末 4 位/);
     assert.match(page.body, /启用分拣/);
+    assert.match(script.body, /复制主机记录/);
+    assert.match(script.body, /复制 TXT/);
     assert.match(page.body, /id="password-next"/);
     assert.match(page.body, /id="log-view"/);
     assert.match(script.body, /mail-item unread|classList\.add\("unread"\)/);
@@ -91,6 +107,15 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /class="btn-fit"/);
     assert.match(script.body, /document\.title = "登录"/);
     assert.match(script.body, /document\.title = VIEW_TITLES\[view\]/);
+    assert.match(script.body, /document\.title \+= " \(" \+ unreadInbox \+ "\)"/);
+    assert.match(script.body, /收件箱 \(" \+ unreadInbox \+ "\)/);
+    assert.equal(script.body.includes("unreadCounts.spam"), false);
+    assert.equal(script.body.includes('base + "("'), false);
+    const settingsBranch = script.body.slice(script.body.indexOf('view === "settings"'));
+    const navAt = settingsBranch.indexOf("renderSettingsNav()");
+    const loadAt = settingsBranch.indexOf("await loadSettingsPage()");
+    assert.ok(navAt > 0 && loadAt > navAt);
+    assert.match(script.body, /is-booting/);
     assert.match(script.body, /身份检查/);
     assert.match(script.body, /重分类/);
     assert.equal(script.body.includes("innerHTML"), false);
@@ -102,6 +127,12 @@ test("the panel is static and the mail API stays behind the session", async () =
     const style = await app.inject({ method: "GET", url: "/app.css" });
     assert.equal(style.statusCode, 200);
     assert.match(style.headers["content-type"] ?? "", /text\/css/);
+    assert.match(style.body, /grid-template-columns:\s*92px 391px 1fr/);
+    assert.match(style.body, /font-size:\s*15px/);
+
+    const boot = await app.inject({ method: "GET", url: "/boot.js" });
+    assert.equal(boot.statusCode, 200);
+    assert.match(boot.body, /flytrap_theme/);
 
     const closed = await app.inject({ method: "GET", url: "/v1/messages" });
     assert.equal(closed.statusCode, 401);

@@ -17,6 +17,7 @@ export const SETTING_AI_KEYS = "ai_keys";
 export const SETTING_AI_ENABLED = "ai_enabled";
 export const SETTING_AI_THINKING = "ai_thinking";
 export const SETTING_PASSWORD_HASH = "password_hash";
+export const SETTING_BLOCKED_SENDERS = "blocked_senders";
 
 export const THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
@@ -33,6 +34,7 @@ export const MAX_SENDER_NAME = 40;
 export const MAX_DOMAIN_NAMES = 50;
 export const MAX_AI_MODELS = 8;
 export const MAX_AI_KEYS = 20;
+export const MAX_BLOCKED_SENDERS = 500;
 
 const MODEL_RE = /^[A-Za-z0-9._:@/-]{1,80}$/;
 
@@ -166,6 +168,33 @@ export function saveAcceptDomains(db: Db, domains: readonly string[], now: numbe
   const normalized = parseAcceptDomains(domains.join(","));
   writeRaw(db, SETTING_ACCEPT_DOMAINS, JSON.stringify(normalized), now);
   return normalized;
+}
+
+export function readBlockedSenders(db: Db): string[] {
+  const raw = readRaw(db, SETTING_BLOCKED_SENDERS);
+  if (raw === null) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return normalizeBlockedSenders(parsed.filter((item): item is string => typeof item === "string"), false);
+  } catch {
+    return [];
+  }
+}
+
+export function saveBlockedSenders(db: Db, addresses: readonly string[], now: number): string[] {
+  const normalized = normalizeBlockedSenders(addresses, true);
+  writeRaw(db, SETTING_BLOCKED_SENDERS, JSON.stringify(normalized), now);
+  return normalized;
+}
+
+export function isBlockedSender(db: Db, address: string | null | undefined): boolean {
+  if (!address) return false;
+  try {
+    return readBlockedSenders(db).includes(normalizeAddress(address));
+  } catch {
+    return false;
+  }
 }
 
 export function saveJobMaxAttempts(db: Db, maxAttempts: number, now: number): number {
@@ -439,6 +468,23 @@ function normalizeDomainNames(input: Readonly<Record<string, string>>): Record<s
     if (!trimmed) continue;
     out[oneDomain(key)] = cleanName(trimmed, 1, MAX_DOMAIN_NAME, "domain name");
   }
+  return out;
+}
+
+function normalizeBlockedSenders(addresses: readonly string[], strict: boolean): string[] {
+  if (addresses.length > MAX_BLOCKED_SENDERS) {
+    throw new SettingsError(`at most ${MAX_BLOCKED_SENDERS} blocked senders`);
+  }
+  const out: string[] = [];
+  for (const raw of addresses) {
+    try {
+      const address = normalizeAddress(raw);
+      if (!out.includes(address)) out.push(address);
+    } catch (err) {
+      if (strict) throw err;
+    }
+  }
+  out.sort((left, right) => left.localeCompare(right));
   return out;
 }
 

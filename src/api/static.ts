@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 const PANEL_FILES: Record<string, { name: string; type: string }> = {
   "/": { name: "index.html", type: "text/html; charset=utf-8" },
   "/index.html": { name: "index.html", type: "text/html; charset=utf-8" },
+  "/boot.js": { name: "boot.js", type: "text/javascript; charset=utf-8" },
   "/app.css": { name: "app.css", type: "text/css; charset=utf-8" },
   "/app.js": { name: "app.js", type: "text/javascript; charset=utf-8" },
 };

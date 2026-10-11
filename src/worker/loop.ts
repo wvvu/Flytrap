@@ -1,7 +1,8 @@
 import { hostname } from "node:os";
 import { ulid } from "ulid";
 import type { Db } from "../db/index.js";
-import { claimJob, completeJob, failJob, recoverRunning, releaseJob, requeueJob, type JobRow } from "../db/repos/jobs.js";
+import { claimJob, completeJob, failJob, outboxIdOf, recoverRunning, releaseJob, requeueJob, type JobRow } from "../db/repos/jobs.js";
+import { markOutboxDead, markOutboxRetry } from "../db/repos/outbox.js";
 import { readAiEnabled } from "../db/repos/settings.js";
 import { markMessageError } from "../db/repos/messages.js";
 import type { Codec } from "../compress.js";
@@ -9,10 +10,13 @@ import type { Classifier } from "../ai/classifier.js";
 import type { AppLog } from "../log.js";
 import type { Authenticator } from "../mail/auth.js";
 import type { Notifier } from "../notify/types.js";
+import type { MailSender } from "../mail/deliver.js";
+import { createMxSender } from "../mail/deliver.js";
 import { runAuthJob } from "./job-auth.js";
 import { runClassifyJob } from "./job-classify.js";
 import { runNotifyJob } from "./job-notify.js";
 import { runParseJob } from "./job-parse.js";
+import { runSendJob } from "./job-send.js";
 
 export interface WorkerOptions {
   db: Db;
@@ -27,6 +31,8 @@ export interface WorkerOptions {
   notifyMinConfidence: number;
   promptsDir: string;
   panelBaseUrl: string;
+  ehloName?: string;
+  sendMail?: MailSender;
   pollMs?: number;
   now?: () => number;
   shutdownWaitMs?: number;
@@ -55,7 +61,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
 
   const loop = (async () => {
     while (!stopped) {
-      const job = claimJob(options.db, workerId, now());
+      const job = claimJob(options.db, workerId, now(), SUPPORTED_JOB_TYPES);
       if (!job) {
         await interruptibleSleep(pollMs, (wake) => {
           wakeSleep = wake;
@@ -96,7 +102,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
 /** Claim and run a single job. Returns false when the queue is empty. */
 export async function processNext(options: WorkerOptions, workerId: string): Promise<boolean> {
   const now = options.now ?? Date.now;
-  const job = claimJob(options.db, workerId, now());
+  const job = claimJob(options.db, workerId, now(), SUPPORTED_JOB_TYPES);
   if (!job) return false;
   await runClaimed(options, job, now);
   return true;
@@ -114,13 +120,23 @@ async function runClaimed(options: WorkerOptions, job: JobRow, now: () => number
     const message = err instanceof Error ? err.message : "job failed";
     options.log.error({ jobId: job.id, type: job.type, messageId: job.message_id, err: message }, "job failed");
     const outcome = failJob(options.db, job.id, message, now());
-    if (outcome === "dead" && job.message_id) markMessageError(options.db, job.message_id, message, now());
+    if (job.type === "send") {
+      const outboxId = outboxIdOf(job.payload);
+      if (outboxId) {
+        if (outcome === "dead") markOutboxDead(options.db, outboxId, message, now());
+        else markOutboxRetry(options.db, outboxId, message, now());
+      }
+    } else if (outcome === "dead" && job.message_id) {
+      markMessageError(options.db, job.message_id, message, now());
+    }
   }
 }
 
-async function dispatch(options: WorkerOptions, job: JobRow, now: () => number): Promise<void> {
-  if (job.type === "auth") {
-    await runAuthJob(
+type JobHandler = (options: WorkerOptions, job: JobRow, now: () => number) => Promise<void>;
+
+const JOB_HANDLERS: Record<string, JobHandler> = {
+  auth: (options, job, now) =>
+    runAuthJob(
       {
         db: options.db,
         dataDir: options.dataDir,
@@ -131,25 +147,31 @@ async function dispatch(options: WorkerOptions, job: JobRow, now: () => number):
         now,
       },
       job,
-    );
-    return;
-  }
-  if (job.type === "parse") {
-    await runParseJob(
+    ),
+  parse: (options, job, now) =>
+    runParseJob(
       { db: options.db, dataDir: options.dataDir, codec: options.codec, log: options.log, now },
       job,
-    );
-    return;
-  }
-  if (job.type === "classify") {
-    await runClassifyJob(
+    ),
+  classify: (options, job, now) =>
+    runClassifyJob(
       { db: options.db, promptsDir: options.promptsDir, classifier: options.classifier, log: options.log, now },
       job,
-    );
-    return;
-  }
-  if (job.type === "notify") {
-    await runNotifyJob(
+    ),
+  send: (options, job, now) =>
+    runSendJob(
+      {
+        db: options.db,
+        dataDir: options.dataDir,
+        codec: options.codec,
+        ehloName: options.ehloName ?? options.banner,
+        sendMail: options.sendMail ?? createMxSender(),
+        now,
+      },
+      job,
+    ),
+  notify: (options, job, now) =>
+    runNotifyJob(
       {
         db: options.db,
         log: options.log,
@@ -160,10 +182,15 @@ async function dispatch(options: WorkerOptions, job: JobRow, now: () => number):
         panelBaseUrl: options.panelBaseUrl,
       },
       job,
-    );
-    return;
-  }
-  throw new Error(`unsupported job type ${job.type}`);
+    ),
+};
+
+export const SUPPORTED_JOB_TYPES: readonly string[] = Object.keys(JOB_HANDLERS);
+
+async function dispatch(options: WorkerOptions, job: JobRow, now: () => number): Promise<void> {
+  const handler = JOB_HANDLERS[job.type];
+  if (!handler) throw new Error(`unsupported job type ${job.type}`);
+  await handler(options, job, now);
 }
 
 function sleep(ms: number): Promise<void> {

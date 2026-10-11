@@ -19,6 +19,7 @@ export function defaultPromptsDir(): string {
 export function ensureDataDirs(mailDataDir: string): void {
   mkdirSync(path.join(mailDataDir, "db"), { recursive: true });
   mkdirSync(path.join(mailDataDir, "raw"), { recursive: true });
+  mkdirSync(path.join(mailDataDir, "sent"), { recursive: true });
   mkdirSync(path.join(mailDataDir, "attachments"), { recursive: true });
   const probe = path.join(mailDataDir, ".write-probe");
   try {

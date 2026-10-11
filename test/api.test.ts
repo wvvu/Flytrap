@@ -572,8 +572,61 @@ test("settings override notify, domains, and the failure list", async () => {
     const revived = db.prepare("SELECT status, attempts FROM jobs WHERE id = 'job-dead'").get() as { status: string; attempts: number };
     assert.equal(revived.status, "queued");
     assert.equal(revived.attempts, 0);
+
+    const badBlock = await client.put(app, "/v1/settings/blocklist", { addresses: ["not an email"] });
+    assert.equal(badBlock.statusCode, 400);
+    const savedBlock = await client.put(app, "/v1/settings/blocklist", { addresses: ["Keep@Example.com"] });
+    assert.equal(savedBlock.statusCode, 200);
+    assert.deepEqual(savedBlock.json().blockedSenders, ["keep@example.com"]);
+    const blocked = await client.post(app, "/v1/messages/msg-1/block", {});
+    assert.equal(blocked.statusCode, 200);
+    assert.equal(blocked.json().trashed, true);
+    assert.deepEqual(blocked.json().blockedSenders, ["keep@example.com", "payroll@example.com"]);
+    const stillThere = await client.get(app, "/v1/messages?trashed=true&limit=10");
+    const trashedIds = stillThere.json().items.map((item: { id: string }) => item.id);
+    assert.equal(trashedIds.includes("msg-1"), true);
+    const visible = await client.get(app, "/v1/messages?limit=10");
+    const visibleIds = visible.json().items.map((item: { id: string }) => item.id);
+    assert.equal(visibleIds.includes("msg-1"), false);
   } finally {
     await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a restarted api keeps the signed-in session", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-session-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const config = loadConfig({
+    NODE_ENV: "test",
+    ROLES: "api",
+    MAIL_DATA_DIR: dir,
+    ACCEPT_DOMAINS: "example.com",
+    API_USERNAME: "admin",
+    API_PASSWORD: password,
+    SESSION_SECRET: secret,
+    CLASSIFIER: "fake",
+    API_HOST: "127.0.0.1",
+    API_PORT: "8080",
+  });
+  const first = await buildApi({ config, db, codec: gzipCodec(), log: false });
+  const client = cookieJar();
+  try {
+    await client.csrf(first);
+    const login = await client.post(first, "/v1/login", { username: "admin", password });
+    assert.equal(login.statusCode, 200);
+    await first.close();
+    const second = await buildApi({ config, db, codec: gzipCodec(), log: false });
+    try {
+      const me = await client.get(second, "/v1/me");
+      assert.equal(me.statusCode, 200);
+      assert.deepEqual(me.json(), { user: "admin" });
+    } finally {
+      await second.close();
+    }
+  } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }

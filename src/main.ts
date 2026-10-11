@@ -155,11 +155,15 @@ async function boot(stops: Array<() => Promise<void>>): Promise<void> {
     if (config.telegramBotToken && config.telegramChatId) {
       notifiers.push(createTelegramNotifier({ token: config.telegramBotToken, chatId: config.telegramChatId }));
     }
+    if (!config.smtpEhlo.includes(".")) {
+      log.warn({ ehlo: config.smtpEhlo }, "SMTP_EHLO is not a domain; set it to the name that matches reverse DNS");
+    }
     const worker = await startWorker({
       db,
       dataDir: config.mailDataDir,
       codec: codec!,
       banner: config.smtpBanner,
+      ehloName: config.smtpEhlo,
       log,
       authenticate: createMailauthAuthenticator(),
       classifier,

@@ -15,7 +15,7 @@ test("migration is idempotent and jobs are claimed atomically", () => {
   try {
     const first = migrate(db, migrationsDir(), () => 1);
     const second = migrate(db, migrationsDir(), () => 2);
-    assert.deepEqual(first, ["001_init", "002_trash", "003_indexes", "004_settings", "005_display_names", "006_read"]);
+    assert.deepEqual(first, ["001_init", "002_trash", "003_indexes", "004_settings", "005_display_names", "006_read", "007_sessions", "008_outbox"]);
     assert.deepEqual(second, []);
     const journal = db.pragma("journal_mode", { simple: true });
     assert.equal(String(journal).toLowerCase(), "wal");
@@ -24,7 +24,7 @@ test("migration is idempotent and jobs are claimed atomically", () => {
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all() as Array<{ name: string }>;
     const names = tables.map((row) => row.name);
-    for (const required of ["messages", "deliveries", "attachments", "jobs", "mailbox_history", "audit_log", "purged_messages", "settings"]) {
+    for (const required of ["messages", "deliveries", "attachments", "jobs", "mailbox_history", "audit_log", "purged_messages", "settings", "sessions", "outbox", "dkim_keys"]) {
       assert.ok(names.includes(required), required);
     }
     const indexes = db
@@ -79,6 +79,10 @@ test("migration is idempotent and jobs are claimed atomically", () => {
     const retried = claimJob(db, "worker-5", 70 + 60_000);
     assert.equal(retried?.id, "job_c");
     assert.equal(failJob(db, "job_c", "dns timeout", 80), "dead");
+
+    enqueueJob(db, { id: "job_send", type: "send", now: 90 });
+    assert.equal(claimJob(db, "worker-legacy", 90, ["auth", "parse"]), undefined);
+    assert.equal(claimJob(db, "worker-new", 90, ["send"])?.id, "job_send");
   } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

@@ -15,19 +15,24 @@ import type { Db } from "../db/index.js";
 import PostalMime from "postal-mime";
 import { findAttachment, listMessageAttachments } from "../db/repos/attachments.js";
 import { writeAudit } from "../db/repos/audit.js";
-import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, retryAllDeadJobs, retryJob, retryMessageJobs, wakeClassifyJobs, type JobStatus } from "../db/repos/jobs.js";
+import { deleteDkimKey, listDkimPublic, saveDkimKey } from "../db/repos/dkim-keys.js";
+import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, outboxIdOf, retryAllDeadJobs, retryJob, retryMessageJobs, wakeClassifyJobs, type JobStatus } from "../db/repos/jobs.js";
+import { getOutbox, listOutbox, listOutboxByIds } from "../db/repos/outbox.js";
 import { fallbackAiPool } from "../ai/pool.js";
-import { presentAiPool, readAiEnabled, readAiThinking, readEffectiveAiPool, readPasswordHash, saveAcceptDomains, saveAiControls, saveAiPool, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
+import { presentAiPool, readAiEnabled, readAiThinking, readBlockedSenders, readEffectiveAiPool, readPasswordHash, saveAcceptDomains, saveAiControls, saveAiPool, saveBlockedSenders, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
 import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
 import { countTrash, countUnread, deleteMessage, emptyTrash, getMessage, listMessages, markMessageRead, restoreMessage, trashMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
 import { readRaw } from "../ingest/read-raw.js";
 import { removeStoredFiles } from "../ingest/remove-stored.js";
+import { OutboundError } from "../mail/address.js";
 import { rfc822HeaderBlock } from "../mail/headers.js";
+import { submitOutbox } from "../mail/submit.js";
 import { PathEscapeError, resolveInside } from "../paths.js";
 import { actorName, contentDisposition, decodeCursor, encodeCursor, errorName, HttpError, iso, parseJson, publicError, safeMime } from "./http.js";
 import { hashPassword, loginOk } from "./password.js";
 import { recentLogs } from "../log.js";
+import { sqliteSessionStore } from "./session-store.js";
 import { isPanelAsset, registerPanel } from "./static.js";
 
 declare module "fastify" {
@@ -88,6 +93,29 @@ const passwordBody = z.object({
   next: z.string().min(8).max(200),
 }).strict();
 
+const blocklistBody = z.object({
+  addresses: z.array(z.string().min(1).max(254)).max(500),
+}).strict();
+
+const sendBody = z.object({
+  from: z.string().min(3).max(254),
+  to: z.array(z.string().min(3).max(254)).min(1).max(20),
+  cc: z.array(z.string().min(3).max(254)).max(20).optional(),
+  bcc: z.array(z.string().min(3).max(254)).max(20).optional(),
+  subject: z.string().max(200).optional(),
+  text: z.string().max(100_000).optional(),
+}).strict();
+
+const dkimBody = z.object({
+  domain: z.string().min(1).max(253),
+  selector: z.string().min(1).max(63).optional(),
+}).strict();
+
+const dkimRemoveBody = z.object({
+  domain: z.string().min(1).max(253),
+  selector: z.string().min(1).max(63),
+}).strict();
+
 const historyBody = z.object({
   domain: z.string().min(1).max(253),
   localpart: z.string().min(1).max(64),
@@ -146,6 +174,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     secret: config.sessionSecret ?? "",
     cookieName: "flytrap.sid",
     saveUninitialized: false,
+    store: sqliteSessionStore(db),
     cookie: {
       httpOnly: true,
       sameSite: "lax",
@@ -366,6 +395,29 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, id, trashed: true });
   });
 
+  app.post("/v1/messages/:id/block", async (request, reply) => {
+    const id = messageId(request);
+    const message = requireMessage(db, id);
+    if (!message.from_addr) throw new HttpError(400);
+    let blockedSenders;
+    try {
+      blockedSenders = saveBlockedSenders(db, readBlockedSenders(db).concat(message.from_addr), now());
+    } catch (err) {
+      if (err instanceof SettingsError) throw new HttpError(400);
+      throw err;
+    }
+    trashMessage(db, id, now());
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "block_sender",
+      target: id,
+      detail: message.from_addr,
+    });
+    return reply.send({ ok: true, id, blockedSenders, trashed: true });
+  });
+
   app.post("/v1/messages/:id/restore", async (request, reply) => {
     const id = messageId(request);
     requireMessage(db, id);
@@ -456,22 +508,35 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       scope: scope === "open" || scope === "retrying" || scope === "stopped" ? scope : null,
       limit,
     });
+    const sent = new Map(
+      listOutboxByIds(
+        db,
+        rows.flatMap((row) => {
+          if (row.type !== "send") return [];
+          const id = outboxIdOf(row.payload);
+          return id ? [id] : [];
+        }),
+      ).map((row) => [row.id, row] as const),
+    );
     return {
-      items: rows.map((row) => ({
-        id: row.id,
-        type: row.type,
-        messageId: row.message_id,
-        messageSubject: row.message_subject,
-        messageFrom: row.message_from,
-        messageTo: envelopeList(row.message_to),
-        status: row.status,
-        attempts: row.attempts,
-        maxAttempts: row.max_attempts,
-        runAfter: iso(row.run_after),
-        lastError: row.last_error,
-        createdAt: iso(row.created_at),
-        updatedAt: iso(row.updated_at),
-      })),
+      items: rows.map((row) => {
+        const letter = row.type === "send" ? sent.get(outboxIdOf(row.payload) ?? "") : undefined;
+        return {
+          id: row.id,
+          type: row.type,
+          messageId: row.message_id,
+          messageSubject: row.message_subject ?? letter?.subject ?? null,
+          messageFrom: row.message_from ?? letter?.from_addr ?? null,
+          messageTo: row.message_to ? envelopeList(row.message_to) : envelopeList(letter?.to_addrs ?? null),
+          status: row.status,
+          attempts: row.attempts,
+          maxAttempts: row.max_attempts,
+          runAfter: iso(row.run_after),
+          lastError: row.last_error,
+          createdAt: iso(row.created_at),
+          updatedAt: iso(row.updated_at),
+        };
+      }),
     };
   });
 
@@ -575,6 +640,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       aiPool: presentAiPool(readEffectiveAiPool(db, fallbackAiPool(config))),
       aiEnabled: readAiEnabled(db),
       aiThinking: readAiThinking(db),
+      blockedSenders: readBlockedSenders(db),
       passwordSet: readPasswordHash(db) !== null,
     };
   });
@@ -606,6 +672,26 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       aiEnabled: readAiEnabled(db),
       aiThinking: readAiThinking(db),
     });
+  });
+
+  app.put("/v1/settings/blocklist", async (request, reply) => {
+    const body = blocklistBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    let blockedSenders;
+    try {
+      blockedSenders = saveBlockedSenders(db, body.data.addresses, now());
+    } catch (err) {
+      if (err instanceof SettingsError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "settings_blocklist",
+      detail: `count=${blockedSenders.length}`,
+    });
+    return reply.send({ ok: true, blockedSenders });
   });
 
   app.put("/v1/settings/password", async (request, reply) => {
@@ -672,6 +758,90 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       detail: domains.join(","),
     });
     return reply.send({ ok: true, acceptDomains: domains });
+  });
+
+  app.get("/v1/dkim", async () => ({ items: listDkimPublic(db) }));
+
+  app.post("/v1/dkim", async (request, reply) => {
+    const body = dkimBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    let saved;
+    try {
+      saved = saveDkimKey(db, body.data.domain, body.data.selector, now());
+    } catch (err) {
+      if (err instanceof OutboundError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "dkim_generate",
+      target: `${saved.selector}._domainkey.${saved.domain}`,
+    });
+    return reply.send({ ok: true, ...saved });
+  });
+
+  app.post("/v1/dkim/remove", async (request, reply) => {
+    const body = dkimRemoveBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    let removed = false;
+    try {
+      removed = deleteDkimKey(db, body.data.domain, body.data.selector);
+    } catch (err) {
+      if (err instanceof OutboundError) throw new HttpError(400);
+      throw err;
+    }
+    if (!removed) throw new HttpError(404, "not_found");
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "dkim_remove",
+      target: `${body.data.selector}._domainkey.${body.data.domain}`,
+    });
+    return reply.send({ ok: true });
+  });
+
+  app.get("/v1/outbox", async (request) => {
+    const query = request.query as Record<string, unknown>;
+    const limitRaw = optionalString(query.limit);
+    let limit = 30;
+    if (limitRaw !== undefined) {
+      if (!/^\d+$/.test(limitRaw)) throw new HttpError(400);
+      limit = Number(limitRaw);
+      if (limit < 1 || limit > 100) throw new HttpError(400);
+    }
+    return { items: listOutbox(db, limit).map(presentOutbox) };
+  });
+
+  app.get("/v1/outbox/:id", async (request) => {
+    const row = getOutbox(db, messageId(request));
+    if (!row) throw new HttpError(404, "not_found");
+    return presentOutbox(row);
+  });
+
+  app.post("/v1/outbox", { config: { rateLimit: { max: 30, timeWindow: "10 minutes" } } }, async (request, reply) => {
+    const body = sendBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    try {
+      const queued = await submitOutbox(
+        { db, dataDir: config.mailDataDir, codec, acceptDomains: config.acceptDomains, now },
+        body.data,
+      );
+      writeAudit(db, {
+        id: ulid(),
+        at: now(),
+        actor: request.session.user ?? "unknown",
+        action: "send_queue",
+        target: queued.id,
+        detail: `dkim=${queued.dkim} known=${queued.domainKnown}`,
+      });
+      return reply.code(202).send(queued);
+    } catch (err) {
+      if (err instanceof OutboundError) throw new HttpError(400);
+      throw err;
+    }
   });
 
   app.put("/v1/settings/jobs", async (request, reply) => {
@@ -789,6 +959,22 @@ function aiStatus(db: Db, config: Config): { classifier: string; model: string; 
     classifier: config.classifier,
     model: pool.models[0] || fallbackModel,
     keyCount: pool.keys.length,
+  };
+}
+
+function presentOutbox(row: NonNullable<ReturnType<typeof getOutbox>>) {
+  return {
+    id: row.id,
+    from: row.from_addr,
+    to: parseJson(row.to_addrs),
+    subject: row.subject,
+    status: row.status,
+    domainKnown: row.domain_known === 1,
+    dkim: row.dkim_selector ? "signed" : "none",
+    selector: row.dkim_selector,
+    error: row.error,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
   };
 }
 

@@ -20,6 +20,7 @@ export async function runNotifyJob(deps: NotifyJobDeps, job: JobRow): Promise<vo
   if (!job.message_id) throw new Error("notify job has no message");
   const message = getMessage(deps.db, job.message_id);
   if (!message) throw new Error("message missing");
+  if (message.trashed_at) return;
   if (!message.ai_result) throw new Error("message has no ai result");
   const ai = aiResultSchema.parse(JSON.parse(message.ai_result));
   const policy = readRuntimeSettings(deps.db, {

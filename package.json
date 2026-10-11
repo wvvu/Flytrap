@@ -1,6 +1,6 @@
 {
   "name": "flytrap",
-  "version": "0.4.55",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -23,6 +23,7 @@
     "better-sqlite3": "^12.4.1",
     "fastify": "^5.6.1",
     "mailauth": "^4.8.1",
+    "nodemailer": "^7.0.6",
     "pino": "^10.0.0",
     "postal-mime": "^2.5.0",
     "smtp-server": "^3.15.0",
@@ -33,7 +34,6 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.5.2",
     "@types/smtp-server": "^3.5.11",
-    "nodemailer": "^7.0.6",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }
