@@ -10,6 +10,7 @@ const LABEL_NAMES = {
 
 const VIEW_TITLES = {
   inbox: "收件箱",
+  send: "发信",
   spam: "已拦截",
   trash: "垃圾桶",
   dlq: "处理失败",
@@ -56,6 +57,8 @@ let holdBoot = false;
 let unreadInbox = 0;
 let blockedSenders = [];
 let dkimKeys = [];
+let sentItems = [];
+let sentQuery = "";
 let currentFromAddress = "";
 
 // DOM 元素引用
@@ -69,6 +72,7 @@ const themeIcon = document.querySelector("#theme-icon");
 
 // 导航按钮 (收件箱, Spam, 垃圾桶, 设置)
 const navInboxBtn = document.querySelector("#nav-inbox");
+const navSendBtn = document.querySelector("#nav-send");
 const navSpamBtn = document.querySelector("#nav-spam");
 const navTrashBtn = document.querySelector("#nav-trash");
 const navSettingsBtn = document.querySelector("#nav-settings");
@@ -77,6 +81,7 @@ const streamTitle = document.querySelector("#stream-title");
 
 // 第二列流头部
 const streamInboxHeader = document.querySelector("#stream-inbox-header");
+const streamSendHeader = document.querySelector("#stream-send-header");
 const streamSpamHeader = document.querySelector("#stream-spam-header");
 const streamTrashHeader = document.querySelector("#stream-trash-header");
 const streamDlqHeader = document.querySelector("#stream-dlq-header");
@@ -99,6 +104,7 @@ const retryAllBtn = document.querySelector("#btn-retry-all");
 // 第三列工作台各视图
 const viewMail = document.querySelector("#view-mail");
 const viewDlq = document.querySelector("#view-dlq");
+const viewSend = document.querySelector("#view-send");
 const viewSettings = document.querySelector("#view-settings");
 const failureDetailEl = document.querySelector("#failure-detail");
 const dlqEmptyEl = document.querySelector("#dlq-empty");
@@ -158,6 +164,7 @@ logoutBtn.addEventListener("click", () => void signOut());
 themeBtn.addEventListener("click", () => toggleTheme());
 
 navInboxBtn?.addEventListener("click", () => switchNav("inbox"));
+navSendBtn?.addEventListener("click", () => switchNav("send"));
 navSpamBtn?.addEventListener("click", () => switchNav("spam"));
 navTrashBtn?.addEventListener("click", () => switchNav("trash"));
 navSettingsBtn?.addEventListener("click", () => switchNav("settings"));
@@ -206,7 +213,14 @@ document.querySelector("#notify-confidence")?.addEventListener("input", syncNoti
 document.querySelector("#btn-save-attempts")?.addEventListener("click", () => void saveAttemptSettings());
 document.querySelector("#job-max-attempts")?.addEventListener("input", syncAttemptSave);
 document.querySelector("#btn-add-domain")?.addEventListener("click", () => void addDomain());
-document.querySelector("#btn-refresh-send")?.addEventListener("click", () => void loadSendSection());
+document.querySelector("#btn-send-refresh")?.addEventListener("click", () => void loadSendPage());
+document.querySelector("#btn-compose")?.addEventListener("click", () => openComposer());
+document.querySelector("#btn-back-send")?.addEventListener("click", () => setMobilePane("list"));
+document.querySelector("#send-filters")?.addEventListener("submit", (event) => event.preventDefault());
+document.querySelector("#send-q")?.addEventListener("input", () => {
+  sentQuery = document.querySelector("#send-q")?.value.trim().toLowerCase() || "";
+  renderSentList();
+});
 document.querySelector("#send-form")?.addEventListener("submit", (event) => {
   event.preventDefault();
   void submitSend();
@@ -377,6 +391,8 @@ window.addEventListener("keydown", (e) => {
     else if (e.key === "r") void reloadTrash();
   } else if (currentView === "dlq" && e.key === "r") {
     void loadDlqJobs();
+  } else if (currentView === "send" && e.key === "r") {
+    void loadSendPage();
   }
 });
 
@@ -543,12 +559,13 @@ async function switchNav(view) {
   currentView = view;
   setViewTitle(view);
   if (appEl) delete appEl.dataset.layout;
-  const navBtns = [navInboxBtn, navSpamBtn, navTrashBtn, navSettingsBtn];
+  const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navSettingsBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
-  const viewPanels = [viewMail, viewDlq, viewSettings];
+  const viewPanels = [viewMail, viewDlq, viewSend, viewSettings];
   viewPanels.forEach((p) => { if (p) p.hidden = true; });
 
   streamInboxHeader.hidden = true;
+  if (streamSendHeader) streamSendHeader.hidden = true;
   if (streamSpamHeader) streamSpamHeader.hidden = true;
   if (streamTrashHeader) streamTrashHeader.hidden = true;
   if (streamDlqHeader) streamDlqHeader.hidden = true;
@@ -569,6 +586,11 @@ async function switchNav(view) {
     viewMail.hidden = false;
     syncListLabel();
     await reloadMessages();
+  } else if (view === "send") {
+    navSendBtn?.classList.add("active");
+    if (streamSendHeader) streamSendHeader.hidden = false;
+    if (viewSend) viewSend.hidden = false;
+    await loadSendPage();
   } else if (view === "spam") {
     navSpamBtn?.classList.add("active");
     if (streamSpamHeader) streamSpamHeader.hidden = false;
@@ -1589,7 +1611,6 @@ async function loadSettingsPage() {
     if (thinking) thinking.value = settings.aiThinking || "low";
     renderAiEditors(settings.aiPool || {});
     renderBlockList(settings.blockedSenders || []);
-    await loadSendSection();
   } catch (err) {
     toast(explain(err));
   }
@@ -1600,7 +1621,6 @@ const SETTING_SECTIONS = [
   ["model", "模型"],
   ["account", "账号"],
   ["domains", "收信"],
-  ["send", "发信"],
   ["mailboxes", "地址"],
   ["block", "黑名单"],
   ["notify", "提醒"],
@@ -1638,7 +1658,6 @@ function showSettingsSection(id, options = {}) {
   }
   if (!options.keepListOnNarrow) setMobilePane("detail");
   if (id === "logs") void loadLogs();
-  if (id === "send") void loadSendSection();
 }
 
 function describeAi(ai) {
@@ -2405,15 +2424,63 @@ async function saveAiSettings() {
   }
 }
 
-async function loadSendSection() {
+function openComposer() {
+  setMobilePane("detail");
+  document.querySelector("#send-from")?.focus();
+}
+
+async function loadSendPage() {
   try {
-    const [keys, box] = await Promise.all([request("/v1/dkim"), request("/v1/outbox")]);
+    const [keys, box, settings, history] = await Promise.all([
+      request("/v1/dkim"),
+      request("/v1/outbox?limit=100"),
+      request("/v1/settings"),
+      request("/v1/mailbox-history"),
+    ]);
     dkimKeys = Array.isArray(keys.items) ? keys.items : [];
+    sentItems = Array.isArray(box.items) ? box.items : [];
+    settingsDomains = Array.isArray(settings.acceptDomains) ? settings.acceptDomains.slice() : settingsDomains;
     renderDkim(dkimKeys);
-    renderOutbox(Array.isArray(box.items) ? box.items : []);
+    renderFromSuggestions(Array.isArray(history.items) ? history.items : []);
+    renderSentList();
     refreshSendNote();
   } catch (err) {
     toast("读取发信失败: " + explain(err));
+  }
+}
+
+async function refreshSentList() {
+  if (currentView !== "send") return;
+  try {
+    const box = await request("/v1/outbox?limit=100");
+    const items = Array.isArray(box.items) ? box.items : [];
+    const same = items.length === sentItems.length && items.every((item, index) => {
+      const prev = sentItems[index];
+      return item.id === prev?.id && item.status === prev?.status && item.error === prev?.error;
+    });
+    if (same) return;
+    sentItems = items;
+    renderSentList();
+  } catch {
+    // The next poll tries again.
+  }
+}
+
+function renderFromSuggestions(items) {
+  const list = document.querySelector("#send-from-list");
+  if (!list) return;
+  list.replaceChildren();
+  const seen = new Set();
+  for (const item of items) {
+    const domain = String(item.domain || "").trim().toLowerCase();
+    const local = String(item.localpart || "").trim().toLowerCase();
+    if (!domain || !local) continue;
+    const address = local + "@" + domain;
+    if (seen.has(address)) continue;
+    seen.add(address);
+    const option = document.createElement("option");
+    option.value = address;
+    list.append(option);
   }
 }
 
@@ -2457,7 +2524,7 @@ async function submitSend() {
     if (subjectInput) subjectInput.value = "";
     if (textInput) textInput.value = "";
     toast(queued.dkim === "signed" ? "已排队，并签了 DKIM" : "已排队，没有签名");
-    await loadSendSection();
+    await loadSendPage();
   } catch (err) {
     toast("发出失败: " + explain(err));
   } finally {
@@ -2469,34 +2536,73 @@ function splitAddresses(raw) {
   return String(raw || "").split(/[,;\s]+/).map((part) => part.trim()).filter(Boolean);
 }
 
-function renderOutbox(items) {
-  const host = document.querySelector("#outbox-list");
-  const empty = document.querySelector("#outbox-empty");
-  if (!host) return;
-  host.replaceChildren();
-  if (empty) empty.hidden = items.length > 0;
-  for (const item of items) host.append(outboxItem(item));
+function renderSentList() {
+  if (currentView !== "send") return;
+  listEl.replaceChildren();
+  const items = sentItems.filter((item) => sentMatches(item, sentQuery));
+  if (sentItems.length === 0) noticeEl.textContent = "还没有发出的信";
+  else if (items.length === 0) noticeEl.textContent = "没有符合搜索的信";
+  else noticeEl.textContent = "";
+  for (const item of items) listEl.append(createSentListItem(item));
 }
 
-function outboxItem(item) {
-  const row = document.createElement("div");
-  row.className = "send-item";
-  const subject = document.createElement("strong");
-  subject.textContent = item.subject || "（无主题）";
-  const who = document.createElement("p");
-  who.className = "muted";
-  const to = Array.isArray(item.to) ? item.to.join(", ") : "";
-  who.textContent = `${item.from || ""} → ${to}`;
-  const state = document.createElement("p");
-  state.textContent = `${outboxStatus(item)} · ${item.dkim === "signed" ? "已签名" : "未签名"}`;
-  row.append(subject, who, state);
-  if (item.error) {
-    const error = document.createElement("p");
-    error.className = "muted";
-    error.textContent = item.error;
-    row.append(error);
+function sentMatches(item, needle) {
+  if (!needle) return true;
+  const to = Array.isArray(item.to) ? item.to.join(" ") : "";
+  const haystack = [item.subject, item.from, to, item.error, outboxStatus(item)].filter(Boolean).join(" ").toLowerCase();
+  return haystack.includes(needle);
+}
+
+function createSentListItem(item) {
+  const card = document.createElement("div");
+  card.className = "mail-item";
+  card.dataset.id = item.id;
+
+  const line1 = document.createElement("div");
+  line1.className = "item-line1";
+  const who = document.createElement("span");
+  who.className = "item-from";
+  const to = Array.isArray(item.to) ? item.to.filter((part) => typeof part === "string") : [];
+  who.textContent = to.length ? to.map(formatRecipient).join(", ") : "没有收件人";
+  if (to.length) who.title = to.join(", ");
+  const time = document.createElement("span");
+  time.className = "item-time";
+  time.textContent = formatShortTime(item.createdAt);
+  line1.append(who, time);
+
+  const subject = document.createElement("p");
+  subject.className = "item-subject";
+  subject.textContent = item.subject || "(无主题)";
+
+  const line3 = document.createElement("div");
+  line3.className = "item-line3";
+  const snippet = document.createElement("span");
+  snippet.className = "item-snippet";
+  const bits = [outboxStatus(item), item.dkim === "signed" ? "已签名" : "未签名"];
+  if (item.error && item.status !== "sent") bits.push(item.error);
+  snippet.textContent = bits.join(" · ");
+  line3.append(snippet);
+  if (item.status === "error") {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn-sm";
+    retry.textContent = "再试";
+    retry.addEventListener("click", () => void retrySent(item.id));
+    line3.append(retry);
   }
-  return row;
+
+  card.append(line1, subject, line3);
+  return card;
+}
+
+async function retrySent(id) {
+  try {
+    await request("/v1/outbox/" + encodeURIComponent(id) + "/retry", { method: "POST", body: {} });
+    toast("已重新排队");
+    await loadSendPage();
+  } catch (err) {
+    toast("重试失败: " + explain(err));
+  }
 }
 
 function outboxStatus(item) {
@@ -2547,7 +2653,7 @@ function dkimRow(domain, keys) {
   for (const key of keys) {
     const line = document.createElement("p");
     line.className = "muted";
-    line.textContent = `主机记录: ${key.dnsName || key.selector}`;
+    line.textContent = `主机记录: ${key.dnsName || key.selector} · ${dkimAlgLabel(key.algorithm)}`;
     const txt = document.createElement("div");
     txt.className = "dkim-txt";
     txt.textContent = key.txt;
@@ -2573,16 +2679,27 @@ function dkimButton(label, onClick) {
   return button;
 }
 
+function selectedDkimAlg() {
+  const select = document.querySelector("#dkim-alg");
+  return select && select.value === "ed25519" ? "ed25519" : "rsa";
+}
+
+function dkimAlgLabel(alg) {
+  return alg === "ed25519" ? "Ed25519" : "RSA 2048";
+}
+
 async function generateDkim(domain, selector) {
   const name = (selector || "flytrap").trim().toLowerCase();
+  const algorithm = selectedDkimAlg();
   const exists = dkimKeys.some((key) => key.domain === domain && key.selector === name);
   if (exists && !(await askConfirm("重新生成后，原来的 DNS 记录要换成新的。"))) return;
   try {
-    await request("/v1/dkim", { method: "POST", body: selector ? { domain, selector: name } : { domain } });
+    const body = selector ? { domain, selector: name, algorithm } : { domain, algorithm };
+    await request("/v1/dkim", { method: "POST", body });
     const extra = document.querySelector("#dkim-domain");
     if (extra && extra.value.trim().toLowerCase() === domain) extra.value = "";
     toast("密钥已生成");
-    await loadSendSection();
+    await loadSendPage();
   } catch (err) {
     toast("生成密钥失败: " + explain(err));
   }
@@ -2593,7 +2710,7 @@ async function removeDkim(domain, selector) {
   try {
     await request("/v1/dkim/remove", { method: "POST", body: { domain, selector } });
     toast("密钥已移除");
-    await loadSendSection();
+    await loadSendPage();
   } catch (err) {
     toast("移除密钥失败: " + explain(err));
   }
@@ -2701,6 +2818,10 @@ async function pollLive() {
   if (document.hidden || appEl.hidden) return;
   void updateDlqBadge();
   void refreshUnread();
+  if (currentView === "send") {
+    void refreshSentList();
+    return;
+  }
   if (currentView !== "inbox" && currentView !== "spam" && currentView !== "trash") return;
   if (currentMessages.length > 40) return;
   try {

@@ -9,6 +9,7 @@ import { loadConfig } from "../src/config.js";
 import { openDatabase, type Db } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
 import { listDkimPublic, saveDkimKey } from "../src/db/repos/dkim-keys.js";
+import { failureSummary, settleFinishedSends } from "../src/db/repos/jobs.js";
 import { getOutbox } from "../src/db/repos/outbox.js";
 import { rebuildFromRaw } from "../src/ingest/rebuild.js";
 import { readRaw } from "../src/ingest/read-raw.js";
@@ -253,6 +254,119 @@ test("composeText preserves multi-byte UTF-8 subject and base64 encodes long ASC
   const parsed = await parser.parse(raw);
   assert.equal(parsed.subject, subject);
   assert.equal(parsed.subject?.includes("\uFFFD"), false);
+});
+
+test("an ed25519 key signs and publishes a 32-byte DNS record", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-send-ed-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const now = () => 2_000_000;
+  try {
+    const saved = saveDkimKey(db, "example.com", "ed", now(), "ed25519");
+    assert.equal(saved.algorithm, "ed25519");
+    assert.match(saved.txt, /^v=DKIM1; k=ed25519; p=/);
+    assert.equal(Buffer.from(saved.txt.split("p=")[1] ?? "", "base64").length, 32);
+
+    const queued = await submitOutbox(deps(db, dir, now), {
+      from: "a@example.com",
+      to: ["b@example.net"],
+      subject: "ed",
+      text: "hello",
+    });
+    assert.equal(queued.dkim, "signed");
+    assert.equal(queued.selector, "ed");
+    const row = getOutbox(db, queued.id);
+    assert.ok(row);
+    const raw = await readRaw(dir, row.raw_path, gzipCodec(), row.sha256);
+    assert.match(raw.toString("utf8"), /a=ed25519-sha256/i);
+    const auth = await authenticateMessage(
+      {
+        raw,
+        ip: "203.0.113.10",
+        helo: "mail.example.com",
+        sender: "a@example.com",
+        mta: "mx.test",
+        ptr: "mail.example.com",
+      },
+      10_000,
+      async (name, rrtype) => {
+        if (rrtype === "TXT" && name.toLowerCase() === saved.dnsName) return [[saved.txt]];
+        return [];
+      },
+    );
+    assert.equal(auth.dkim, "pass", JSON.stringify(auth));
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed send stays off the settings badge and can be retried from the outbox", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-send-badge-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const now = 3_000_000;
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: password,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => now,
+  });
+  const client = cookieJar();
+  try {
+    const outboxId = "01M4TEST000000000000000009";
+    db.prepare(
+      `INSERT INTO outbox (id, sha256, raw_path, size_bytes, from_addr, to_addrs, subject, domain_known, status, error, created_at, updated_at)
+       VALUES (?, 'sha', 'sent/test', 10, 'a@example.com', '["b@example.net"]', 'test', 1, 'error', 'network down', ?, ?)`,
+    ).run(outboxId, now, now);
+    db.prepare(
+      `INSERT INTO jobs (id, type, message_id, payload, status, attempts, max_attempts, run_after, last_error, created_at, updated_at)
+       VALUES ('send-dead', 'send', NULL, ?, 'dead', 5, 5, ?, 'network down', ?, ?)`,
+    ).run(JSON.stringify({ outboxId }), now, now, now);
+    db.prepare(
+      `INSERT INTO jobs (id, type, message_id, status, attempts, max_attempts, run_after, last_error, created_at, updated_at)
+       VALUES ('mail-dead', 'classify', 'msg-1', 'dead', 5, 5, ?, 'boom', ?, ?)`,
+    ).run(now, now, now);
+
+    assert.equal(failureSummary(db).dead, 1);
+    await client.login(app);
+    const summary = await client.get(app, "/v1/jobs/summary");
+    assert.equal(summary.json().dead, 1);
+    const open = await client.get(app, "/v1/jobs?scope=open");
+    const ids = open.json().items.map((item: { id: string }) => item.id);
+    assert.equal(ids.includes("send-dead"), false);
+    assert.equal(ids.includes("mail-dead"), true);
+
+    const retry = await client.post(app, `/v1/outbox/${outboxId}/retry`, {});
+    assert.equal(retry.statusCode, 200);
+    assert.equal(getOutbox(db, outboxId)?.status, "queued");
+    assert.equal(getOutbox(db, outboxId)?.error, null);
+    const sentAgain = await client.post(app, `/v1/outbox/${outboxId}/retry`, {});
+    assert.equal(sentAgain.statusCode, 200);
+
+    db.prepare("UPDATE outbox SET status = 'sent', error = NULL WHERE id = ?").run(outboxId);
+    db.prepare("UPDATE jobs SET status = 'dead', attempts = 5, last_error = 'network down' WHERE id = 'send-dead'").run();
+    assert.equal(settleFinishedSends(db, now + 1), 1);
+    const job = db.prepare("SELECT status, last_error FROM jobs WHERE id = 'send-dead'").get() as { status: string; last_error: string | null };
+    assert.equal(job.status, "done");
+    assert.equal(job.last_error, null);
+    const closed = await client.post(app, `/v1/outbox/${outboxId}/retry`, {});
+    assert.equal(closed.statusCode, 404);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("retryJob clears the outbox error when reopening a dead send job", () => {

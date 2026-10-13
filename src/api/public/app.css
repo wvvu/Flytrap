@@ -1762,6 +1762,17 @@ body,
   min-width: 0;
 }
 
+#dkim-alg {
+  flex: none;
+  width: auto;
+  min-width: 132px;
+}
+
+.item-line3 .item-snippet {
+  flex: 1;
+  min-width: 0;
+}
+
 .inline-row input.field-narrow,
 input.field-narrow {
   flex: none;

@@ -16,7 +16,7 @@ import PostalMime from "postal-mime";
 import { findAttachment, listMessageAttachments } from "../db/repos/attachments.js";
 import { writeAudit } from "../db/repos/audit.js";
 import { deleteDkimKey, listDkimPublic, saveDkimKey } from "../db/repos/dkim-keys.js";
-import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, outboxIdOf, retryAllDeadJobs, retryJob, retryMessageJobs, wakeClassifyJobs, type JobStatus } from "../db/repos/jobs.js";
+import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, outboxIdOf, retryAllDeadJobs, retryJob, retryMessageJobs, retryOutboxJob, wakeClassifyJobs, type JobStatus } from "../db/repos/jobs.js";
 import { getOutbox, listOutbox, listOutboxByIds } from "../db/repos/outbox.js";
 import { fallbackAiPool } from "../ai/pool.js";
 import { presentAiPool, readAiEnabled, readAiThinking, readBlockedSenders, readEffectiveAiPool, readPasswordHash, saveAcceptDomains, saveAiControls, saveAiPool, saveBlockedSenders, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
@@ -109,6 +109,7 @@ const sendBody = z.object({
 const dkimBody = z.object({
   domain: z.string().min(1).max(253),
   selector: z.string().min(1).max(63).optional(),
+  algorithm: z.enum(["rsa", "ed25519"]).optional(),
 }).strict();
 
 const dkimRemoveBody = z.object({
@@ -767,7 +768,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     if (!body.success) throw new HttpError(400);
     let saved;
     try {
-      saved = saveDkimKey(db, body.data.domain, body.data.selector, now());
+      saved = saveDkimKey(db, body.data.domain, body.data.selector, now(), body.data.algorithm);
     } catch (err) {
       if (err instanceof OutboundError) throw new HttpError(400);
       throw err;
@@ -778,6 +779,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       actor: request.session.user ?? "unknown",
       action: "dkim_generate",
       target: `${saved.selector}._domainkey.${saved.domain}`,
+      detail: saved.algorithm,
     });
     return reply.send({ ok: true, ...saved });
   });
@@ -819,6 +821,20 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const row = getOutbox(db, messageId(request));
     if (!row) throw new HttpError(404, "not_found");
     return presentOutbox(row);
+  });
+
+  app.post("/v1/outbox/:id/retry", async (request, reply) => {
+    const id = messageId(request);
+    const ok = retryOutboxJob(db, id, now());
+    if (!ok) throw new HttpError(404, "not_found");
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "send_retry",
+      target: id,
+    });
+    return reply.send({ ok: true });
   });
 
   app.post("/v1/outbox", { config: { rateLimit: { max: 30, timeWindow: "10 minutes" } } }, async (request, reply) => {

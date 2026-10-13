@@ -67,7 +67,14 @@ export async function submitOutbox(deps: SubmitDeps, input: SubmitInput): Promis
   });
   const key = findDkimKey(deps.db, domain);
   const selector = key?.selector ?? null;
-  if (key) raw = await signMessage(raw, { domain, selector: key.selector, privatePem: key.privatePem });
+  if (key) {
+    raw = await signMessage(raw, {
+      domain,
+      selector: key.selector,
+      privatePem: key.privatePem,
+      alg: key.algorithm,
+    });
+  }
   const stored = await storeRaw({
     dataDir: deps.dataDir,
     bytes: raw,

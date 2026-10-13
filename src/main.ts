@@ -2,6 +2,7 @@ import { loadCodec } from "./compress.js";
 import { loadConfig, ConfigError, PLACEHOLDER_SESSION_SECRET, type Config } from "./config.js";
 import { dbFile, openDatabase } from "./db/index.js";
 import { migrate } from "./db/migrate.js";
+import { settleFinishedSends } from "./db/repos/jobs.js";
 import { createLogger } from "./log.js";
 import { ensureDataDirs, migrationsDir } from "./paths.js";
 import { fakeClassifier } from "./ai/classifier.js";
@@ -58,7 +59,9 @@ try {
 }
 const db = openDatabase(dbFile(config.mailDataDir));
 const applied = migrate(db, migrationsDir());
+const settled = settleFinishedSends(db, Date.now());
 log.info({ applied, roles: config.roles }, "database ready");
+if (settled > 0) log.info({ settled }, "closed send jobs for letters already sent");
 
 if (process.argv.includes("--rebuild")) {
   void rebuildCommand();
