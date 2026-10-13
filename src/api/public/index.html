@@ -354,23 +354,6 @@
                 </div>
               </form>
             </section>
-            <section class="block" id="send-dkim">
-              <div class="block-head">
-                <div>
-                  <h2>DKIM</h2>
-                  <p class="muted">生成后把记录加到域名的 DNS。换密钥后要改同一条记录。没有记录时照常发信。</p>
-                </div>
-              </div>
-              <div id="dkim-list" class="domain-list"></div>
-              <div class="inline-row">
-                <input id="dkim-domain" placeholder="未添加的域名" autocomplete="off" maxlength="253">
-                <select id="dkim-alg" title="算法">
-                  <option value="rsa">RSA 2048</option>
-                  <option value="ed25519">Ed25519</option>
-                </select>
-                <button type="button" id="btn-dkim-generate" class="btn-fit">生成密钥</button>
-              </div>
-            </section>
           </div>
         </section>
 
@@ -478,6 +461,24 @@
               <div class="inline-row">
                 <input id="domain-add" placeholder="添加域名" autocomplete="off">
                 <button type="button" id="btn-add-domain" class="btn-fit">添加</button>
+              </div>
+            </section>
+
+            <section class="block" id="set-send" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>发信</h2>
+                  <p class="muted">生成后把记录加到域名的 DNS。换密钥后要改同一条记录。没有记录时照常发信。</p>
+                </div>
+              </div>
+              <div id="dkim-list" class="domain-list"></div>
+              <div class="inline-row">
+                <input id="dkim-domain" placeholder="未添加的域名" autocomplete="off" maxlength="253">
+                <select id="dkim-alg" title="算法">
+                  <option value="rsa">RSA 2048</option>
+                  <option value="ed25519">Ed25519</option>
+                </select>
+                <button type="button" id="btn-dkim-generate" class="btn-fit">生成密钥</button>
               </div>
             </section>
 

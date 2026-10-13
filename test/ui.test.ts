@@ -92,10 +92,12 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /id="dkim-alg"/);
     assert.match(page.body, /RSA 2048/);
     assert.match(page.body, /Ed25519/);
-    assert.equal(page.body.includes('id="set-send"'), false);
+    assert.match(page.body, /id="set-send"/);
+    const sendView = page.body.slice(page.body.indexOf('id="view-send"'), page.body.indexOf('id="view-settings"'));
+    assert.equal(sendView.includes("dkim-list"), false);
     assert.match(page.body, /id="stat-cards"/);
     assert.match(page.body, /id="send-domain-note"/);
-    assert.equal(script.body.includes('["send", "发信"]'), false);
+    assert.match(script.body, /\["send", "发信"\]/);
     assert.match(script.body, /还没有发出的信/);
     assert.match(script.body, /view === "send"/);
     assert.equal(page.body.includes("<summary>近 14 天</summary>"), false);

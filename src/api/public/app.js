@@ -1611,6 +1611,7 @@ async function loadSettingsPage() {
     if (thinking) thinking.value = settings.aiThinking || "low";
     renderAiEditors(settings.aiPool || {});
     renderBlockList(settings.blockedSenders || []);
+    await loadDkimSection();
   } catch (err) {
     toast(explain(err));
   }
@@ -1621,6 +1622,7 @@ const SETTING_SECTIONS = [
   ["model", "模型"],
   ["account", "账号"],
   ["domains", "收信"],
+  ["send", "发信"],
   ["mailboxes", "地址"],
   ["block", "黑名单"],
   ["notify", "提醒"],
@@ -1658,6 +1660,7 @@ function showSettingsSection(id, options = {}) {
   }
   if (!options.keepListOnNarrow) setMobilePane("detail");
   if (id === "logs") void loadLogs();
+  if (id === "send") void loadDkimSection();
 }
 
 function describeAi(ai) {
@@ -2431,16 +2434,13 @@ function openComposer() {
 
 async function loadSendPage() {
   try {
-    const [keys, box, settings, history] = await Promise.all([
-      request("/v1/dkim"),
+    const [box, settings, history] = await Promise.all([
       request("/v1/outbox?limit=100"),
       request("/v1/settings"),
       request("/v1/mailbox-history"),
     ]);
-    dkimKeys = Array.isArray(keys.items) ? keys.items : [];
     sentItems = Array.isArray(box.items) ? box.items : [];
     settingsDomains = Array.isArray(settings.acceptDomains) ? settings.acceptDomains.slice() : settingsDomains;
-    renderDkim(dkimKeys);
     renderFromSuggestions(Array.isArray(history.items) ? history.items : []);
     renderSentList();
     refreshSendNote();
@@ -2612,6 +2612,16 @@ function outboxStatus(item) {
   return "排队中";
 }
 
+async function loadDkimSection() {
+  try {
+    const keys = await request("/v1/dkim");
+    dkimKeys = Array.isArray(keys.items) ? keys.items : [];
+    renderDkim(dkimKeys);
+  } catch (err) {
+    toast("读取发信设置失败: " + explain(err));
+  }
+}
+
 function renderDkim(keys) {
   const host = document.querySelector("#dkim-list");
   if (!host) return;
@@ -2699,7 +2709,7 @@ async function generateDkim(domain, selector) {
     const extra = document.querySelector("#dkim-domain");
     if (extra && extra.value.trim().toLowerCase() === domain) extra.value = "";
     toast("密钥已生成");
-    await loadSendPage();
+    await loadDkimSection();
   } catch (err) {
     toast("生成密钥失败: " + explain(err));
   }
@@ -2710,7 +2720,7 @@ async function removeDkim(domain, selector) {
   try {
     await request("/v1/dkim/remove", { method: "POST", body: { domain, selector } });
     toast("密钥已移除");
-    await loadSendPage();
+    await loadDkimSection();
   } catch (err) {
     toast("移除密钥失败: " + explain(err));
   }
