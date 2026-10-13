@@ -7,6 +7,7 @@ import type { Codec } from "../compress.js";
 import { readRaw } from "../ingest/read-raw.js";
 import type { AppLog } from "../log.js";
 import { parseMessage } from "../mail/parse.js";
+import { threadKeyOf } from "../mail/thread.js";
 
 export interface ParseJobDeps {
   db: Db;
@@ -35,6 +36,9 @@ export async function runParseJob(deps: ParseJobDeps, job: JobRow): Promise<void
     fromAddr,
     toAddrs: result.toAddrs,
     messageId: result.messageId,
+    inReplyTo: result.inReplyTo,
+    refIds: result.refs.length > 0 ? JSON.stringify(result.refs) : null,
+    threadKey: threadKeyOf(result.messageId, result.inReplyTo, result.refs),
     parsed: JSON.stringify(result.parsed),
     now: deps.now(),
   });

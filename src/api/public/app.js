@@ -60,6 +60,9 @@ let dkimKeys = [];
 let sentItems = [];
 let sentQuery = "";
 let currentFromAddress = "";
+let openDetail = null;
+let replyContext = null;
+let replyArmed = false;
 
 // DOM 元素引用
 const appEl = document.querySelector("#app");
@@ -147,6 +150,9 @@ const plainTextBody = document.querySelector("#plain-text-body");
 const rawHeaders = document.querySelector("#raw-headers");
 const authChips = document.querySelector("#auth-chips");
 const btnTrashMail = document.querySelector("#btn-trash-mail");
+const btnReply = document.querySelector("#btn-reply");
+const threadBox = document.querySelector("#thread-box");
+const threadList = document.querySelector("#thread-list");
 const btnBlockMail = document.querySelector("#btn-block-mail");
 const btnRestoreMail = document.querySelector("#btn-restore-mail");
 const btnDeleteMail = document.querySelector("#btn-delete-mail");
@@ -178,6 +184,7 @@ emptyTrashBtn?.addEventListener("click", () => void handleEmptyTrash());
 dlqRefreshBtn?.addEventListener("click", () => void loadDlqJobs());
 retryAllBtn?.addEventListener("click", () => void retryAllDead());
 
+btnReply?.addEventListener("click", () => void startReply());
 btnTrashMail?.addEventListener("click", () => void handleTrashMail());
 btnBlockMail?.addEventListener("click", () => void handleBlockMail());
 btnRestoreMail?.addEventListener("click", () => void handleRestoreMail());
@@ -556,6 +563,9 @@ async function refreshUnread() {
 }
 
 async function switchNav(view) {
+  const keepReply = replyArmed;
+  replyArmed = false;
+  if (view === "send" && !keepReply && replyContext) clearReplyDraft();
   currentView = view;
   setViewTitle(view);
   if (appEl) delete appEl.dataset.layout;
@@ -764,6 +774,9 @@ function createMailListItem(item) {
 async function selectMail(id, options = {}) {
   const token = ++mailLoadToken;
   selectedMailId = id;
+  openDetail = null;
+  if (btnReply) btnReply.hidden = true;
+  if (threadBox) threadBox.hidden = true;
   allowExternalImages = false;
   if (btnLoadImages) {
     btnLoadImages.hidden = true;
@@ -805,6 +818,8 @@ async function selectMail(id, options = {}) {
     if (detailTime) detailTime.textContent = formatFullTime(detail.receivedAt);
 
     currentFromAddress = extractEmail(rawFrom);
+    openDetail = detail;
+    if (btnReply) btnReply.hidden = !replyAddress(detail);
     const isTrashed = Boolean(detail.trashedAt || currentView === "trash");
     if (btnBlockMail) btnBlockMail.hidden = !currentFromAddress;
     if (btnTrashMail) btnTrashMail.hidden = isTrashed;
@@ -944,13 +959,16 @@ async function selectMail(id, options = {}) {
     // 加载 HTML 与真正的 RFC822 信头。带会话进来时等这一封画完再揭开，避免连闪。
     const htmlReady = loadMailHtml(id, token);
     const headersReady = loadRawHeaders(id, token, detail);
+    const threadReady = loadThread(id, token);
     const opened = markOpened(id);
-    if (holdBoot) await Promise.all([htmlReady, headersReady, opened]);
+    if (holdBoot) await Promise.all([htmlReady, headersReady, threadReady, opened]);
   } catch (err) {
     if (token !== mailLoadToken) return;
     console.error("selectMail error:", err);
     if (mailLoadingEl) mailLoadingEl.hidden = true;
     mailDetailEl.hidden = false;
+    if (btnReply) btnReply.hidden = true;
+    if (threadBox) threadBox.hidden = true;
     if (detailSubject) detailSubject.textContent = "无法加载邮件详情";
     if (detailSummary) detailSummary.textContent = explain(err);
   }
@@ -1005,12 +1023,92 @@ function stripRemoteImages(html) {
     .replace(/url\(\s*(['"]?)https?:\/\/[^)'"]*\1\s*\)/gi, "url('')");
 }
 
+function openMailLinks(html) {
+  const withoutBase = String(html || "").replace(/<base\b[^>]*>/gi, "");
+  return withoutBase.replace(/<a\b([^>]*)>/gi, (_match, attrs) => {
+    const href = readAttr(attrs, "href");
+    let rest = String(attrs);
+    for (const name of ["href", "target", "rel"]) rest = stripAttr(rest, name);
+    if (/^https?:\/\//i.test(href)) {
+      return `<a${rest} href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer">`;
+    }
+    return `<a${rest} href="#">`;
+  });
+}
+
+function readAttr(attrs, name) {
+  const quoted = String(attrs).match(new RegExp("\\s" + name + "\\s*=\\s*(['\"])(.*?)\\1", "i"));
+  if (quoted) return quoted[2].trim();
+  const bare = String(attrs).match(new RegExp("\\s" + name + "\\s*=\\s*([^\\s>]+)", "i"));
+  return bare ? bare[1].trim() : "";
+}
+
+function stripAttr(attrs, name) {
+  return String(attrs)
+    .replace(new RegExp("\\s" + name + "\\s*=\\s*(['\"]).*?\\1", "gi"), "")
+    .replace(new RegExp("\\s" + name + "\\s*=\\s*[^\\s>]+", "gi"), "");
+}
+
+function escapeAttr(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
 function escapeHtml(value) {
   return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function mailBringsItsOwnCanvas(html) {
   return /<style[\s>]/i.test(html) || /bgcolor\s*=/i.test(html) || /background(?:-color)?\s*:/i.test(html);
+}
+
+async function loadThread(id, token) {
+  try {
+    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/thread");
+    if (token !== mailLoadToken || selectedMailId !== id) return;
+    renderThread(Array.isArray(res.items) ? res.items : []);
+  } catch {
+    if (token !== mailLoadToken || selectedMailId !== id) return;
+    renderThread([]);
+  }
+}
+
+function renderThread(items) {
+  if (!threadBox || !threadList) return;
+  if (!Array.isArray(items) || items.length < 2) {
+    threadBox.hidden = true;
+    threadList.replaceChildren();
+    return;
+  }
+  threadList.replaceChildren();
+  for (const item of items) {
+    const current = item.current === true;
+    const sent = item.kind === "sent";
+    const row = document.createElement(current || sent ? "div" : "button");
+    if (row instanceof HTMLButtonElement) row.type = "button";
+    row.className = "thread-row" + (current ? " current" : "");
+    const who = document.createElement("span");
+    who.className = "thread-who";
+    who.textContent = item.from || (sent ? "已发出" : "没有发件人");
+    const subject = document.createElement("span");
+    subject.className = "thread-subject";
+    subject.textContent = item.subject || "(无主题)";
+    const when = document.createElement("span");
+    when.className = "thread-time";
+    when.textContent = formatShortTime(item.at);
+    row.append(who, subject, when);
+    const markText = current ? "当前" : sent ? "已发出" : "";
+    if (markText) {
+      const mark = document.createElement("span");
+      mark.className = "thread-mark";
+      mark.textContent = markText;
+      row.append(mark);
+    }
+    if (!current && !sent && item.id) {
+      row.addEventListener("click", () => void selectMail(item.id));
+    }
+    threadList.append(row);
+  }
+  threadBox.hidden = false;
 }
 
 function renderSandboxHtml(html) {
@@ -1032,8 +1130,9 @@ function renderSandboxHtml(html) {
     ? `html,body{background:${pageBg};color:${textColor};}a{color:${linkColor};}`
     : `html{background:${pageBg};}`;
   const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${thumbBg} ${trackBg};}::-webkit-scrollbar{width:10px;height:10px;}::-webkit-scrollbar-track{background:${trackBg};}::-webkit-scrollbar-thumb{background:${thumbBg};border-radius:5px;border:2px solid ${trackBg};}::-webkit-scrollbar-thumb:hover{background:${thumbHover};}::-webkit-scrollbar-thumb:active{background:${thumbActive};}::-webkit-scrollbar-corner{background:${trackBg};}::-webkit-resizer{background:transparent;}`;
-  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:sans-serif;font-size:16px;line-height:1.6;padding:18px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${body}</body></html>`;
+  const linked = openMailLinks(body);
+  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:sans-serif;font-size:16px;line-height:1.6;padding:18px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${linked}</body></html>`;
   mailSandbox.setAttribute("srcdoc", doc);
   const hint = document.querySelector("#preview-guard");
   if (hint) {
@@ -2432,6 +2531,69 @@ function openComposer() {
   document.querySelector("#send-from")?.focus();
 }
 
+function clearReplyDraft() {
+  replyContext = null;
+  const toInput = document.querySelector("#send-to");
+  const subjectInput = document.querySelector("#send-subject");
+  const textInput = document.querySelector("#send-text");
+  if (toInput) toInput.value = "";
+  if (subjectInput) subjectInput.value = "";
+  if (textInput) textInput.value = "";
+}
+
+function replyAddress(detail) {
+  const box = detail && detail.parsed && detail.parsed.replyTo;
+  const reply = box && typeof box.address === "string" ? box.address : "";
+  return extractEmail(reply) || extractEmail((detail && (detail.from || detail.envelopeFrom)) || "");
+}
+
+function replySubject(subject) {
+  const text = String(subject || "").trim();
+  const value = !text ? "Re:" : /^re:/i.test(text) ? text : "Re: " + text;
+  return value.slice(0, 200);
+}
+
+function normalizeClientId(raw) {
+  if (!raw) return "";
+  let text = String(raw).trim();
+  if (text.startsWith("<") && text.endsWith(">")) text = text.slice(1, -1).trim();
+  text = text.toLowerCase();
+  if (!/^[^\s<>]{1,200}$/.test(text)) return "";
+  return text;
+}
+
+function quoteLetter(detail) {
+  const when = formatFullTime(detail.receivedAt) || "";
+  const who = replyAddress(detail) || "对方";
+  const source = String((detail.parsed && detail.parsed.text) || "").replace(/\r\n/g, "\n").slice(0, 8000);
+  const lines = source.split("\n").map((line) => "> " + line);
+  return "\n\n" + when + "，" + who + " 写道：\n" + lines.join("\n");
+}
+
+async function startReply() {
+  const detail = openDetail;
+  if (!detail || !replyAddress(detail)) return;
+  const parent = normalizeClientId(detail.messageId);
+  const prior = Array.isArray(detail.references)
+    ? detail.references.map((item) => normalizeClientId(item)).filter(Boolean)
+    : [];
+  const references = parent ? (prior.includes(parent) ? prior : prior.concat(parent)).slice(-20) : prior.slice(-20);
+  replyContext = parent ? { inReplyTo: parent, references } : null;
+  replyArmed = true;
+  const toInput = document.querySelector("#send-to");
+  const subjectInput = document.querySelector("#send-subject");
+  const textInput = document.querySelector("#send-text");
+  if (toInput) toInput.value = replyAddress(detail);
+  if (subjectInput) subjectInput.value = replySubject(detail.subject);
+  if (textInput) textInput.value = quoteLetter(detail);
+  await switchNav("send");
+  openComposer();
+  if (textInput) {
+    textInput.focus();
+    textInput.setSelectionRange(0, 0);
+  }
+}
+
 async function loadSendPage() {
   try {
     const [box, settings, history] = await Promise.all([
@@ -2511,15 +2673,21 @@ async function submitSend() {
   }
   if (button) button.disabled = true;
   try {
+    const payload = {
+      from,
+      to,
+      subject: subjectInput ? subjectInput.value : "",
+      text: textInput ? textInput.value : "",
+    };
+    if (replyContext && replyContext.inReplyTo) {
+      payload.inReplyTo = replyContext.inReplyTo;
+      payload.references = replyContext.references;
+    }
     const queued = await request("/v1/outbox", {
       method: "POST",
-      body: {
-        from,
-        to,
-        subject: subjectInput ? subjectInput.value : "",
-        text: textInput ? textInput.value : "",
-      },
+      body: payload,
     });
+    replyContext = null;
     if (toInput) toInput.value = "";
     if (subjectInput) subjectInput.value = "";
     if (textInput) textInput.value = "";

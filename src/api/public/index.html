@@ -227,6 +227,11 @@
               </div>
             </header>
 
+            <section id="thread-box" class="thread-box" hidden>
+              <h2 class="thread-title">来回</h2>
+              <div id="thread-list" class="thread-list"></div>
+            </section>
+
             <!-- 详情 Tab 切换栏与平齐操作区 -->
             <div class="tab-bar">
               <div class="tab-group">
@@ -235,6 +240,7 @@
                 <button type="button" class="tab-btn" data-tab="raw">信头</button>
               </div>
               <div class="tab-actions">
+                <button type="button" id="btn-reply" class="btn-sm" title="按这封回一封" hidden>回复</button>
                 <button type="button" id="btn-reclassify" class="btn-sm" title="按当前提示词再分一次">重分类</button>
                 <a id="btn-download-eml" class="btn-sm btn-link" target="_blank" download title="下载原始 EML">下载</a>
                 <button type="button" id="btn-block-mail" class="btn-sm btn-danger-ghost" title="以后这个地址来的信直接进垃圾桶" hidden>加入黑名单</button>
@@ -269,7 +275,7 @@
                   </div>
                 </div>
                 <div class="html-container inlined-sandbox-wrap">
-                  <iframe id="mail-sandbox" sandbox="" referrerpolicy="no-referrer" title="邮件正文预览"></iframe>
+                  <iframe id="mail-sandbox" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="邮件正文预览"></iframe>
                 </div>
               </section>
 

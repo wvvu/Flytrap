@@ -7,6 +7,7 @@ import { linkAttachment, upsertAttachment } from "../db/repos/attachments.js";
 import { sha256 } from "../hash.js";
 import { attachmentRelativePath } from "../ingest/store-raw.js";
 import { resolveInside } from "../paths.js";
+import { extractMessageIds, normalizeMessageId } from "./thread.js";
 import { extractUrls, htmlToText, truncateUtf8 } from "./text.js";
 
 export const PARSED_TEXT_MAX_BYTES = 20 * 1024;
@@ -32,6 +33,8 @@ export interface ParsedMessage {
   parsed: ParsedMail;
   toAddrs: string[];
   messageId: string | null;
+  inReplyTo: string | null;
+  refs: string[];
 }
 
 export async function parseMessage(raw: Buffer, stored: { db: Db; dataDir: string; messageId: string; now: number }): Promise<ParsedMessage> {
@@ -50,7 +53,20 @@ export async function parseMessage(raw: Buffer, stored: { db: Db; dataDir: strin
     urls: extractUrls([email.text ?? "", html]),
     attachmentCount: attachments,
   });
-  return { parsed, toAddrs: addressList(email.to), messageId: email.messageId ?? null };
+  const replyIds = extractMessageIds(idText(email.inReplyTo));
+  return {
+    parsed,
+    toAddrs: addressList(email.to),
+    messageId: normalizeMessageId(email.messageId),
+    inReplyTo: replyIds[0] ?? null,
+    refs: extractMessageIds(idText(email.references)),
+  };
+}
+
+function idText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string").join(" ");
+  return "";
 }
 
 export function addressList(value: Address[] | undefined): string[] {

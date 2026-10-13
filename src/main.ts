@@ -18,6 +18,7 @@ import type { Notifier } from "./notify/types.js";
 import { startApi } from "./api/app.js";
 import { rebuildFromRaw } from "./ingest/rebuild.js";
 import { startSmtp, type RunningSmtp } from "./smtp/server.js";
+import { backfillThreadHeaders } from "./mail/thread-scan.js";
 import { startWorker } from "./worker/loop.js";
 
 // `--check` validates the environment, migrates, and exits.
@@ -128,6 +129,13 @@ async function serve(): Promise<void> {
 async function boot(stops: Array<() => Promise<void>>): Promise<void> {
   const needsCodec = config.roles.includes("smtp") || config.roles.includes("worker") || config.roles.includes("api");
   const codec = needsCodec ? await loadCodec(config.compress, log) : undefined;
+  if (codec) {
+    try {
+      await backfillThreadHeaders(db, config.mailDataDir, codec, log);
+    } catch (err) {
+      log.error({ err: err instanceof Error ? err.message : "thread scan failed" }, "thread scan failed");
+    }
+  }
   if (config.roles.includes("smtp")) {
     const smtp: RunningSmtp = await startSmtp({ config, db, codec: codec!, log });
     stops.push(() => smtp.close());

@@ -9,6 +9,7 @@ import { storeRaw } from "../ingest/store-raw.js";
 import { addressDomain, cleanSubject, cleanText, normalizeAddress, OutboundError, uniqueAddresses } from "./address.js";
 import { composeText } from "./compose.js";
 import { signMessage } from "./dkim.js";
+import { normalizeMessageId, threadKeyOf } from "./thread.js";
 
 export interface SubmitInput {
   from: string;
@@ -17,6 +18,8 @@ export interface SubmitInput {
   bcc?: readonly string[];
   subject?: string;
   text?: string;
+  inReplyTo?: string;
+  references?: readonly string[];
 }
 
 export interface SubmitResult {
@@ -36,6 +39,23 @@ export interface SubmitDeps {
 }
 
 const MAX_RECIPIENTS = 20;
+const MAX_REFS = 20;
+
+function cleanReply(input: SubmitInput): { inReplyTo: string | null; refs: string[] } {
+  const rawReply = input.inReplyTo?.trim() ?? "";
+  const inReplyTo = rawReply ? normalizeMessageId(rawReply) : null;
+  if (rawReply && !inReplyTo) throw new OutboundError("invalid message id");
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input.references ?? []) {
+    const id = normalizeMessageId(raw);
+    if (!id) throw new OutboundError("invalid message id");
+    if (seen.has(id) || refs.length >= MAX_REFS) continue;
+    seen.add(id);
+    refs.push(id);
+  }
+  return { inReplyTo, refs };
+}
 
 /**
  * Write the letter first, then queue a send. A From domain outside the
@@ -52,18 +72,22 @@ export async function submitOutbox(deps: SubmitDeps, input: SubmitInput): Promis
   if (recipients.length > MAX_RECIPIENTS) throw new OutboundError("too many recipients");
   const subject = cleanSubject(input.subject);
   const text = cleanText(input.text);
+  const reply = cleanReply(input);
   const domain = addressDomain(from);
   const domainKnown = readAcceptDomains(deps.db, deps.acceptDomains).includes(domain);
   const now = (deps.now ?? Date.now)();
   const id = ulid();
+  const messageId = `${id}@${domain}`.toLowerCase();
   let raw = composeText({
     from,
     to,
     cc,
     subject,
     text,
-    messageId: `${id}@${domain}`,
+    messageId,
     date: new Date(now),
+    inReplyTo: reply.inReplyTo,
+    references: reply.refs,
   });
   const key = findDkimKey(deps.db, domain);
   const selector = key?.selector ?? null;
@@ -94,6 +118,10 @@ export async function submitOutbox(deps: SubmitDeps, input: SubmitInput): Promis
       domainKnown,
       dkimSelector: selector,
       now,
+      messageId,
+      inReplyTo: reply.inReplyTo,
+      refIds: reply.refs.length > 0 ? JSON.stringify(reply.refs) : null,
+      threadKey: threadKeyOf(messageId, reply.inReplyTo, reply.refs),
     });
     enqueueJob(deps.db, {
       id: ulid(),

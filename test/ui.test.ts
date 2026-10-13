@@ -50,7 +50,8 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /\/app\.js/);
     assert.match(page.body, /\/app\.css/);
     assert.equal(page.body.includes("allow-same-origin"), false);
-    assert.match(page.body, /sandbox=""/);
+    assert.equal(page.body.includes("allow-top-navigation"), false);
+    assert.match(page.body, /sandbox="allow-popups allow-popups-to-escape-sandbox"/);
     assert.match(String(page.headers["content-security-policy"] ?? ""), /script-src 'self'/);
 
     const script = await app.inject({ method: "GET", url: "/app.js" });
@@ -118,6 +119,14 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.equal(/[你我他]/.test(script.body), false);
     assert.match(page.body, /已放过/);
     assert.match(script.body, /stripRemoteImages/);
+    assert.match(script.body, /openMailLinks/);
+    assert.match(script.body, /base-uri 'none'/);
+    assert.match(script.body, /href="#"/);
+    assert.match(script.body, /写道/);
+    assert.match(page.body, /id="btn-reply"/);
+    assert.match(page.body, /按这封回一封/);
+    assert.match(page.body, /id="thread-box"/);
+    assert.match(page.body, />来回</);
     assert.match(script.body, /隐藏图片/);
     assert.match(page.body, /class="btn-fit"/);
     assert.match(script.body, /document\.title = "登录"/);
@@ -144,6 +153,9 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(style.headers["content-type"] ?? "", /text\/css/);
     assert.match(style.body, /grid-template-columns:\s*92px 391px 1fr/);
     assert.match(style.body, /font-size:\s*15px/);
+    assert.match(style.body, /\[data-theme="dark"\] \.mail-item\.unread/);
+    assert.match(style.body, /#242424/);
+    assert.match(style.body, /#3a3a3a/);
 
     const boot = await app.inject({ method: "GET", url: "/boot.js" });
     assert.equal(boot.statusCode, 200);

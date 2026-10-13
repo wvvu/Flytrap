@@ -18,6 +18,7 @@ import { writeAudit } from "../db/repos/audit.js";
 import { deleteDkimKey, listDkimPublic, saveDkimKey } from "../db/repos/dkim-keys.js";
 import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, outboxIdOf, retryAllDeadJobs, retryJob, retryMessageJobs, retryOutboxJob, wakeClassifyJobs, type JobStatus } from "../db/repos/jobs.js";
 import { getOutbox, listOutbox, listOutboxByIds } from "../db/repos/outbox.js";
+import { listThread } from "../db/repos/thread.js";
 import { fallbackAiPool } from "../ai/pool.js";
 import { presentAiPool, readAiEnabled, readAiThinking, readBlockedSenders, readEffectiveAiPool, readPasswordHash, saveAcceptDomains, saveAiControls, saveAiPool, saveBlockedSenders, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
 import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
@@ -104,6 +105,8 @@ const sendBody = z.object({
   bcc: z.array(z.string().min(3).max(254)).max(20).optional(),
   subject: z.string().max(200).optional(),
   text: z.string().max(100_000).optional(),
+  inReplyTo: z.string().max(300).optional(),
+  references: z.array(z.string().max(300)).max(20).optional(),
 }).strict();
 
 const dkimBody = z.object({
@@ -269,6 +272,22 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.get("/v1/messages/:id", async (request) => toDetail(db, messageId(request)));
+
+  app.get("/v1/messages/:id/thread", async (request) => {
+    const id = messageId(request);
+    const letters = listThread(db, id);
+    if (!letters) throw new HttpError(404, "not_found");
+    return {
+      items: letters.map((item) => ({
+        kind: item.kind,
+        id: item.id,
+        at: iso(item.at),
+        from: item.from,
+        subject: item.subject,
+        current: item.kind === "in" && item.id === id,
+      })),
+    };
+  });
 
   app.get("/v1/messages/:id/text", async (request) => {
     const message = requireMessage(db, messageId(request));
@@ -1139,6 +1158,12 @@ function toListItem(row: ReturnType<typeof listMessages>[number]) {
   };
 }
 
+function idList(raw: string | null): string[] {
+  const value = parseJson(raw);
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0).slice(0, 20);
+}
+
 function toDetail(db: Db, id: string) {
   const message = requireMessage(db, id);
   return {
@@ -1151,6 +1176,8 @@ function toDetail(db: Db, id: string) {
     envelopeFrom: message.envelope_from,
     envelopeTo: parseJson(message.envelope_to),
     messageId: message.message_id,
+    inReplyTo: message.in_reply_to,
+    references: idList(message.ref_ids),
     subject: message.subject,
     from: message.from_addr,
     to: parseJson(message.to_addrs),

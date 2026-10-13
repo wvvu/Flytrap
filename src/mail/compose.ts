@@ -9,6 +9,8 @@ export interface ComposeTextInput {
   text: string;
   messageId: string;
   date: Date;
+  inReplyTo?: string | null;
+  references?: readonly string[];
 }
 
 /** A text/plain letter. Bcc stays off the header so it only exists on the envelope. */
@@ -21,11 +23,36 @@ export function composeText(input: ComposeTextInput): Buffer {
     `Subject: ${encodeHeader(input.subject)}`,
     `Date: ${formatDate(input.date)}`,
     `Message-ID: <${input.messageId}>`,
+    ...replyHeaders(input),
     "MIME-Version: 1.0",
     `Content-Type: text/plain; charset=utf-8`,
     `Content-Transfer-Encoding: ${encoded.cte}`,
   ].filter((line) => line.length > 0);
   return Buffer.from(`${lines.join("\r\n")}\r\n\r\n${encoded.body}`, "utf8");
+}
+
+function replyHeaders(input: ComposeTextInput): string[] {
+  const lines: string[] = [];
+  if (input.inReplyTo) lines.push(`In-Reply-To: <${input.inReplyTo}>`);
+  const refs = (input.references ?? []).filter((id) => id.length > 0);
+  if (refs.length > 0) lines.push(foldReferences(refs));
+  return lines;
+}
+
+function foldReferences(ids: readonly string[]): string {
+  const lines: string[] = [];
+  let current = "References:";
+  for (const id of ids) {
+    const addition = ` <${id}>`;
+    if (current.length + addition.length > 78 && current !== "References:") {
+      lines.push(current);
+      current = addition;
+    } else {
+      current += addition;
+    }
+  }
+  lines.push(current);
+  return lines.join("\r\n");
 }
 
 function encodeHeader(value: string): string {
