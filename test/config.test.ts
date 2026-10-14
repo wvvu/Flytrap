@@ -57,6 +57,28 @@ test("api role refuses to start without a password or a long session secret", ()
     }),
   );
   assert.equal(config.apiPassword, "hunter2");
+  assert.equal(config.sessionDays, 15);
+  const customDays = loadConfig(
+    env({
+      ROLES: "api",
+      API_PASSWORD: "hunter2",
+      SESSION_SECRET: "0123456789abcdef0123456789abcdef",
+      SESSION_DAYS: "30",
+    }),
+  );
+  assert.equal(customDays.sessionDays, 30);
+  assert.throws(
+    () =>
+      loadConfig(
+        env({
+          ROLES: "api",
+          API_PASSWORD: "hunter2",
+          SESSION_SECRET: "0123456789abcdef0123456789abcdef",
+          SESSION_DAYS: "0",
+        }),
+      ),
+    /sessionDays/,
+  );
 });
 
 test("production refuses the placeholder secret and the password admin", () => {

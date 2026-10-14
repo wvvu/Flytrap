@@ -174,17 +174,19 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     },
   });
   await app.register(cookie);
+  const sessionTtlMs = config.sessionDays * 24 * 60 * 60 * 1000;
   await app.register(session, {
     secret: config.sessionSecret ?? "",
     cookieName: "flytrap.sid",
     saveUninitialized: false,
-    store: sqliteSessionStore(db),
+    rolling: true,
+    store: sqliteSessionStore(db, sessionTtlMs),
     cookie: {
       httpOnly: true,
       sameSite: "lax",
       secure: config.nodeEnv === "production",
       path: "/",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: sessionTtlMs,
     },
   });
   await app.register(csrf, { sessionPlugin: "@fastify/session" });

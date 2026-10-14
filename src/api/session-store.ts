@@ -2,10 +2,10 @@ import type { SessionStore } from "@fastify/session";
 import type { Session } from "fastify";
 import type { Db } from "../db/index.js";
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_SESSION_TTL_MS = 15 * 24 * 60 * 60 * 1000;
 
 /** Persist panel sessions in SQLite so a container restart keeps the login. */
-export function sqliteSessionStore(db: Db): SessionStore {
+export function sqliteSessionStore(db: Db, defaultTtlMs = DEFAULT_SESSION_TTL_MS): SessionStore {
   const read = db.prepare("SELECT data, expires_at FROM sessions WHERE sid = ?");
   const write = db.prepare(
     `INSERT INTO sessions (sid, data, expires_at) VALUES (?, ?, ?)
@@ -18,7 +18,7 @@ export function sqliteSessionStore(db: Db): SessionStore {
     set(sessionId, session, callback) {
       try {
         const now = Date.now();
-        write.run(sessionId, JSON.stringify(session), expiresAt(session, now));
+        write.run(sessionId, JSON.stringify(session), expiresAt(session, now, defaultTtlMs));
         sweep.run(now);
         callback();
       } catch (err) {
@@ -49,7 +49,7 @@ export function sqliteSessionStore(db: Db): SessionStore {
   };
 }
 
-function expiresAt(session: Session, now: number): number {
+function expiresAt(session: Session, now: number, defaultTtlMs = DEFAULT_SESSION_TTL_MS): number {
   const cookie = session.cookie;
   const expires = cookie?.expires;
   if (expires instanceof Date && Number.isFinite(expires.getTime())) return expires.getTime();
@@ -59,5 +59,5 @@ function expiresAt(session: Session, now: number): number {
   }
   const maxAge = cookie?.originalMaxAge ?? cookie?.maxAge;
   if (typeof maxAge === "number" && maxAge > 0) return now + maxAge;
-  return now + WEEK_MS;
+  return now + defaultTtlMs;
 }

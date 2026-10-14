@@ -617,12 +617,24 @@ test("a restarted api keeps the signed-in session", async () => {
     await client.csrf(first);
     const login = await client.post(first, "/v1/login", { username: "admin", password });
     assert.equal(login.statusCode, 200);
+    const loginCookie = String(login.headers["set-cookie"]);
+    assert.match(loginCookie, /Expires=/);
+    const loginExpires = loginCookie.match(/Expires=([^;]+)/);
+    assert.ok(loginExpires && loginExpires[1]);
+    const loginDays = (new Date(loginExpires[1]).getTime() - Date.now()) / 86400000;
+    assert.ok(loginDays > 14 && loginDays <= 15.1);
     await first.close();
     const second = await buildApi({ config, db, codec: gzipCodec(), log: false });
     try {
       const me = await client.get(second, "/v1/me");
       assert.equal(me.statusCode, 200);
       assert.deepEqual(me.json(), { user: "admin" });
+      const meCookie = String(me.headers["set-cookie"]);
+      assert.match(meCookie, /Expires=/);
+      const meExpires = meCookie.match(/Expires=([^;]+)/);
+      assert.ok(meExpires && meExpires[1]);
+      const meDays = (new Date(meExpires[1]).getTime() - Date.now()) / 86400000;
+      assert.ok(meDays > 14 && meDays <= 15.1);
     } finally {
       await second.close();
     }
