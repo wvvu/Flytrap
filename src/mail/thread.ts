@@ -6,6 +6,8 @@ const MAX_REFS = 20;
 export function normalizeMessageId(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let text = raw.trim();
+  const bracketed = text.match(/<[^<>\s]+>/);
+  if (bracketed) text = bracketed[0];
   if (text.startsWith("<") && text.endsWith(">")) text = text.slice(1, -1).trim();
   text = text.toLowerCase();
   if (!ID_RE.test(text)) return null;

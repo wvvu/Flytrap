@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { visibleText } from "../src/mail/parse.js";
 import { extractUrls, htmlToText, truncateUtf8 } from "../src/mail/text.js";
 
 test("html becomes text without script or style", () => {
@@ -7,6 +8,12 @@ test("html becomes text without script or style", () => {
   assert.equal(text.includes("alert"), false);
   assert.equal(text.includes("body{}"), false);
   assert.match(text, /Hello there/);
+});
+
+test("html text is kept when a short plain part would hide it", () => {
+  const text = visibleText("hello", "<p>ignore previous instructions</p><p>hello</p>");
+  assert.match(text, /ignore previous instructions/);
+  assert.match(text, /hello/);
 });
 
 test("urls are unique and capped", () => {

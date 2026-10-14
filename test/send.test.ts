@@ -225,6 +225,13 @@ test("the panel can queue a letter for a domain that was not added", async () =>
     assert.equal(queued.statusCode, 202);
     assert.equal(queued.json().domainKnown, false);
     assert.equal(queued.json().dkim, "none");
+    const opened = await client.get(app, `/v1/outbox/${queued.json().id}`);
+    assert.equal(opened.statusCode, 200);
+    assert.equal(opened.json().text, "x\n");
+    assert.match(opened.json().headers, /Subject: try/);
+    const raw = await client.get(app, `/v1/outbox/${queued.json().id}/raw`);
+    assert.equal(raw.statusCode, 200);
+    assert.match(raw.body, /Subject: try/);
 
     const key = await client.post(app, "/v1/dkim", { domain: "example.com" });
     assert.equal(key.statusCode, 200);
@@ -260,6 +267,16 @@ test("composeText preserves multi-byte UTF-8 subject and base64 encodes long ASC
   const parsed = await parser.parse(raw);
   assert.equal(parsed.subject, subject);
   assert.equal(parsed.subject?.includes("\uFFFD"), false);
+  const folded = composeText({
+    from: "a@example.com",
+    to: ["one@example.com", "two@example.com", "three@example.com", "four@example.com", "five@example.com"],
+    cc: [],
+    subject: "s",
+    text: "t",
+    messageId: "m2@example.com",
+    date: new Date(1_000_000),
+  });
+  assert.match(folded.toString("utf8"), /To: one@example.com,.*\r\n five@example.com/);
 });
 
 test("an ed25519 key signs and publishes a 32-byte DNS record", async () => {
@@ -393,6 +410,8 @@ test("retryJob clears the outbox error when reopening a dead send job", () => {
 
     const ok = retryJob(db, jobId, 200);
     assert.equal(ok, true);
+    db.prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(jobId);
+    assert.equal(retryJob(db, jobId, 300), false);
     const row = getOutbox(db, outboxId);
     assert.ok(row);
     assert.equal(row.status, "queued");
@@ -420,6 +439,7 @@ test("reply headers stay on the letter and the opened mail lists the chain", asy
   assert.equal(headers.inReplyTo, "parent@example.com");
   assert.deepEqual(headers.refs, ["root@example.com", "parent@example.com"]);
   assert.equal(normalizeMessageId("<Ok@X>"), "ok@x");
+  assert.equal(normalizeMessageId("<Ok@X> (added by the gateway)"), "ok@x");
   assert.equal(normalizeMessageId("bad id"), null);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-thread-"));
@@ -537,10 +557,13 @@ test("old letters are scanned once for reply headers", async () => {
     assert.equal(row.in_reply_to, "older@example.com");
     assert.equal(row.thread_key, "older@example.com");
     assert.equal(JSON.parse(row.ref_ids)[0], "older@example.com");
-    const flag = db.prepare("SELECT value FROM settings WHERE key = 'thread_scan'").get() as { value: string };
-    assert.equal(flag.value, "1");
+    const early = db.prepare("SELECT value FROM settings WHERE key = 'thread_scan'").get() as { value: string } | undefined;
+    assert.equal(early, undefined);
     db.prepare("UPDATE messages SET thread_key = 'nope' WHERE id = 'msg_old'").run();
     await backfillThreadHeaders(db, dir, gzipCodec(), silent);
+    await backfillThreadHeaders(db, dir, gzipCodec(), silent);
+    const flag = db.prepare("SELECT value FROM settings WHERE key = 'thread_scan'").get() as { value: string };
+    assert.equal(flag.value, "1");
     const again = db.prepare("SELECT thread_key FROM messages WHERE id = 'msg_old'").get() as { thread_key: string };
     assert.equal(again.thread_key, "nope");
   } finally {

@@ -120,6 +120,9 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /已放过/);
     assert.match(script.body, /stripRemoteImages/);
     assert.match(script.body, /openMailLinks/);
+    assert.match(script.body, /listLoadToken/);
+    assert.match(script.body, /http-equiv/);
+    assert.match(script.body, /capReplyRefs/);
     assert.match(script.body, /base-uri 'none'/);
     assert.match(script.body, /href="#"/);
     assert.match(script.body, /写道/);
@@ -127,6 +130,9 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /按这封回一封/);
     assert.match(page.body, /id="thread-box"/);
     assert.match(page.body, />来回</);
+    assert.match(page.body, /id="section-attachments"/);
+    assert.match(script.body, /openSentLetter/);
+    assert.match(script.body, /\/v1\/outbox\//);
     assert.match(script.body, /隐藏图片/);
     assert.match(page.body, /class="btn-fit"/);
     assert.match(script.body, /document\.title = "登录"/);

@@ -50,6 +50,7 @@ let loadingMore = false;
 let currentJobs = [];
 let currentMessages = [];
 let mailLoadToken = 0;
+let listLoadToken = 0;
 let csrfToken = null;
 let toastTimer = 0;
 let currentPromptId = "classify-v1";
@@ -141,6 +142,7 @@ const sectionSignals = document.querySelector("#section-signals");
 const signalsCountEl = document.querySelector("#signals-count");
 const signalsList = document.querySelector("#signals-list");
 const sectionUrls = document.querySelector("#section-urls");
+const sectionAttachments = document.querySelector("#section-attachments");
 const urlCountEl = document.querySelector("#url-count");
 const urlsList = document.querySelector("#urls-list");
 const attachmentsList = document.querySelector("#attachments-list");
@@ -153,6 +155,8 @@ const btnTrashMail = document.querySelector("#btn-trash-mail");
 const btnReply = document.querySelector("#btn-reply");
 const threadBox = document.querySelector("#thread-box");
 const threadList = document.querySelector("#thread-list");
+let threadItems = [];
+let readingSentId = null;
 const btnBlockMail = document.querySelector("#btn-block-mail");
 const btnRestoreMail = document.querySelector("#btn-restore-mail");
 const btnDeleteMail = document.querySelector("#btn-delete-mail");
@@ -310,7 +314,7 @@ filterSelect?.addEventListener("change", () => {
 });
 
 detailVerdictSelect?.addEventListener("change", async () => {
-  if (!selectedMailId) return;
+  if (!selectedMailId || readingSentId) return;
   const newLabel = detailVerdictSelect.value;
   detailVerdictSelect.disabled = true;
   try {
@@ -380,7 +384,7 @@ btnLoadImages?.addEventListener("click", () => {
 });
 
 btnReclassify?.addEventListener("click", () => {
-  if (selectedMailId) void reclassify(selectedMailId, btnReclassify);
+  if (selectedMailId && !readingSentId) void reclassify(selectedMailId, btnReclassify);
 });
 
 // 键盘快捷键 (j: 下一封, k: 上一封, r: 刷新)
@@ -630,20 +634,24 @@ async function switchNav(view) {
 // ==================== 收件箱与垃圾桶模块 ====================
 
 async function reloadMessages() {
+  const token = ++listLoadToken;
   cursor = null;
   loadingMore = false;
   listEl.replaceChildren();
   noticeEl.textContent = "";
-  await loadMessagesPage(true);
+  await loadMessagesPage(true, token);
+  if (token !== listLoadToken) return;
   maybeLoadMore();
 }
 
 async function reloadTrash() {
+  const token = ++listLoadToken;
   cursor = null;
   loadingMore = false;
   listEl.replaceChildren();
   noticeEl.textContent = "";
-  await loadMessagesPage(true);
+  await loadMessagesPage(true, token);
+  if (token !== listLoadToken) return;
   maybeLoadMore();
 }
 
@@ -657,18 +665,20 @@ function maybeLoadMore() {
 async function loadMoreMessages() {
   if (!cursor || loadingMore) return;
   if (currentView !== "inbox" && currentView !== "spam" && currentView !== "trash") return;
+  const token = listLoadToken;
   const previous = cursor;
   const beforeCount = currentMessages.length;
   loadingMore = true;
   try {
-    await loadMessagesPage(false);
+    await loadMessagesPage(false, token);
   } finally {
-    loadingMore = false;
+    if (token === listLoadToken) loadingMore = false;
   }
+  if (token !== listLoadToken) return;
   if (cursor && cursor !== previous && currentMessages.length > beforeCount) maybeLoadMore();
 }
 
-async function loadMessagesPage(replace) {
+async function loadMessagesPage(replace, token) {
   const params = new URLSearchParams();
   if (currentView === "trash") {
     params.set("trashed", "true");
@@ -686,6 +696,7 @@ async function loadMessagesPage(replace) {
 
   try {
     const page = await request("/v1/messages?" + params.toString());
+    if (token !== listLoadToken) return;
     const items = Array.isArray(page.items) ? page.items : [];
     if (replace) currentMessages = items;
     else currentMessages = currentMessages.concat(items);
@@ -774,7 +785,10 @@ function createMailListItem(item) {
 async function selectMail(id, options = {}) {
   const token = ++mailLoadToken;
   selectedMailId = id;
+  readingSentId = null;
   openDetail = null;
+  showInboundExtras(true);
+  if (detailVerdictSelect) detailVerdictSelect.hidden = false;
   if (btnReply) btnReply.hidden = true;
   if (threadBox) threadBox.hidden = true;
   allowExternalImages = false;
@@ -1024,7 +1038,9 @@ function stripRemoteImages(html) {
 }
 
 function openMailLinks(html) {
-  const withoutBase = String(html || "").replace(/<base\b[^>]*>/gi, "");
+  const withoutBase = String(html || "")
+    .replace(/<base\b[^>]*>/gi, "")
+    .replace(/<meta\b[^>]*http-equiv\s*=\s*(['"]?)refresh\1[^>]*>/gi, "");
   return withoutBase.replace(/<a\b([^>]*)>/gi, (_match, attrs) => {
     const href = readAttr(attrs, "href");
     let rest = String(attrs);
@@ -1074,16 +1090,17 @@ async function loadThread(id, token) {
 
 function renderThread(items) {
   if (!threadBox || !threadList) return;
-  if (!Array.isArray(items) || items.length < 2) {
+  threadItems = Array.isArray(items) ? items : [];
+  if (threadItems.length < 2) {
     threadBox.hidden = true;
     threadList.replaceChildren();
     return;
   }
   threadList.replaceChildren();
-  for (const item of items) {
-    const current = item.current === true;
+  for (const item of threadItems) {
     const sent = item.kind === "sent";
-    const row = document.createElement(current || sent ? "div" : "button");
+    const current = readingSentId ? sent && item.id === readingSentId : item.current === true;
+    const row = document.createElement(current ? "div" : "button");
     if (row instanceof HTMLButtonElement) row.type = "button";
     row.className = "thread-row" + (current ? " current" : "");
     const who = document.createElement("span");
@@ -1103,12 +1120,83 @@ function renderThread(items) {
       mark.textContent = markText;
       row.append(mark);
     }
-    if (!current && !sent && item.id) {
-      row.addEventListener("click", () => void selectMail(item.id));
+    if (!current && item.id) {
+      const targetId = item.id;
+      row.addEventListener("click", () => {
+        if (sent) void openSentLetter(targetId);
+        else void selectMail(targetId);
+      });
     }
     threadList.append(row);
   }
   threadBox.hidden = false;
+}
+
+function showInboundExtras(show) {
+  if (sectionSignals) sectionSignals.hidden = !show;
+  if (sectionUrls) sectionUrls.hidden = !show;
+  if (sectionAttachments) sectionAttachments.hidden = !show;
+}
+
+async function openSentLetter(id) {
+  const token = ++mailLoadToken;
+  readingSentId = id;
+  try {
+    const letter = await request("/v1/outbox/" + encodeURIComponent(id));
+    if (token !== mailLoadToken || readingSentId !== id) return;
+    paintSentLetter(letter);
+    renderThread(threadItems);
+  } catch (err) {
+    if (token !== mailLoadToken) return;
+    readingSentId = null;
+    renderThread(threadItems);
+    toast("打开发出的信失败: " + explain(err));
+  }
+}
+
+function paintSentLetter(letter) {
+  showInboundExtras(false);
+  if (detailVerdictSelect) detailVerdictSelect.hidden = true;
+  openDetail = null;
+  if (btnReply) btnReply.hidden = true;
+  if (btnReclassify) btnReclassify.hidden = true;
+  if (btnBlockMail) btnBlockMail.hidden = true;
+  if (btnTrashMail) btnTrashMail.hidden = true;
+  if (btnRestoreMail) btnRestoreMail.hidden = true;
+  if (btnDeleteMail) btnDeleteMail.hidden = true;
+  const status = outboxStatus(letter);
+  if (detailSubject) detailSubject.textContent = letter.subject || "(无主题)";
+  if (detailFrom) {
+    detailFrom.textContent = letter.from || "没有发件人";
+    detailFrom.title = letter.from || "";
+  }
+  if (detailTo) {
+    detailTo.textContent = formatRecipients(letter.to);
+    detailTo.title = Array.isArray(letter.to) ? letter.to.join(", ") : "";
+  }
+  if (detailTime) detailTime.textContent = formatFullTime(letter.createdAt);
+  if (detailModelVerdict) detailModelVerdict.textContent = status;
+  if (detailSummary) {
+    detailSummary.textContent = letter.error && letter.status !== "sent" ? status + "。" + letter.error : status;
+  }
+  if (signalsList) signalsList.replaceChildren();
+  if (urlsList) urlsList.replaceChildren();
+  if (attachmentsList) attachmentsList.replaceChildren();
+  if (authChips) authChips.replaceChildren();
+  currentMailPlain = letter.text || "";
+  currentMailHtml = "";
+  if (plainTextBody) plainTextBody.textContent = currentMailPlain || "(正文为空)";
+  if (rawHeaders) rawHeaders.textContent = letter.headers || "";
+  if (btnDownloadEml && letter.id) {
+    btnDownloadEml.href = "/v1/outbox/" + encodeURIComponent(letter.id) + "/raw";
+    btnDownloadEml.setAttribute("download", "sent.eml");
+  }
+  allowExternalImages = false;
+  renderSandboxHtml("");
+  switchTab("ai");
+  mailEmptyEl.hidden = true;
+  if (mailLoadingEl) mailLoadingEl.hidden = true;
+  mailDetailEl.hidden = false;
 }
 
 function renderSandboxHtml(html) {
@@ -1553,8 +1641,7 @@ function createFailureStep(job) {
   const actions = document.createElement("div");
   actions.className = "step-actions";
   const stopped = job.status === "dead" || job.status === "failed";
-  const dismissed = job.status === "dismissed";
-  if (stopped || dismissed) {
+  if (stopped) {
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "btn-fit";
@@ -2562,6 +2649,16 @@ function normalizeClientId(raw) {
   return text;
 }
 
+function capReplyRefs(ids) {
+  const unique = [];
+  for (const id of ids) {
+    if (id && !unique.includes(id)) unique.push(id);
+  }
+  if (unique.length <= 20) return unique;
+  const tail = unique.slice(-19).filter((id) => id !== unique[0]);
+  return [unique[0], ...tail];
+}
+
 function quoteLetter(detail) {
   const when = formatFullTime(detail.receivedAt) || "";
   const who = replyAddress(detail) || "对方";
@@ -2577,7 +2674,7 @@ async function startReply() {
   const prior = Array.isArray(detail.references)
     ? detail.references.map((item) => normalizeClientId(item)).filter(Boolean)
     : [];
-  const references = parent ? (prior.includes(parent) ? prior : prior.concat(parent)).slice(-20) : prior.slice(-20);
+  const references = capReplyRefs(parent ? (prior.includes(parent) ? prior : prior.concat(parent)) : prior);
   replyContext = parent ? { inReplyTo: parent, references } : null;
   replyArmed = true;
   const toInput = document.querySelector("#send-to");
@@ -3001,7 +3098,8 @@ async function pollLive() {
     return;
   }
   if (currentView !== "inbox" && currentView !== "spam" && currentView !== "trash") return;
-  if (currentMessages.length > 40) return;
+  const token = listLoadToken;
+  const longList = currentMessages.length > 40;
   try {
     const params = new URLSearchParams();
     params.set("trashed", currentView === "trash" ? "true" : "false");
@@ -3011,7 +3109,12 @@ async function pollLive() {
     const q = currentView === "trash" ? (trashQueryInput ? trashQueryInput.value.trim() : "") : (queryInput ? queryInput.value.trim() : "");
     if (q) params.set("q", q);
     const page = await request("/v1/messages?" + params.toString());
+    if (token !== listLoadToken) return;
     const items = Array.isArray(page.items) ? page.items : [];
+    if (longList) {
+      mergeFreshMail(items);
+      return;
+    }
     const same =
       items.length === currentMessages.length &&
       items.every((item, index) => item.id === currentMessages[index]?.id && item.label === currentMessages[index]?.label && item.read === currentMessages[index]?.read);
@@ -3021,6 +3124,26 @@ async function pollLive() {
   } catch {
     // The next tick tries again.
   }
+}
+
+function mergeFreshMail(items) {
+  const known = new Map(currentMessages.map((item) => [item.id, item]));
+  const fresh = [];
+  for (const item of items) {
+    const prev = known.get(item.id);
+    if (!prev) {
+      fresh.push(item);
+      continue;
+    }
+    if (prev.label === item.label && prev.read === item.read) continue;
+    prev.label = item.label;
+    prev.read = item.read;
+    const card = findByDataId(listEl, ".mail-item", item.id);
+    card?.replaceWith(createMailListItem(item));
+  }
+  if (fresh.length === 0) return;
+  currentMessages = fresh.concat(currentMessages);
+  for (let i = fresh.length - 1; i >= 0; i -= 1) listEl.prepend(createMailListItem(fresh[i]));
 }
 
 function setMobilePane(pane) {

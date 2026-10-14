@@ -565,7 +565,7 @@ test("settings override notify, domains, and the failure list", async () => {
     assert.equal(retryLetter.statusCode, 200);
     assert.equal(retryLetter.json().count, 0);
     const revive = await client.post(app, "/v1/jobs/job-dead/retry", {});
-    assert.equal(revive.statusCode, 200);
+    assert.equal(revive.statusCode, 404);
     db.prepare("UPDATE jobs SET status = 'dead', attempts = 5 WHERE id = 'job-dead'").run();
     const again = await client.post(app, "/v1/jobs/retry-message", { messageId: "msg-1" });
     assert.equal(again.json().count, 1);

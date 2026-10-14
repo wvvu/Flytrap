@@ -41,8 +41,7 @@ export async function parseMessage(raw: Buffer, stored: { db: Db; dataDir: strin
   const email = await PostalMime.parse(raw);
   const attachments = await storeAttachments(email.attachments, stored);
   const html = email.html ?? "";
-  const plain = (email.text ?? "").trim();
-  const text = truncateUtf8(plain || htmlToText(html), PARSED_TEXT_MAX_BYTES);
+  const text = visibleText(email.text ?? "", html);
   const parsed = parsedSchema.parse({
     schema: 1,
     subject: (email.subject ?? "").slice(0, 2000),
@@ -61,6 +60,15 @@ export async function parseMessage(raw: Buffer, stored: { db: Db; dataDir: strin
     inReplyTo: replyIds[0] ?? null,
     refs: extractMessageIds(idText(email.references)),
   };
+}
+
+/** Plain text and HTML both reach the classifier. A short text part must not hide the HTML. */
+export function visibleText(plainRaw: string, html: string): string {
+  const plain = plainRaw.trim();
+  const fromHtml = html ? htmlToText(html).trim() : "";
+  if (!fromHtml || plain.includes(fromHtml)) return truncateUtf8(plain, PARSED_TEXT_MAX_BYTES);
+  if (!plain || fromHtml.includes(plain)) return truncateUtf8(fromHtml, PARSED_TEXT_MAX_BYTES);
+  return truncateUtf8(`${plain}\n${fromHtml}`, PARSED_TEXT_MAX_BYTES);
 }
 
 function idText(value: unknown): string {

@@ -341,8 +341,17 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const id = messageId(request);
     requireMessage(db, id);
     const at = now();
-    if (!hasOpenJob(db, id, "classify")) {
-      enqueueJob(db, { id: ulid(), type: "classify", messageId: id, now: at });
+    const open = db
+      .prepare(
+        `SELECT id, status FROM jobs
+         WHERE message_id = ? AND type = 'classify' AND status IN ('queued', 'running')`,
+      )
+      .all(id) as Array<{ id: string; status: string }>;
+    const queued = open.find((row) => row.status === "queued");
+    if (queued) {
+      db.prepare("UPDATE jobs SET payload = ?, updated_at = ? WHERE id = ?").run(JSON.stringify({ force: true }), at, queued.id);
+    } else {
+      enqueueJob(db, { id: ulid(), type: "classify", messageId: id, payload: { force: true }, now: at });
     }
     writeAudit(db, { id: ulid(), at, actor: request.session.user ?? "unknown", action: "reclassify", target: id });
     return reply.code(202).send({ queued: true });
@@ -836,10 +845,37 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return { items: listOutbox(db, limit).map(presentOutbox) };
   });
 
+  app.get("/v1/outbox/:id/raw", async (request, reply) => {
+    const row = getOutbox(db, messageId(request));
+    if (!row) throw new HttpError(404, "not_found");
+    let bytes: Buffer;
+    try {
+      bytes = await readRaw(config.mailDataDir, row.raw_path, codec, row.sha256);
+    } catch (err) {
+      if (err instanceof PathEscapeError) throw new HttpError(404, "not_found");
+      throw new HttpError(404, "not_found");
+    }
+    return reply
+      .header("content-type", "message/rfc822")
+      .header("content-disposition", contentDisposition(`${row.sha256}.eml`))
+      .send(bytes);
+  });
+
   app.get("/v1/outbox/:id", async (request) => {
     const row = getOutbox(db, messageId(request));
     if (!row) throw new HttpError(404, "not_found");
-    return presentOutbox(row);
+    let text = "";
+    let headers = "";
+    try {
+      const bytes = await readRaw(config.mailDataDir, row.raw_path, codec, row.sha256);
+      const email = await PostalMime.parse(bytes);
+      text = email.text ?? "";
+      if (text.length > 100_000) text = text.slice(0, 100_000);
+      headers = rfc822HeaderBlock(bytes);
+    } catch (err) {
+      if (err instanceof PathEscapeError) throw new HttpError(404, "not_found");
+    }
+    return { ...presentOutbox(row), text, headers };
   });
 
   app.post("/v1/outbox/:id/retry", async (request, reply) => {

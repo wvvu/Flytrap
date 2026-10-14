@@ -169,6 +169,7 @@ export function retryJob(db: Db, id: string, now: number): boolean {
       | { id: string; type: string; message_id: string | null; payload: string | null; status: string }
       | undefined;
     if (!job) return false;
+    if (job.status === "done" || job.status === "running" || job.status === "dismissed") return false;
     const res = db
       .prepare(
         `UPDATE jobs

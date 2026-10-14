@@ -10,6 +10,9 @@ export interface OutboundMessage {
   onAccepted?: (addresses: readonly string[], response: string) => void;
 }
 
+/** A send must finish or fail before shutdown requeues it. */
+export const SMTP_SOCKET_TIMEOUT_MS = 60_000;
+
 export interface MailSender {
   send(message: OutboundMessage): Promise<{ response: string }>;
 }
@@ -104,7 +107,7 @@ async function smtpSend(host: string, message: OutboundMessage): Promise<string>
     name: message.ehloName,
     connectionTimeout: 20_000,
     greetingTimeout: 20_000,
-    socketTimeout: 60_000,
+    socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
     // Opportunistic TLS. MX certificates often do not match the exchange name.
     tls: { rejectUnauthorized: false },
   });

@@ -32,7 +32,7 @@ test("a second delivery of the same bytes keeps every recipient", async () => {
       received_at: number;
     };
     assert.deepEqual(JSON.parse(row.envelope_to), ["a@example.com", "b@example.com"]);
-    assert.equal(row.received_at, 2_000);
+    assert.equal(row.received_at, 1_000);
     const deliveries = db.prepare("SELECT COUNT(*) AS c FROM deliveries WHERE message_id = ?").get(first.id) as { c: number };
     assert.equal(deliveries.c, 2);
   } finally {

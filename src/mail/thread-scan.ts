@@ -19,11 +19,31 @@ export async function backfillThreadHeaders(db: Db, dataDir: string, codec: Code
   for (const row of sent) {
     if (!(await stamp(db, dataDir, codec, row, "outbox"))) missed += 1;
   }
-  db.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, '1', ?)
-     ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = excluded.updated_at`,
-  ).run(FLAG, Date.now());
+  const now = Date.now();
+  if (missed === 0) {
+    writeSetting(db, FLAG, "1", now);
+    writeSetting(db, TRIES, "0", now);
+  } else {
+    const tries = readTries(db) + 1;
+    writeSetting(db, TRIES, String(tries), now);
+    if (tries >= 3) writeSetting(db, FLAG, "1", now);
+  }
   log.info({ messages: messages.length, sent: sent.length, missed }, "thread headers scanned");
+}
+
+const TRIES = "thread_scan_tries";
+
+function readTries(db: Db): number {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(TRIES) as { value: string } | undefined;
+  const tries = Number(row?.value ?? "0");
+  return Number.isInteger(tries) && tries > 0 ? tries : 0;
+}
+
+function writeSetting(db: Db, key: string, value: string, now: number): void {
+  db.prepare(
+    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  ).run(key, value, now);
 }
 
 interface ScanRow {

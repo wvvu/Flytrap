@@ -18,8 +18,8 @@ export function composeText(input: ComposeTextInput): Buffer {
   const encoded = encodeBody(input.text);
   const lines = [
     `From: ${input.from}`,
-    `To: ${input.to.join(", ")}`,
-    input.cc.length > 0 ? `Cc: ${input.cc.join(", ")}` : "",
+    foldAddressHeader("To", input.to),
+    input.cc.length > 0 ? foldAddressHeader("Cc", input.cc) : "",
     `Subject: ${encodeHeader(input.subject)}`,
     `Date: ${formatDate(input.date)}`,
     `Message-ID: <${input.messageId}>`,
@@ -37,6 +37,22 @@ function replyHeaders(input: ComposeTextInput): string[] {
   const refs = (input.references ?? []).filter((id) => id.length > 0);
   if (refs.length > 0) lines.push(foldReferences(refs));
   return lines;
+}
+
+function foldAddressHeader(name: string, addresses: readonly string[]): string {
+  const lines: string[] = [];
+  let current = `${name}:`;
+  for (const address of addresses) {
+    const addition = `${current.endsWith(":") ? " " : ", "}${address}`;
+    if (current.length + addition.length > 78 && !current.endsWith(":")) {
+      lines.push(current);
+      current = ` ${address}`;
+    } else {
+      current += addition;
+    }
+  }
+  lines.push(current);
+  return lines.join("\r\n");
 }
 
 function foldReferences(ids: readonly string[]): string {
