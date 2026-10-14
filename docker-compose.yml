@@ -12,7 +12,7 @@ name: flytrap
 services:
   flytrap:
     build: .
-    image: flytrap:0.5.0
+    image: flytrap:0.6.0
     init: true
     restart: unless-stopped
     env_file:

@@ -11,7 +11,7 @@ import type { AppLog } from "../log.js";
 import type { Authenticator } from "../mail/auth.js";
 import type { Notifier } from "../notify/types.js";
 import type { MailSender } from "../mail/deliver.js";
-import { createMxSender } from "../mail/deliver.js";
+import { createMxSender, SMTP_SOCKET_TIMEOUT_MS } from "../mail/deliver.js";
 import { runAuthJob } from "./job-auth.js";
 import { runClassifyJob } from "./job-classify.js";
 import { runNotifyJob } from "./job-notify.js";
@@ -46,14 +46,50 @@ export interface RunningWorker {
   settled: Promise<void>;
 }
 
+const INBOUND_JOB_TYPES = ["auth", "parse", "classify", "notify"] as const;
+const SEND_JOB_TYPES = ["send"] as const;
+
 export async function startWorker(options: WorkerOptions): Promise<RunningWorker> {
   const workerId = options.workerId ?? `${hostname()}-${process.pid}-${ulid()}`;
   const now = options.now ?? Date.now;
   const pollMs = options.pollMs ?? 1000;
-  const shutdownWaitMs = options.shutdownWaitMs ?? 30_000;
+  const shutdownWaitMs = options.shutdownWaitMs ?? SMTP_SOCKET_TIMEOUT_MS + 15_000;
   const recovered = recoverRunning(options.db, now());
   if (recovered > 0) options.log.warn({ recovered }, "requeued jobs left running");
 
+  const inbound = startLane(options, {
+    workerId: `${workerId}:in`,
+    types: INBOUND_JOB_TYPES,
+    pollMs,
+    shutdownWaitMs,
+    now,
+  });
+  const send = startLane(options, {
+    workerId: `${workerId}:out`,
+    types: SEND_JOB_TYPES,
+    pollMs,
+    shutdownWaitMs,
+    now,
+  });
+
+  return {
+    workerId,
+    settled: Promise.all([inbound.settled, send.settled]).then(
+      () => undefined,
+      () => undefined,
+    ),
+    async close() {
+      await Promise.all([inbound.close(), send.close()]);
+    },
+  };
+}
+
+/** One loop, one kind of ticket. Inbound and send run side by side. */
+function startLane(
+  options: WorkerOptions,
+  lane: { workerId: string; types: readonly string[]; pollMs: number; shutdownWaitMs: number; now: () => number },
+): RunningWorker {
+  const { workerId, types, pollMs, shutdownWaitMs, now } = lane;
   let stopped = false;
   let current: Promise<void> | null = null;
   let currentJob: JobRow | null = null;
@@ -61,7 +97,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
 
   const loop = (async () => {
     while (!stopped) {
-      const job = claimJob(options.db, workerId, now(), SUPPORTED_JOB_TYPES);
+      const job = claimJob(options.db, workerId, now(), types);
       if (!job) {
         await interruptibleSleep(pollMs, (wake) => {
           wakeSleep = wake;
@@ -93,7 +129,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
         : "done";
       if (outcome === "timeout" && currentJob) {
         const requeued = requeueJob(options.db, currentJob.id, workerId, now());
-        if (requeued) options.log.warn({ jobId: currentJob.id }, "requeued job on shutdown");
+        if (requeued) options.log.warn({ jobId: currentJob.id, type: currentJob.type }, "requeued job on shutdown");
       }
     },
   };

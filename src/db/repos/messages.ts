@@ -90,6 +90,9 @@ export interface StoredMessage {
   envelope_to: string;
   domains: string;
   message_id: string | null;
+  in_reply_to: string | null;
+  ref_ids: string | null;
+  thread_key: string | null;
   subject: string | null;
   from_addr: string | null;
   to_addrs: string | null;
@@ -106,7 +109,7 @@ export function getMessage(db: Db, id: string): StoredMessage | undefined {
   return db
     .prepare(
       `SELECT id, sha256, raw_path, size_bytes, received_at, envelope_from, envelope_to, domains,
-              message_id, subject, from_addr, to_addrs, smtp_meta, auth_result, parsed, ai_result,
+              message_id, in_reply_to, ref_ids, thread_key, subject, from_addr, to_addrs, smtp_meta, auth_result, parsed, ai_result,
               status, error, trashed_at
        FROM messages WHERE id = ?`,
     )
@@ -129,13 +132,17 @@ export function saveParsedMessage(
     fromAddr: string | null;
     toAddrs: string[] | null;
     messageId: string | null;
+    inReplyTo?: string | null;
+    refIds?: string | null;
+    threadKey?: string | null;
     parsed: string;
     now: number;
   },
 ): void {
   db.prepare(
     `UPDATE messages
-     SET subject = ?, from_addr = ?, to_addrs = ?, message_id = ?, parsed = ?,
+     SET subject = ?, from_addr = ?, to_addrs = ?, message_id = ?,
+         in_reply_to = ?, ref_ids = ?, thread_key = ?, parsed = ?,
          status = 'parsed', error = NULL, updated_at = ?
      WHERE id = ?`,
   ).run(
@@ -143,6 +150,9 @@ export function saveParsedMessage(
     row.fromAddr,
     row.toAddrs ? JSON.stringify(row.toAddrs) : null,
     row.messageId,
+    row.inReplyTo ?? null,
+    row.refIds ?? null,
+    row.threadKey ?? null,
     row.parsed,
     row.now,
     row.id,

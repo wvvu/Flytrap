@@ -97,8 +97,8 @@ function record(db: Db, hash: string, rawPath: string, input: AcceptInput): { id
 
 function mergeEnvelope(db: Db, messageId: string, input: AcceptInput): void {
   const row = db
-    .prepare("SELECT envelope_to, domains, received_at FROM messages WHERE id = ?")
-    .get(messageId) as { envelope_to: string; domains: string; received_at: number } | undefined;
+    .prepare("SELECT envelope_to, domains FROM messages WHERE id = ?")
+    .get(messageId) as { envelope_to: string; domains: string } | undefined;
   if (!row) return;
   const rcpts = parseStringList(row.envelope_to);
   const domains = parseStringList(row.domains);
@@ -108,10 +108,9 @@ function mergeEnvelope(db: Db, messageId: string, input: AcceptInput): void {
   for (const domain of uniqueDomains(input.meta.rcptTo)) {
     if (!domains.includes(domain)) domains.push(domain);
   }
-  const receivedAt = Math.max(row.received_at, input.receivedAtMs);
   db.prepare(
-    "UPDATE messages SET envelope_to = ?, domains = ?, received_at = ?, updated_at = ? WHERE id = ?",
-  ).run(JSON.stringify(rcpts), JSON.stringify(domains), receivedAt, input.receivedAtMs, messageId);
+    "UPDATE messages SET envelope_to = ?, domains = ?, updated_at = ? WHERE id = ?",
+  ).run(JSON.stringify(rcpts), JSON.stringify(domains), input.receivedAtMs, messageId);
 }
 
 function parseStringList(raw: string): string[] {

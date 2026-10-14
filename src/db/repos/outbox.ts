@@ -18,6 +18,10 @@ export interface OutboxRow {
   error: string | null;
   created_at: number;
   updated_at: number;
+  message_id: string | null;
+  in_reply_to: string | null;
+  ref_ids: string | null;
+  thread_key: string | null;
 }
 
 export interface NewOutbox {
@@ -31,14 +35,19 @@ export interface NewOutbox {
   domainKnown: boolean;
   dkimSelector: string | null;
   now: number;
+  messageId?: string | null;
+  inReplyTo?: string | null;
+  refIds?: string | null;
+  threadKey?: string | null;
 }
 
 export function insertOutbox(db: Db, input: NewOutbox): void {
   db.prepare(
     `INSERT INTO outbox (
       id, sha256, raw_path, size_bytes, from_addr, to_addrs, subject, domain_known,
-      dkim_selector, status, accepted, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '[]', ?, ?)`,
+      dkim_selector, status, accepted, created_at, updated_at,
+      message_id, in_reply_to, ref_ids, thread_key
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '[]', ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.id,
     input.sha256,
@@ -51,6 +60,10 @@ export function insertOutbox(db: Db, input: NewOutbox): void {
     input.dkimSelector,
     input.now,
     input.now,
+    input.messageId ?? null,
+    input.inReplyTo ?? null,
+    input.refIds ?? null,
+    input.threadKey ?? null,
   );
 }
 

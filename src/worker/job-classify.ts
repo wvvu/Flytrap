@@ -27,6 +27,11 @@ export async function runClassifyJob(deps: ClassifyJobDeps, job: JobRow): Promis
   if (!message) throw new Error("message missing");
   if (message.trashed_at) return;
   if (!message.parsed) throw new Error("message is not parsed");
+  const force = classifyForced(job.payload);
+  if (!force && manualLabel(message.ai_result)) {
+    deps.log.info({ messageId: message.id }, "classify skipped, manual label");
+    return;
+  }
   const parsed = parsedSchema.parse(JSON.parse(message.parsed));
   const auth = message.auth_result ? authResultSchema.parse(JSON.parse(message.auth_result)) : null;
   const recipients = recipientParts(envelopeAddresses(message.envelope_to));
@@ -76,6 +81,11 @@ export async function runClassifyJob(deps: ClassifyJobDeps, job: JobRow): Promis
   const checked = finalizeAiResult(produced, previousOf(message.ai_result));
   const guarded = applyDeterministicGuardrails(facts, checked);
   const now = deps.now();
+  const fresh = getMessage(deps.db, message.id);
+  if (!force && manualLabel(fresh?.ai_result ?? null)) {
+    deps.log.info({ messageId: message.id }, "classify dropped, manual label");
+    return;
+  }
   saveAiResult(deps.db, message.id, JSON.stringify(guarded), now);
   if (!hasOpenJob(deps.db, message.id, "notify")) {
     enqueueJob(deps.db, { id: ulid(), type: "notify", messageId: message.id, now });
@@ -132,6 +142,26 @@ function headerFrom(from: { name: string; address: string } | null, fallback: st
   if (!from) return fallback ?? "";
   if (!from.name) return from.address;
   return `${from.name} <${from.address}>`;
+}
+
+function classifyForced(payload: string | null): boolean {
+  if (!payload) return false;
+  try {
+    const parsed = JSON.parse(payload) as { force?: unknown };
+    return parsed.force === true;
+  } catch {
+    return false;
+  }
+}
+
+function manualLabel(raw: string | null): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as { manualOverride?: unknown };
+    return parsed.manualOverride === true;
+  } catch {
+    return false;
+  }
 }
 
 function previousOf(raw: string | null): unknown {

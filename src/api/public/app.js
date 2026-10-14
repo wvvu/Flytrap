@@ -10,6 +10,7 @@ const LABEL_NAMES = {
 
 const VIEW_TITLES = {
   inbox: "收件箱",
+  send: "发信",
   spam: "已拦截",
   trash: "垃圾桶",
   dlq: "处理失败",
@@ -49,6 +50,7 @@ let loadingMore = false;
 let currentJobs = [];
 let currentMessages = [];
 let mailLoadToken = 0;
+let listLoadToken = 0;
 let csrfToken = null;
 let toastTimer = 0;
 let currentPromptId = "classify-v1";
@@ -56,7 +58,12 @@ let holdBoot = false;
 let unreadInbox = 0;
 let blockedSenders = [];
 let dkimKeys = [];
+let sentItems = [];
+let sentQuery = "";
 let currentFromAddress = "";
+let openDetail = null;
+let replyContext = null;
+let replyArmed = false;
 
 // DOM 元素引用
 const appEl = document.querySelector("#app");
@@ -69,6 +76,7 @@ const themeIcon = document.querySelector("#theme-icon");
 
 // 导航按钮 (收件箱, Spam, 垃圾桶, 设置)
 const navInboxBtn = document.querySelector("#nav-inbox");
+const navSendBtn = document.querySelector("#nav-send");
 const navSpamBtn = document.querySelector("#nav-spam");
 const navTrashBtn = document.querySelector("#nav-trash");
 const navSettingsBtn = document.querySelector("#nav-settings");
@@ -77,6 +85,7 @@ const streamTitle = document.querySelector("#stream-title");
 
 // 第二列流头部
 const streamInboxHeader = document.querySelector("#stream-inbox-header");
+const streamSendHeader = document.querySelector("#stream-send-header");
 const streamSpamHeader = document.querySelector("#stream-spam-header");
 const streamTrashHeader = document.querySelector("#stream-trash-header");
 const streamDlqHeader = document.querySelector("#stream-dlq-header");
@@ -99,6 +108,7 @@ const retryAllBtn = document.querySelector("#btn-retry-all");
 // 第三列工作台各视图
 const viewMail = document.querySelector("#view-mail");
 const viewDlq = document.querySelector("#view-dlq");
+const viewSend = document.querySelector("#view-send");
 const viewSettings = document.querySelector("#view-settings");
 const failureDetailEl = document.querySelector("#failure-detail");
 const dlqEmptyEl = document.querySelector("#dlq-empty");
@@ -132,6 +142,7 @@ const sectionSignals = document.querySelector("#section-signals");
 const signalsCountEl = document.querySelector("#signals-count");
 const signalsList = document.querySelector("#signals-list");
 const sectionUrls = document.querySelector("#section-urls");
+const sectionAttachments = document.querySelector("#section-attachments");
 const urlCountEl = document.querySelector("#url-count");
 const urlsList = document.querySelector("#urls-list");
 const attachmentsList = document.querySelector("#attachments-list");
@@ -141,6 +152,11 @@ const plainTextBody = document.querySelector("#plain-text-body");
 const rawHeaders = document.querySelector("#raw-headers");
 const authChips = document.querySelector("#auth-chips");
 const btnTrashMail = document.querySelector("#btn-trash-mail");
+const btnReply = document.querySelector("#btn-reply");
+const threadBox = document.querySelector("#thread-box");
+const threadList = document.querySelector("#thread-list");
+let threadItems = [];
+let readingSentId = null;
 const btnBlockMail = document.querySelector("#btn-block-mail");
 const btnRestoreMail = document.querySelector("#btn-restore-mail");
 const btnDeleteMail = document.querySelector("#btn-delete-mail");
@@ -158,6 +174,7 @@ logoutBtn.addEventListener("click", () => void signOut());
 themeBtn.addEventListener("click", () => toggleTheme());
 
 navInboxBtn?.addEventListener("click", () => switchNav("inbox"));
+navSendBtn?.addEventListener("click", () => switchNav("send"));
 navSpamBtn?.addEventListener("click", () => switchNav("spam"));
 navTrashBtn?.addEventListener("click", () => switchNav("trash"));
 navSettingsBtn?.addEventListener("click", () => switchNav("settings"));
@@ -171,6 +188,7 @@ emptyTrashBtn?.addEventListener("click", () => void handleEmptyTrash());
 dlqRefreshBtn?.addEventListener("click", () => void loadDlqJobs());
 retryAllBtn?.addEventListener("click", () => void retryAllDead());
 
+btnReply?.addEventListener("click", () => void startReply());
 btnTrashMail?.addEventListener("click", () => void handleTrashMail());
 btnBlockMail?.addEventListener("click", () => void handleBlockMail());
 btnRestoreMail?.addEventListener("click", () => void handleRestoreMail());
@@ -206,7 +224,14 @@ document.querySelector("#notify-confidence")?.addEventListener("input", syncNoti
 document.querySelector("#btn-save-attempts")?.addEventListener("click", () => void saveAttemptSettings());
 document.querySelector("#job-max-attempts")?.addEventListener("input", syncAttemptSave);
 document.querySelector("#btn-add-domain")?.addEventListener("click", () => void addDomain());
-document.querySelector("#btn-refresh-send")?.addEventListener("click", () => void loadSendSection());
+document.querySelector("#btn-send-refresh")?.addEventListener("click", () => void loadSendPage());
+document.querySelector("#btn-compose")?.addEventListener("click", () => openComposer());
+document.querySelector("#btn-back-send")?.addEventListener("click", () => setMobilePane("list"));
+document.querySelector("#send-filters")?.addEventListener("submit", (event) => event.preventDefault());
+document.querySelector("#send-q")?.addEventListener("input", () => {
+  sentQuery = document.querySelector("#send-q")?.value.trim().toLowerCase() || "";
+  renderSentList();
+});
 document.querySelector("#send-form")?.addEventListener("submit", (event) => {
   event.preventDefault();
   void submitSend();
@@ -289,7 +314,7 @@ filterSelect?.addEventListener("change", () => {
 });
 
 detailVerdictSelect?.addEventListener("change", async () => {
-  if (!selectedMailId) return;
+  if (!selectedMailId || readingSentId) return;
   const newLabel = detailVerdictSelect.value;
   detailVerdictSelect.disabled = true;
   try {
@@ -359,7 +384,7 @@ btnLoadImages?.addEventListener("click", () => {
 });
 
 btnReclassify?.addEventListener("click", () => {
-  if (selectedMailId) void reclassify(selectedMailId, btnReclassify);
+  if (selectedMailId && !readingSentId) void reclassify(selectedMailId, btnReclassify);
 });
 
 // 键盘快捷键 (j: 下一封, k: 上一封, r: 刷新)
@@ -377,6 +402,8 @@ window.addEventListener("keydown", (e) => {
     else if (e.key === "r") void reloadTrash();
   } else if (currentView === "dlq" && e.key === "r") {
     void loadDlqJobs();
+  } else if (currentView === "send" && e.key === "r") {
+    void loadSendPage();
   }
 });
 
@@ -540,15 +567,19 @@ async function refreshUnread() {
 }
 
 async function switchNav(view) {
+  const keepReply = replyArmed;
+  replyArmed = false;
+  if (view === "send" && !keepReply && replyContext) clearReplyDraft();
   currentView = view;
   setViewTitle(view);
   if (appEl) delete appEl.dataset.layout;
-  const navBtns = [navInboxBtn, navSpamBtn, navTrashBtn, navSettingsBtn];
+  const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navSettingsBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
-  const viewPanels = [viewMail, viewDlq, viewSettings];
+  const viewPanels = [viewMail, viewDlq, viewSend, viewSettings];
   viewPanels.forEach((p) => { if (p) p.hidden = true; });
 
   streamInboxHeader.hidden = true;
+  if (streamSendHeader) streamSendHeader.hidden = true;
   if (streamSpamHeader) streamSpamHeader.hidden = true;
   if (streamTrashHeader) streamTrashHeader.hidden = true;
   if (streamDlqHeader) streamDlqHeader.hidden = true;
@@ -569,6 +600,11 @@ async function switchNav(view) {
     viewMail.hidden = false;
     syncListLabel();
     await reloadMessages();
+  } else if (view === "send") {
+    navSendBtn?.classList.add("active");
+    if (streamSendHeader) streamSendHeader.hidden = false;
+    if (viewSend) viewSend.hidden = false;
+    await loadSendPage();
   } else if (view === "spam") {
     navSpamBtn?.classList.add("active");
     if (streamSpamHeader) streamSpamHeader.hidden = false;
@@ -598,20 +634,24 @@ async function switchNav(view) {
 // ==================== 收件箱与垃圾桶模块 ====================
 
 async function reloadMessages() {
+  const token = ++listLoadToken;
   cursor = null;
   loadingMore = false;
   listEl.replaceChildren();
   noticeEl.textContent = "";
-  await loadMessagesPage(true);
+  await loadMessagesPage(true, token);
+  if (token !== listLoadToken) return;
   maybeLoadMore();
 }
 
 async function reloadTrash() {
+  const token = ++listLoadToken;
   cursor = null;
   loadingMore = false;
   listEl.replaceChildren();
   noticeEl.textContent = "";
-  await loadMessagesPage(true);
+  await loadMessagesPage(true, token);
+  if (token !== listLoadToken) return;
   maybeLoadMore();
 }
 
@@ -625,18 +665,20 @@ function maybeLoadMore() {
 async function loadMoreMessages() {
   if (!cursor || loadingMore) return;
   if (currentView !== "inbox" && currentView !== "spam" && currentView !== "trash") return;
+  const token = listLoadToken;
   const previous = cursor;
   const beforeCount = currentMessages.length;
   loadingMore = true;
   try {
-    await loadMessagesPage(false);
+    await loadMessagesPage(false, token);
   } finally {
-    loadingMore = false;
+    if (token === listLoadToken) loadingMore = false;
   }
+  if (token !== listLoadToken) return;
   if (cursor && cursor !== previous && currentMessages.length > beforeCount) maybeLoadMore();
 }
 
-async function loadMessagesPage(replace) {
+async function loadMessagesPage(replace, token) {
   const params = new URLSearchParams();
   if (currentView === "trash") {
     params.set("trashed", "true");
@@ -654,6 +696,7 @@ async function loadMessagesPage(replace) {
 
   try {
     const page = await request("/v1/messages?" + params.toString());
+    if (token !== listLoadToken) return;
     const items = Array.isArray(page.items) ? page.items : [];
     if (replace) currentMessages = items;
     else currentMessages = currentMessages.concat(items);
@@ -742,6 +785,12 @@ function createMailListItem(item) {
 async function selectMail(id, options = {}) {
   const token = ++mailLoadToken;
   selectedMailId = id;
+  readingSentId = null;
+  openDetail = null;
+  showInboundExtras(true);
+  if (detailVerdictSelect) detailVerdictSelect.hidden = false;
+  if (btnReply) btnReply.hidden = true;
+  if (threadBox) threadBox.hidden = true;
   allowExternalImages = false;
   if (btnLoadImages) {
     btnLoadImages.hidden = true;
@@ -783,6 +832,8 @@ async function selectMail(id, options = {}) {
     if (detailTime) detailTime.textContent = formatFullTime(detail.receivedAt);
 
     currentFromAddress = extractEmail(rawFrom);
+    openDetail = detail;
+    if (btnReply) btnReply.hidden = !replyAddress(detail);
     const isTrashed = Boolean(detail.trashedAt || currentView === "trash");
     if (btnBlockMail) btnBlockMail.hidden = !currentFromAddress;
     if (btnTrashMail) btnTrashMail.hidden = isTrashed;
@@ -922,13 +973,16 @@ async function selectMail(id, options = {}) {
     // 加载 HTML 与真正的 RFC822 信头。带会话进来时等这一封画完再揭开，避免连闪。
     const htmlReady = loadMailHtml(id, token);
     const headersReady = loadRawHeaders(id, token, detail);
+    const threadReady = loadThread(id, token);
     const opened = markOpened(id);
-    if (holdBoot) await Promise.all([htmlReady, headersReady, opened]);
+    if (holdBoot) await Promise.all([htmlReady, headersReady, threadReady, opened]);
   } catch (err) {
     if (token !== mailLoadToken) return;
     console.error("selectMail error:", err);
     if (mailLoadingEl) mailLoadingEl.hidden = true;
     mailDetailEl.hidden = false;
+    if (btnReply) btnReply.hidden = true;
+    if (threadBox) threadBox.hidden = true;
     if (detailSubject) detailSubject.textContent = "无法加载邮件详情";
     if (detailSummary) detailSummary.textContent = explain(err);
   }
@@ -983,12 +1037,166 @@ function stripRemoteImages(html) {
     .replace(/url\(\s*(['"]?)https?:\/\/[^)'"]*\1\s*\)/gi, "url('')");
 }
 
+function openMailLinks(html) {
+  const withoutBase = String(html || "")
+    .replace(/<base\b[^>]*>/gi, "")
+    .replace(/<meta\b[^>]*http-equiv\s*=\s*(['"]?)refresh\1[^>]*>/gi, "");
+  return withoutBase.replace(/<a\b([^>]*)>/gi, (_match, attrs) => {
+    const href = readAttr(attrs, "href");
+    let rest = String(attrs);
+    for (const name of ["href", "target", "rel"]) rest = stripAttr(rest, name);
+    if (/^https?:\/\//i.test(href)) {
+      return `<a${rest} href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer">`;
+    }
+    return `<a${rest} href="#">`;
+  });
+}
+
+function readAttr(attrs, name) {
+  const quoted = String(attrs).match(new RegExp("\\s" + name + "\\s*=\\s*(['\"])(.*?)\\1", "i"));
+  if (quoted) return quoted[2].trim();
+  const bare = String(attrs).match(new RegExp("\\s" + name + "\\s*=\\s*([^\\s>]+)", "i"));
+  return bare ? bare[1].trim() : "";
+}
+
+function stripAttr(attrs, name) {
+  return String(attrs)
+    .replace(new RegExp("\\s" + name + "\\s*=\\s*(['\"]).*?\\1", "gi"), "")
+    .replace(new RegExp("\\s" + name + "\\s*=\\s*[^\\s>]+", "gi"), "");
+}
+
+function escapeAttr(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
 function escapeHtml(value) {
   return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function mailBringsItsOwnCanvas(html) {
   return /<style[\s>]/i.test(html) || /bgcolor\s*=/i.test(html) || /background(?:-color)?\s*:/i.test(html);
+}
+
+async function loadThread(id, token) {
+  try {
+    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/thread");
+    if (token !== mailLoadToken || selectedMailId !== id) return;
+    renderThread(Array.isArray(res.items) ? res.items : []);
+  } catch {
+    if (token !== mailLoadToken || selectedMailId !== id) return;
+    renderThread([]);
+  }
+}
+
+function renderThread(items) {
+  if (!threadBox || !threadList) return;
+  threadItems = Array.isArray(items) ? items : [];
+  if (threadItems.length < 2) {
+    threadBox.hidden = true;
+    threadList.replaceChildren();
+    return;
+  }
+  threadList.replaceChildren();
+  for (const item of threadItems) {
+    const sent = item.kind === "sent";
+    const current = readingSentId ? sent && item.id === readingSentId : item.current === true;
+    const row = document.createElement(current ? "div" : "button");
+    if (row instanceof HTMLButtonElement) row.type = "button";
+    row.className = "thread-row" + (current ? " current" : "");
+    const who = document.createElement("span");
+    who.className = "thread-who";
+    who.textContent = item.from || (sent ? "已发出" : "没有发件人");
+    const subject = document.createElement("span");
+    subject.className = "thread-subject";
+    subject.textContent = item.subject || "(无主题)";
+    const when = document.createElement("span");
+    when.className = "thread-time";
+    when.textContent = formatShortTime(item.at);
+    row.append(who, subject, when);
+    const markText = current ? "当前" : sent ? "已发出" : "";
+    if (markText) {
+      const mark = document.createElement("span");
+      mark.className = "thread-mark";
+      mark.textContent = markText;
+      row.append(mark);
+    }
+    if (!current && item.id) {
+      const targetId = item.id;
+      row.addEventListener("click", () => {
+        if (sent) void openSentLetter(targetId);
+        else void selectMail(targetId);
+      });
+    }
+    threadList.append(row);
+  }
+  threadBox.hidden = false;
+}
+
+function showInboundExtras(show) {
+  if (sectionSignals) sectionSignals.hidden = !show;
+  if (sectionUrls) sectionUrls.hidden = !show;
+  if (sectionAttachments) sectionAttachments.hidden = !show;
+}
+
+async function openSentLetter(id) {
+  const token = ++mailLoadToken;
+  readingSentId = id;
+  try {
+    const letter = await request("/v1/outbox/" + encodeURIComponent(id));
+    if (token !== mailLoadToken || readingSentId !== id) return;
+    paintSentLetter(letter);
+    renderThread(threadItems);
+  } catch (err) {
+    if (token !== mailLoadToken) return;
+    readingSentId = null;
+    renderThread(threadItems);
+    toast("打开发出的信失败: " + explain(err));
+  }
+}
+
+function paintSentLetter(letter) {
+  showInboundExtras(false);
+  if (detailVerdictSelect) detailVerdictSelect.hidden = true;
+  openDetail = null;
+  if (btnReply) btnReply.hidden = true;
+  if (btnReclassify) btnReclassify.hidden = true;
+  if (btnBlockMail) btnBlockMail.hidden = true;
+  if (btnTrashMail) btnTrashMail.hidden = true;
+  if (btnRestoreMail) btnRestoreMail.hidden = true;
+  if (btnDeleteMail) btnDeleteMail.hidden = true;
+  const status = outboxStatus(letter);
+  if (detailSubject) detailSubject.textContent = letter.subject || "(无主题)";
+  if (detailFrom) {
+    detailFrom.textContent = letter.from || "没有发件人";
+    detailFrom.title = letter.from || "";
+  }
+  if (detailTo) {
+    detailTo.textContent = formatRecipients(letter.to);
+    detailTo.title = Array.isArray(letter.to) ? letter.to.join(", ") : "";
+  }
+  if (detailTime) detailTime.textContent = formatFullTime(letter.createdAt);
+  if (detailModelVerdict) detailModelVerdict.textContent = status;
+  if (detailSummary) {
+    detailSummary.textContent = letter.error && letter.status !== "sent" ? status + "。" + letter.error : status;
+  }
+  if (signalsList) signalsList.replaceChildren();
+  if (urlsList) urlsList.replaceChildren();
+  if (attachmentsList) attachmentsList.replaceChildren();
+  if (authChips) authChips.replaceChildren();
+  currentMailPlain = letter.text || "";
+  currentMailHtml = "";
+  if (plainTextBody) plainTextBody.textContent = currentMailPlain || "(正文为空)";
+  if (rawHeaders) rawHeaders.textContent = letter.headers || "";
+  if (btnDownloadEml && letter.id) {
+    btnDownloadEml.href = "/v1/outbox/" + encodeURIComponent(letter.id) + "/raw";
+    btnDownloadEml.setAttribute("download", "sent.eml");
+  }
+  allowExternalImages = false;
+  renderSandboxHtml("");
+  switchTab("ai");
+  mailEmptyEl.hidden = true;
+  if (mailLoadingEl) mailLoadingEl.hidden = true;
+  mailDetailEl.hidden = false;
 }
 
 function renderSandboxHtml(html) {
@@ -1010,8 +1218,9 @@ function renderSandboxHtml(html) {
     ? `html,body{background:${pageBg};color:${textColor};}a{color:${linkColor};}`
     : `html{background:${pageBg};}`;
   const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${thumbBg} ${trackBg};}::-webkit-scrollbar{width:10px;height:10px;}::-webkit-scrollbar-track{background:${trackBg};}::-webkit-scrollbar-thumb{background:${thumbBg};border-radius:5px;border:2px solid ${trackBg};}::-webkit-scrollbar-thumb:hover{background:${thumbHover};}::-webkit-scrollbar-thumb:active{background:${thumbActive};}::-webkit-scrollbar-corner{background:${trackBg};}::-webkit-resizer{background:transparent;}`;
-  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:sans-serif;font-size:16px;line-height:1.6;padding:18px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${body}</body></html>`;
+  const linked = openMailLinks(body);
+  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:sans-serif;font-size:16px;line-height:1.6;padding:18px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${linked}</body></html>`;
   mailSandbox.setAttribute("srcdoc", doc);
   const hint = document.querySelector("#preview-guard");
   if (hint) {
@@ -1432,8 +1641,7 @@ function createFailureStep(job) {
   const actions = document.createElement("div");
   actions.className = "step-actions";
   const stopped = job.status === "dead" || job.status === "failed";
-  const dismissed = job.status === "dismissed";
-  if (stopped || dismissed) {
+  if (stopped) {
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "btn-fit";
@@ -1589,7 +1797,7 @@ async function loadSettingsPage() {
     if (thinking) thinking.value = settings.aiThinking || "low";
     renderAiEditors(settings.aiPool || {});
     renderBlockList(settings.blockedSenders || []);
-    await loadSendSection();
+    await loadDkimSection();
   } catch (err) {
     toast(explain(err));
   }
@@ -1638,7 +1846,7 @@ function showSettingsSection(id, options = {}) {
   }
   if (!options.keepListOnNarrow) setMobilePane("detail");
   if (id === "logs") void loadLogs();
-  if (id === "send") void loadSendSection();
+  if (id === "send") void loadDkimSection();
 }
 
 function describeAi(ai) {
@@ -2405,15 +2613,133 @@ async function saveAiSettings() {
   }
 }
 
-async function loadSendSection() {
+function openComposer() {
+  setMobilePane("detail");
+  document.querySelector("#send-from")?.focus();
+}
+
+function clearReplyDraft() {
+  replyContext = null;
+  const toInput = document.querySelector("#send-to");
+  const subjectInput = document.querySelector("#send-subject");
+  const textInput = document.querySelector("#send-text");
+  if (toInput) toInput.value = "";
+  if (subjectInput) subjectInput.value = "";
+  if (textInput) textInput.value = "";
+}
+
+function replyAddress(detail) {
+  const box = detail && detail.parsed && detail.parsed.replyTo;
+  const reply = box && typeof box.address === "string" ? box.address : "";
+  return extractEmail(reply) || extractEmail((detail && (detail.from || detail.envelopeFrom)) || "");
+}
+
+function replySubject(subject) {
+  const text = String(subject || "").trim();
+  const value = !text ? "Re:" : /^re:/i.test(text) ? text : "Re: " + text;
+  return value.slice(0, 200);
+}
+
+function normalizeClientId(raw) {
+  if (!raw) return "";
+  let text = String(raw).trim();
+  if (text.startsWith("<") && text.endsWith(">")) text = text.slice(1, -1).trim();
+  text = text.toLowerCase();
+  if (!/^[^\s<>]{1,200}$/.test(text)) return "";
+  return text;
+}
+
+function capReplyRefs(ids) {
+  const unique = [];
+  for (const id of ids) {
+    if (id && !unique.includes(id)) unique.push(id);
+  }
+  if (unique.length <= 20) return unique;
+  const tail = unique.slice(-19).filter((id) => id !== unique[0]);
+  return [unique[0], ...tail];
+}
+
+function quoteLetter(detail) {
+  const when = formatFullTime(detail.receivedAt) || "";
+  const who = replyAddress(detail) || "对方";
+  const source = String((detail.parsed && detail.parsed.text) || "").replace(/\r\n/g, "\n").slice(0, 8000);
+  const lines = source.split("\n").map((line) => "> " + line);
+  return "\n\n" + when + "，" + who + " 写道：\n" + lines.join("\n");
+}
+
+async function startReply() {
+  const detail = openDetail;
+  if (!detail || !replyAddress(detail)) return;
+  const parent = normalizeClientId(detail.messageId);
+  const prior = Array.isArray(detail.references)
+    ? detail.references.map((item) => normalizeClientId(item)).filter(Boolean)
+    : [];
+  const references = capReplyRefs(parent ? (prior.includes(parent) ? prior : prior.concat(parent)) : prior);
+  replyContext = parent ? { inReplyTo: parent, references } : null;
+  replyArmed = true;
+  const toInput = document.querySelector("#send-to");
+  const subjectInput = document.querySelector("#send-subject");
+  const textInput = document.querySelector("#send-text");
+  if (toInput) toInput.value = replyAddress(detail);
+  if (subjectInput) subjectInput.value = replySubject(detail.subject);
+  if (textInput) textInput.value = quoteLetter(detail);
+  await switchNav("send");
+  openComposer();
+  if (textInput) {
+    textInput.focus();
+    textInput.setSelectionRange(0, 0);
+  }
+}
+
+async function loadSendPage() {
   try {
-    const [keys, box] = await Promise.all([request("/v1/dkim"), request("/v1/outbox")]);
-    dkimKeys = Array.isArray(keys.items) ? keys.items : [];
-    renderDkim(dkimKeys);
-    renderOutbox(Array.isArray(box.items) ? box.items : []);
+    const [box, settings, history] = await Promise.all([
+      request("/v1/outbox?limit=100"),
+      request("/v1/settings"),
+      request("/v1/mailbox-history"),
+    ]);
+    sentItems = Array.isArray(box.items) ? box.items : [];
+    settingsDomains = Array.isArray(settings.acceptDomains) ? settings.acceptDomains.slice() : settingsDomains;
+    renderFromSuggestions(Array.isArray(history.items) ? history.items : []);
+    renderSentList();
     refreshSendNote();
   } catch (err) {
     toast("读取发信失败: " + explain(err));
+  }
+}
+
+async function refreshSentList() {
+  if (currentView !== "send") return;
+  try {
+    const box = await request("/v1/outbox?limit=100");
+    const items = Array.isArray(box.items) ? box.items : [];
+    const same = items.length === sentItems.length && items.every((item, index) => {
+      const prev = sentItems[index];
+      return item.id === prev?.id && item.status === prev?.status && item.error === prev?.error;
+    });
+    if (same) return;
+    sentItems = items;
+    renderSentList();
+  } catch {
+    // The next poll tries again.
+  }
+}
+
+function renderFromSuggestions(items) {
+  const list = document.querySelector("#send-from-list");
+  if (!list) return;
+  list.replaceChildren();
+  const seen = new Set();
+  for (const item of items) {
+    const domain = String(item.domain || "").trim().toLowerCase();
+    const local = String(item.localpart || "").trim().toLowerCase();
+    if (!domain || !local) continue;
+    const address = local + "@" + domain;
+    if (seen.has(address)) continue;
+    seen.add(address);
+    const option = document.createElement("option");
+    option.value = address;
+    list.append(option);
   }
 }
 
@@ -2444,20 +2770,26 @@ async function submitSend() {
   }
   if (button) button.disabled = true;
   try {
+    const payload = {
+      from,
+      to,
+      subject: subjectInput ? subjectInput.value : "",
+      text: textInput ? textInput.value : "",
+    };
+    if (replyContext && replyContext.inReplyTo) {
+      payload.inReplyTo = replyContext.inReplyTo;
+      payload.references = replyContext.references;
+    }
     const queued = await request("/v1/outbox", {
       method: "POST",
-      body: {
-        from,
-        to,
-        subject: subjectInput ? subjectInput.value : "",
-        text: textInput ? textInput.value : "",
-      },
+      body: payload,
     });
+    replyContext = null;
     if (toInput) toInput.value = "";
     if (subjectInput) subjectInput.value = "";
     if (textInput) textInput.value = "";
     toast(queued.dkim === "signed" ? "已排队，并签了 DKIM" : "已排队，没有签名");
-    await loadSendSection();
+    await loadSendPage();
   } catch (err) {
     toast("发出失败: " + explain(err));
   } finally {
@@ -2469,34 +2801,73 @@ function splitAddresses(raw) {
   return String(raw || "").split(/[,;\s]+/).map((part) => part.trim()).filter(Boolean);
 }
 
-function renderOutbox(items) {
-  const host = document.querySelector("#outbox-list");
-  const empty = document.querySelector("#outbox-empty");
-  if (!host) return;
-  host.replaceChildren();
-  if (empty) empty.hidden = items.length > 0;
-  for (const item of items) host.append(outboxItem(item));
+function renderSentList() {
+  if (currentView !== "send") return;
+  listEl.replaceChildren();
+  const items = sentItems.filter((item) => sentMatches(item, sentQuery));
+  if (sentItems.length === 0) noticeEl.textContent = "还没有发出的信";
+  else if (items.length === 0) noticeEl.textContent = "没有符合搜索的信";
+  else noticeEl.textContent = "";
+  for (const item of items) listEl.append(createSentListItem(item));
 }
 
-function outboxItem(item) {
-  const row = document.createElement("div");
-  row.className = "send-item";
-  const subject = document.createElement("strong");
-  subject.textContent = item.subject || "（无主题）";
-  const who = document.createElement("p");
-  who.className = "muted";
-  const to = Array.isArray(item.to) ? item.to.join(", ") : "";
-  who.textContent = `${item.from || ""} → ${to}`;
-  const state = document.createElement("p");
-  state.textContent = `${outboxStatus(item)} · ${item.dkim === "signed" ? "已签名" : "未签名"}`;
-  row.append(subject, who, state);
-  if (item.error) {
-    const error = document.createElement("p");
-    error.className = "muted";
-    error.textContent = item.error;
-    row.append(error);
+function sentMatches(item, needle) {
+  if (!needle) return true;
+  const to = Array.isArray(item.to) ? item.to.join(" ") : "";
+  const haystack = [item.subject, item.from, to, item.error, outboxStatus(item)].filter(Boolean).join(" ").toLowerCase();
+  return haystack.includes(needle);
+}
+
+function createSentListItem(item) {
+  const card = document.createElement("div");
+  card.className = "mail-item";
+  card.dataset.id = item.id;
+
+  const line1 = document.createElement("div");
+  line1.className = "item-line1";
+  const who = document.createElement("span");
+  who.className = "item-from";
+  const to = Array.isArray(item.to) ? item.to.filter((part) => typeof part === "string") : [];
+  who.textContent = to.length ? to.map(formatRecipient).join(", ") : "没有收件人";
+  if (to.length) who.title = to.join(", ");
+  const time = document.createElement("span");
+  time.className = "item-time";
+  time.textContent = formatShortTime(item.createdAt);
+  line1.append(who, time);
+
+  const subject = document.createElement("p");
+  subject.className = "item-subject";
+  subject.textContent = item.subject || "(无主题)";
+
+  const line3 = document.createElement("div");
+  line3.className = "item-line3";
+  const snippet = document.createElement("span");
+  snippet.className = "item-snippet";
+  const bits = [outboxStatus(item), item.dkim === "signed" ? "已签名" : "未签名"];
+  if (item.error && item.status !== "sent") bits.push(item.error);
+  snippet.textContent = bits.join(" · ");
+  line3.append(snippet);
+  if (item.status === "error") {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn-sm";
+    retry.textContent = "再试";
+    retry.addEventListener("click", () => void retrySent(item.id));
+    line3.append(retry);
   }
-  return row;
+
+  card.append(line1, subject, line3);
+  return card;
+}
+
+async function retrySent(id) {
+  try {
+    await request("/v1/outbox/" + encodeURIComponent(id) + "/retry", { method: "POST", body: {} });
+    toast("已重新排队");
+    await loadSendPage();
+  } catch (err) {
+    toast("重试失败: " + explain(err));
+  }
 }
 
 function outboxStatus(item) {
@@ -2504,6 +2875,16 @@ function outboxStatus(item) {
   if (item.status === "error") return "失败";
   if (item.error) return "还会再试";
   return "排队中";
+}
+
+async function loadDkimSection() {
+  try {
+    const keys = await request("/v1/dkim");
+    dkimKeys = Array.isArray(keys.items) ? keys.items : [];
+    renderDkim(dkimKeys);
+  } catch (err) {
+    toast("读取发信设置失败: " + explain(err));
+  }
 }
 
 function renderDkim(keys) {
@@ -2547,7 +2928,7 @@ function dkimRow(domain, keys) {
   for (const key of keys) {
     const line = document.createElement("p");
     line.className = "muted";
-    line.textContent = `主机记录: ${key.dnsName || key.selector}`;
+    line.textContent = `主机记录: ${key.dnsName || key.selector} · ${dkimAlgLabel(key.algorithm)}`;
     const txt = document.createElement("div");
     txt.className = "dkim-txt";
     txt.textContent = key.txt;
@@ -2573,16 +2954,27 @@ function dkimButton(label, onClick) {
   return button;
 }
 
+function selectedDkimAlg() {
+  const select = document.querySelector("#dkim-alg");
+  return select && select.value === "ed25519" ? "ed25519" : "rsa";
+}
+
+function dkimAlgLabel(alg) {
+  return alg === "ed25519" ? "Ed25519" : "RSA 2048";
+}
+
 async function generateDkim(domain, selector) {
   const name = (selector || "flytrap").trim().toLowerCase();
+  const algorithm = selectedDkimAlg();
   const exists = dkimKeys.some((key) => key.domain === domain && key.selector === name);
   if (exists && !(await askConfirm("重新生成后，原来的 DNS 记录要换成新的。"))) return;
   try {
-    await request("/v1/dkim", { method: "POST", body: selector ? { domain, selector: name } : { domain } });
+    const body = selector ? { domain, selector: name, algorithm } : { domain, algorithm };
+    await request("/v1/dkim", { method: "POST", body });
     const extra = document.querySelector("#dkim-domain");
     if (extra && extra.value.trim().toLowerCase() === domain) extra.value = "";
     toast("密钥已生成");
-    await loadSendSection();
+    await loadDkimSection();
   } catch (err) {
     toast("生成密钥失败: " + explain(err));
   }
@@ -2593,7 +2985,7 @@ async function removeDkim(domain, selector) {
   try {
     await request("/v1/dkim/remove", { method: "POST", body: { domain, selector } });
     toast("密钥已移除");
-    await loadSendSection();
+    await loadDkimSection();
   } catch (err) {
     toast("移除密钥失败: " + explain(err));
   }
@@ -2701,8 +3093,13 @@ async function pollLive() {
   if (document.hidden || appEl.hidden) return;
   void updateDlqBadge();
   void refreshUnread();
+  if (currentView === "send") {
+    void refreshSentList();
+    return;
+  }
   if (currentView !== "inbox" && currentView !== "spam" && currentView !== "trash") return;
-  if (currentMessages.length > 40) return;
+  const token = listLoadToken;
+  const longList = currentMessages.length > 40;
   try {
     const params = new URLSearchParams();
     params.set("trashed", currentView === "trash" ? "true" : "false");
@@ -2712,7 +3109,12 @@ async function pollLive() {
     const q = currentView === "trash" ? (trashQueryInput ? trashQueryInput.value.trim() : "") : (queryInput ? queryInput.value.trim() : "");
     if (q) params.set("q", q);
     const page = await request("/v1/messages?" + params.toString());
+    if (token !== listLoadToken) return;
     const items = Array.isArray(page.items) ? page.items : [];
+    if (longList) {
+      mergeFreshMail(items);
+      return;
+    }
     const same =
       items.length === currentMessages.length &&
       items.every((item, index) => item.id === currentMessages[index]?.id && item.label === currentMessages[index]?.label && item.read === currentMessages[index]?.read);
@@ -2722,6 +3124,26 @@ async function pollLive() {
   } catch {
     // The next tick tries again.
   }
+}
+
+function mergeFreshMail(items) {
+  const known = new Map(currentMessages.map((item) => [item.id, item]));
+  const fresh = [];
+  for (const item of items) {
+    const prev = known.get(item.id);
+    if (!prev) {
+      fresh.push(item);
+      continue;
+    }
+    if (prev.label === item.label && prev.read === item.read) continue;
+    prev.label = item.label;
+    prev.read = item.read;
+    const card = findByDataId(listEl, ".mail-item", item.id);
+    card?.replaceWith(createMailListItem(item));
+  }
+  if (fresh.length === 0) return;
+  currentMessages = fresh.concat(currentMessages);
+  for (let i = fresh.length - 1; i >= 0; i -= 1) listEl.prepend(createMailListItem(fresh[i]));
 }
 
 function setMobilePane(pane) {

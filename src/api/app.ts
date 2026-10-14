@@ -16,8 +16,9 @@ import PostalMime from "postal-mime";
 import { findAttachment, listMessageAttachments } from "../db/repos/attachments.js";
 import { writeAudit } from "../db/repos/audit.js";
 import { deleteDkimKey, listDkimPublic, saveDkimKey } from "../db/repos/dkim-keys.js";
-import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, outboxIdOf, retryAllDeadJobs, retryJob, retryMessageJobs, wakeClassifyJobs, type JobStatus } from "../db/repos/jobs.js";
+import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, outboxIdOf, retryAllDeadJobs, retryJob, retryMessageJobs, retryOutboxJob, wakeClassifyJobs, type JobStatus } from "../db/repos/jobs.js";
 import { getOutbox, listOutbox, listOutboxByIds } from "../db/repos/outbox.js";
+import { listThread } from "../db/repos/thread.js";
 import { fallbackAiPool } from "../ai/pool.js";
 import { presentAiPool, readAiEnabled, readAiThinking, readBlockedSenders, readEffectiveAiPool, readPasswordHash, saveAcceptDomains, saveAiControls, saveAiPool, saveBlockedSenders, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
 import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
@@ -104,11 +105,14 @@ const sendBody = z.object({
   bcc: z.array(z.string().min(3).max(254)).max(20).optional(),
   subject: z.string().max(200).optional(),
   text: z.string().max(100_000).optional(),
+  inReplyTo: z.string().max(300).optional(),
+  references: z.array(z.string().max(300)).max(20).optional(),
 }).strict();
 
 const dkimBody = z.object({
   domain: z.string().min(1).max(253),
   selector: z.string().min(1).max(63).optional(),
+  algorithm: z.enum(["rsa", "ed25519"]).optional(),
 }).strict();
 
 const dkimRemoveBody = z.object({
@@ -269,6 +273,22 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.get("/v1/messages/:id", async (request) => toDetail(db, messageId(request)));
 
+  app.get("/v1/messages/:id/thread", async (request) => {
+    const id = messageId(request);
+    const letters = listThread(db, id);
+    if (!letters) throw new HttpError(404, "not_found");
+    return {
+      items: letters.map((item) => ({
+        kind: item.kind,
+        id: item.id,
+        at: iso(item.at),
+        from: item.from,
+        subject: item.subject,
+        current: item.kind === "in" && item.id === id,
+      })),
+    };
+  });
+
   app.get("/v1/messages/:id/text", async (request) => {
     const message = requireMessage(db, messageId(request));
     const parsed = parseJson(message.parsed);
@@ -321,8 +341,17 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const id = messageId(request);
     requireMessage(db, id);
     const at = now();
-    if (!hasOpenJob(db, id, "classify")) {
-      enqueueJob(db, { id: ulid(), type: "classify", messageId: id, now: at });
+    const open = db
+      .prepare(
+        `SELECT id, status FROM jobs
+         WHERE message_id = ? AND type = 'classify' AND status IN ('queued', 'running')`,
+      )
+      .all(id) as Array<{ id: string; status: string }>;
+    const queued = open.find((row) => row.status === "queued");
+    if (queued) {
+      db.prepare("UPDATE jobs SET payload = ?, updated_at = ? WHERE id = ?").run(JSON.stringify({ force: true }), at, queued.id);
+    } else {
+      enqueueJob(db, { id: ulid(), type: "classify", messageId: id, payload: { force: true }, now: at });
     }
     writeAudit(db, { id: ulid(), at, actor: request.session.user ?? "unknown", action: "reclassify", target: id });
     return reply.code(202).send({ queued: true });
@@ -767,7 +796,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     if (!body.success) throw new HttpError(400);
     let saved;
     try {
-      saved = saveDkimKey(db, body.data.domain, body.data.selector, now());
+      saved = saveDkimKey(db, body.data.domain, body.data.selector, now(), body.data.algorithm);
     } catch (err) {
       if (err instanceof OutboundError) throw new HttpError(400);
       throw err;
@@ -778,6 +807,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       actor: request.session.user ?? "unknown",
       action: "dkim_generate",
       target: `${saved.selector}._domainkey.${saved.domain}`,
+      detail: saved.algorithm,
     });
     return reply.send({ ok: true, ...saved });
   });
@@ -815,10 +845,51 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return { items: listOutbox(db, limit).map(presentOutbox) };
   });
 
+  app.get("/v1/outbox/:id/raw", async (request, reply) => {
+    const row = getOutbox(db, messageId(request));
+    if (!row) throw new HttpError(404, "not_found");
+    let bytes: Buffer;
+    try {
+      bytes = await readRaw(config.mailDataDir, row.raw_path, codec, row.sha256);
+    } catch (err) {
+      if (err instanceof PathEscapeError) throw new HttpError(404, "not_found");
+      throw new HttpError(404, "not_found");
+    }
+    return reply
+      .header("content-type", "message/rfc822")
+      .header("content-disposition", contentDisposition(`${row.sha256}.eml`))
+      .send(bytes);
+  });
+
   app.get("/v1/outbox/:id", async (request) => {
     const row = getOutbox(db, messageId(request));
     if (!row) throw new HttpError(404, "not_found");
-    return presentOutbox(row);
+    let text = "";
+    let headers = "";
+    try {
+      const bytes = await readRaw(config.mailDataDir, row.raw_path, codec, row.sha256);
+      const email = await PostalMime.parse(bytes);
+      text = email.text ?? "";
+      if (text.length > 100_000) text = text.slice(0, 100_000);
+      headers = rfc822HeaderBlock(bytes);
+    } catch (err) {
+      if (err instanceof PathEscapeError) throw new HttpError(404, "not_found");
+    }
+    return { ...presentOutbox(row), text, headers };
+  });
+
+  app.post("/v1/outbox/:id/retry", async (request, reply) => {
+    const id = messageId(request);
+    const ok = retryOutboxJob(db, id, now());
+    if (!ok) throw new HttpError(404, "not_found");
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "send_retry",
+      target: id,
+    });
+    return reply.send({ ok: true });
   });
 
   app.post("/v1/outbox", { config: { rateLimit: { max: 30, timeWindow: "10 minutes" } } }, async (request, reply) => {
@@ -1123,6 +1194,12 @@ function toListItem(row: ReturnType<typeof listMessages>[number]) {
   };
 }
 
+function idList(raw: string | null): string[] {
+  const value = parseJson(raw);
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0).slice(0, 20);
+}
+
 function toDetail(db: Db, id: string) {
   const message = requireMessage(db, id);
   return {
@@ -1135,6 +1212,8 @@ function toDetail(db: Db, id: string) {
     envelopeFrom: message.envelope_from,
     envelopeTo: parseJson(message.envelope_to),
     messageId: message.message_id,
+    inReplyTo: message.in_reply_to,
+    references: idList(message.ref_ids),
     subject: message.subject,
     from: message.from_addr,
     to: parseJson(message.to_addrs),

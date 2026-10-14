@@ -2,6 +2,7 @@ import { loadCodec } from "./compress.js";
 import { loadConfig, ConfigError, PLACEHOLDER_SESSION_SECRET, type Config } from "./config.js";
 import { dbFile, openDatabase } from "./db/index.js";
 import { migrate } from "./db/migrate.js";
+import { settleFinishedSends } from "./db/repos/jobs.js";
 import { createLogger } from "./log.js";
 import { ensureDataDirs, migrationsDir } from "./paths.js";
 import { fakeClassifier } from "./ai/classifier.js";
@@ -17,6 +18,7 @@ import type { Notifier } from "./notify/types.js";
 import { startApi } from "./api/app.js";
 import { rebuildFromRaw } from "./ingest/rebuild.js";
 import { startSmtp, type RunningSmtp } from "./smtp/server.js";
+import { backfillThreadHeaders } from "./mail/thread-scan.js";
 import { startWorker } from "./worker/loop.js";
 
 // `--check` validates the environment, migrates, and exits.
@@ -58,7 +60,9 @@ try {
 }
 const db = openDatabase(dbFile(config.mailDataDir));
 const applied = migrate(db, migrationsDir());
+const settled = settleFinishedSends(db, Date.now());
 log.info({ applied, roles: config.roles }, "database ready");
+if (settled > 0) log.info({ settled }, "closed send jobs for letters already sent");
 
 if (process.argv.includes("--rebuild")) {
   void rebuildCommand();
@@ -125,6 +129,13 @@ async function serve(): Promise<void> {
 async function boot(stops: Array<() => Promise<void>>): Promise<void> {
   const needsCodec = config.roles.includes("smtp") || config.roles.includes("worker") || config.roles.includes("api");
   const codec = needsCodec ? await loadCodec(config.compress, log) : undefined;
+  if (codec) {
+    try {
+      await backfillThreadHeaders(db, config.mailDataDir, codec, log);
+    } catch (err) {
+      log.error({ err: err instanceof Error ? err.message : "thread scan failed" }, "thread scan failed");
+    }
+  }
   if (config.roles.includes("smtp")) {
     const smtp: RunningSmtp = await startSmtp({ config, db, codec: codec!, log });
     stops.push(() => smtp.close());

@@ -9,6 +9,7 @@ import { gzipCodec } from "../src/compress.js";
 import { openDatabase, type Db } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
 import { enqueueJob } from "../src/db/repos/jobs.js";
+import { insertOutbox } from "../src/db/repos/outbox.js";
 import { saveBlockedSenders } from "../src/db/repos/settings.js";
 import { insertMessage } from "../src/db/repos/messages.js";
 import { storeRaw } from "../src/ingest/store-raw.js";
@@ -16,6 +17,7 @@ import { fakeClassifier } from "../src/ai/classifier.js";
 import type { AppLog } from "../src/log.js";
 import { authResultSchema, authenticateMessage, DnsTimeoutError, type AuthResult } from "../src/mail/auth.js";
 import { defaultPromptsDir, migrationsDir } from "../src/paths.js";
+import { SMTP_SOCKET_TIMEOUT_MS } from "../src/mail/deliver.js";
 import { processNext, startWorker, type WorkerOptions } from "../src/worker/loop.js";
 
 const silent: AppLog = {
@@ -181,6 +183,63 @@ test("dns failures stop after three tries and the body is still parsed", async (
   }
 });
 
+test("shutdown waits out an SMTP socket before it requeues", () => {
+  assert.equal(SMTP_SOCKET_TIMEOUT_MS, 60_000);
+});
+
+test("a slow send does not hold up inbound mail", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-lanes-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    await seed(db, dir, Buffer.from("Subject: in\r\n\r\nin\r\n"));
+    const stored = await storeRaw({
+      dataDir: dir,
+      bytes: Buffer.from("Subject: out\r\n\r\nout\r\n"),
+      receivedAtMs: 10,
+      codec: gzipCodec(),
+      area: "sent",
+    });
+    insertOutbox(db, {
+      id: "out_slow",
+      sha256: stored.sha256,
+      rawPath: stored.relativePath,
+      sizeBytes: stored.sizeBytes,
+      from: "a@example.com",
+      to: ["b@example.com"],
+      subject: "out",
+      domainKnown: true,
+      dkimSelector: null,
+      now: 10,
+    });
+    enqueueJob(db, { id: "send_slow", type: "send", payload: { outboxId: "out_slow" }, now: 10 });
+    const worker = await startWorker({
+      ...workerOptions(db, dir, async () => failedAuth()),
+      pollMs: 15,
+      sendMail: {
+        async send() {
+          await gate;
+          return { response: "250 ok" };
+        },
+      },
+    });
+    await waitFor(() => inboundIdle(db));
+    assert.equal(jobStatus(db, "send"), "running");
+    release?.();
+    await waitFor(() => jobStatus(db, "send") === "done");
+    await worker.close();
+    await worker.settled;
+  } finally {
+    release?.();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("shutdown requeues the job it could not finish", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-stop-"));
   const db = openDatabase(path.join(dir, "db", "mail.db"));
@@ -262,6 +321,13 @@ async function seed(db: Db, dir: string, bytes: Buffer): Promise<string> {
 
 function jobStatus(db: Db, type: string): string {
   return (db.prepare("SELECT status FROM jobs WHERE type = ?").get(type) as { status: string }).status;
+}
+
+function inboundIdle(db: Db): boolean {
+  const row = db
+    .prepare("SELECT COUNT(*) AS c FROM jobs WHERE type != 'send' AND status IN ('queued', 'running')")
+    .get() as { c: number };
+  return row.c === 0;
 }
 
 function attachmentFiles(dir: string): string[] {

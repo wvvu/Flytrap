@@ -288,6 +288,51 @@ test("a telegram failure does not reveal the bot token", async () => {
   );
 });
 
+test("a manual label stays until an explicit reclassify", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-manual-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  try {
+    const id = await seedParsed(db, dir, "hand");
+    db.prepare("UPDATE messages SET ai_result = ? WHERE id = ?").run(
+      JSON.stringify({
+        schema: 1,
+        prompt_id: "classify-v1",
+        model: "test",
+        provider: "test",
+        at: "2026-09-21T00:00:00.000Z",
+        label: "legit",
+        confidence: 0.9,
+        summary: "手改",
+        tags: [],
+        signals: [],
+        manualOverride: true,
+      }),
+      id,
+    );
+    const worker = options(db, dir, async () => finalizeAiResult({
+      schema: 1,
+      prompt_id: "classify-v1",
+      model: "test",
+      provider: "test",
+      at: "2026-09-21T01:00:00.000Z",
+      ...valid,
+    }), []);
+    assert.equal(await processNext(worker, "worker-hand"), true);
+    const kept = JSON.parse((db.prepare("SELECT ai_result FROM messages WHERE id = ?").get(id) as { ai_result: string }).ai_result) as { label: string; manualOverride?: boolean };
+    assert.equal(kept.label, "legit");
+    assert.equal(kept.manualOverride, true);
+    enqueueJob(db, { id: "classify_force", type: "classify", messageId: id, payload: { force: true }, now: 1 });
+    assert.equal(await processNext(worker, "worker-hand"), true);
+    const replaced = JSON.parse((db.prepare("SELECT ai_result FROM messages WHERE id = ?").get(id) as { ai_result: string }).ai_result) as { label: string; manualOverride?: boolean };
+    assert.equal(replaced.label, "phish");
+    assert.equal(replaced.manualOverride, undefined);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function emptyFacts() {
   return {
     spf: "none",

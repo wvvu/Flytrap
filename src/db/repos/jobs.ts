@@ -169,6 +169,7 @@ export function retryJob(db: Db, id: string, now: number): boolean {
       | { id: string; type: string; message_id: string | null; payload: string | null; status: string }
       | undefined;
     if (!job) return false;
+    if (job.status === "done" || job.status === "running" || job.status === "dismissed") return false;
     const res = db
       .prepare(
         `UPDATE jobs
@@ -189,10 +190,11 @@ export function retryJob(db: Db, id: string, now: number): boolean {
   })();
 }
 
+/** Requeue stopped inbound steps. A send failure stays on the outbox. */
 export function retryAllDeadJobs(db: Db, now: number): number {
   return db.transaction(() => {
     const deadJobs = db
-      .prepare(`SELECT id, message_id FROM jobs WHERE status IN ('dead', 'failed')`)
+      .prepare(`SELECT id, message_id FROM jobs WHERE type != 'send' AND status IN ('dead', 'failed')`)
       .all() as Array<{ id: string; message_id: string | null }>;
     if (deadJobs.length === 0) return 0;
 
@@ -201,7 +203,7 @@ export function retryAllDeadJobs(db: Db, now: number): number {
         `UPDATE jobs
          SET status = 'queued', attempts = 0, run_after = ?, locked_at = NULL, locked_by = NULL,
              last_error = NULL, updated_at = ?
-         WHERE status IN ('dead', 'failed')`,
+         WHERE type != 'send' AND status IN ('dead', 'failed')`,
       )
       .run(now, now);
 
@@ -285,7 +287,8 @@ export function failureSummary(db: Db): FailureSummary {
          COALESCE(SUM(CASE WHEN status = 'queued' AND attempts > 0 THEN 1 ELSE 0 END), 0) AS retrying,
          COALESCE(SUM(CASE WHEN status = 'dismissed' THEN 1 ELSE 0 END), 0) AS dismissed,
          COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running
-       FROM jobs`,
+       FROM jobs
+       WHERE type != 'send'`,
     )
     .get() as { dead: number; failed: number; retrying: number; dismissed: number; running: number };
   return {
@@ -336,14 +339,16 @@ const JOB_DETAIL_FROM = `SELECT j.*, m.subject as message_subject, m.from_addr a
          FROM jobs j
          LEFT JOIN messages m ON j.message_id = m.id`;
 
+const INBOUND_JOB = "j.type != 'send'";
+
 export function listJobsWithDetails(db: Db, options: ListJobsOptions = {}): JobDetailRow[] {
   const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
   if (options.scope === "open") {
     return db
       .prepare(
         `${JOB_DETAIL_FROM}
-         WHERE j.status IN ('dead', 'failed')
-            OR (j.status = 'queued' AND j.attempts > 0)
+         WHERE ${INBOUND_JOB}
+           AND (j.status IN ('dead', 'failed') OR (j.status = 'queued' AND j.attempts > 0))
          ORDER BY j.updated_at DESC
          LIMIT ?`,
       )
@@ -353,7 +358,7 @@ export function listJobsWithDetails(db: Db, options: ListJobsOptions = {}): JobD
     return db
       .prepare(
         `${JOB_DETAIL_FROM}
-         WHERE j.status IN ('dead', 'failed')
+         WHERE ${INBOUND_JOB} AND j.status IN ('dead', 'failed')
          ORDER BY j.updated_at DESC
          LIMIT ?`,
       )
@@ -363,7 +368,7 @@ export function listJobsWithDetails(db: Db, options: ListJobsOptions = {}): JobD
     return db
       .prepare(
         `${JOB_DETAIL_FROM}
-         WHERE j.status = 'queued' AND j.attempts > 0
+         WHERE ${INBOUND_JOB} AND j.status = 'queued' AND j.attempts > 0
          ORDER BY j.run_after ASC
          LIMIT ?`,
       )
@@ -373,7 +378,7 @@ export function listJobsWithDetails(db: Db, options: ListJobsOptions = {}): JobD
     return db
       .prepare(
         `${JOB_DETAIL_FROM}
-         WHERE j.status = ?
+         WHERE ${INBOUND_JOB} AND j.status = ?
          ORDER BY j.created_at DESC
          LIMIT ?`,
       )
@@ -382,8 +387,39 @@ export function listJobsWithDetails(db: Db, options: ListJobsOptions = {}): JobD
   return db
     .prepare(
       `${JOB_DETAIL_FROM}
+       WHERE ${INBOUND_JOB}
        ORDER BY j.created_at DESC
        LIMIT ?`,
     )
     .all(limit) as JobDetailRow[];
+}
+
+/** A letter already marked sent should not keep a failed send job on the settings badge. */
+export function settleFinishedSends(db: Db, now: number): number {
+  const result = db
+    .prepare(
+      `UPDATE jobs
+       SET status = 'done', last_error = NULL, locked_at = NULL, locked_by = NULL, updated_at = ?
+       WHERE type = 'send'
+         AND status != 'done'
+         AND json_extract(payload, '$.outboxId') IN (SELECT id FROM outbox WHERE status = 'sent')`,
+    )
+    .run(now);
+  return result.changes;
+}
+
+/** Queue the send again. A letter that already left returns false. */
+export function retryOutboxJob(db: Db, outboxId: string, now: number): boolean {
+  const letter = db.prepare("SELECT status FROM outbox WHERE id = ?").get(outboxId) as { status: string } | undefined;
+  if (!letter || letter.status === "sent") return false;
+  const job = db
+    .prepare(
+      `SELECT id FROM jobs
+       WHERE type = 'send' AND json_extract(payload, '$.outboxId') = ?
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+    )
+    .get(outboxId) as { id: string } | undefined;
+  if (!job) return false;
+  return retryJob(db, job.id, now);
 }
