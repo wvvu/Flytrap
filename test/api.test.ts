@@ -16,6 +16,7 @@ import { loadConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
 import { insertMessage } from "../src/db/repos/messages.js";
+import { readRaw } from "../src/ingest/read-raw.js";
 import { storeRaw } from "../src/ingest/store-raw.js";
 import { migrationsDir } from "../src/paths.js";
 
@@ -643,6 +644,118 @@ test("a restarted api keeps the signed-in session", async () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a reset code mailed to the account email replaces the password", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-reset-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const account = "owner@example.com";
+  let clock = Date.UTC(2026, 9, 14, 9, 0, 0);
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: account,
+      API_PASSWORD: password,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+  const owner = cookieJar();
+  const other = cookieJar();
+  try {
+    await owner.csrf(app);
+    const login = await owner.post(app, "/v1/login", { username: account, password });
+    assert.equal(login.statusCode, 200);
+
+    await other.csrf(app);
+    const missing = await other.post(app, "/v1/password/forgot", { email: "nope@example.com" });
+    assert.equal(missing.statusCode, 200);
+    assert.deepEqual(missing.json(), { ok: true });
+    assert.equal(outboxCount(db), 0);
+
+    const sent = await other.post(app, "/v1/password/forgot", { email: "Owner@Example.com" });
+    assert.equal(sent.statusCode, 200);
+    assert.equal(JSON.stringify(sent.json()).includes("验证码"), false);
+    const again = await other.post(app, "/v1/password/forgot", { email: account });
+    assert.equal(again.statusCode, 200);
+    assert.equal(outboxCount(db), 1);
+
+    const code = await readResetCode(dir, db);
+    const stored = db.prepare("SELECT value FROM settings WHERE key = 'password_reset'").get() as { value: string };
+    assert.equal(stored.value.includes(code), false);
+    const letter = db.prepare("SELECT from_addr, to_addrs, subject FROM outbox").get() as { from_addr: string; to_addrs: string; subject: string };
+    assert.equal(letter.from_addr, "noreply@example.com");
+    assert.deepEqual(JSON.parse(letter.to_addrs), ["owner@example.com"]);
+    assert.equal(letter.subject, "登录验证码");
+
+    const wrong = code === "000000" ? "111111" : "000000";
+    const bad = await other.post(app, "/v1/password/reset", { email: account, code: wrong, next: "replacement-password" });
+    assert.equal(bad.statusCode, 401);
+    const stranger = await other.post(app, "/v1/password/reset", { email: "nope@example.com", code, next: "replacement-password" });
+    assert.equal(stranger.statusCode, 401);
+    assert.equal(outboxCount(db), 1);
+
+    const reset = await other.post(app, "/v1/password/reset", { email: account, code, next: "replacement-password" });
+    assert.equal(reset.statusCode, 200);
+    const reused = await other.post(app, "/v1/password/reset", { email: account, code, next: "replacement-password-2" });
+    assert.equal(reused.statusCode, 401);
+    assert.equal((await owner.get(app, "/v1/me")).statusCode, 401);
+
+    await other.csrf(app);
+    const stale = await other.post(app, "/v1/login", { username: account, password });
+    assert.equal(stale.statusCode, 401);
+    const renewed = await other.post(app, "/v1/login", { username: account, password: "replacement-password" });
+    assert.equal(renewed.statusCode, 200);
+    assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'password_reset'").get(), undefined);
+
+    clock += 61_000;
+    await other.csrf(app);
+    const resent = await other.post(app, "/v1/password/forgot", { email: account });
+    assert.equal(resent.statusCode, 200);
+    assert.equal(outboxCount(db), 2);
+    const nextCode = await readResetCode(dir, db);
+    assert.notEqual(nextCode, code);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const guess = nextCode === "222222" ? "333333" : "222222";
+      const failed = await other.post(app, "/v1/password/reset", { email: account, code: guess, next: "another-password-value" });
+      assert.equal(failed.statusCode, 401);
+    }
+    const burned = await other.post(app, "/v1/password/reset", { email: account, code: nextCode, next: "another-password-value" });
+    assert.equal(burned.statusCode, 401);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function outboxCount(db: ReturnType<typeof openDatabase>): number {
+  return (db.prepare("SELECT COUNT(*) AS n FROM outbox").get() as { n: number }).n;
+}
+
+async function readSent(dir: string, db: ReturnType<typeof openDatabase>): Promise<string> {
+  const row = db.prepare("SELECT raw_path, sha256 FROM outbox ORDER BY created_at DESC LIMIT 1").get() as { raw_path: string; sha256: string };
+  const raw = (await readRaw(dir, row.raw_path, gzipCodec(), row.sha256)).toString("utf8");
+  const splitAt = raw.indexOf("\r\n\r\n");
+  const head = splitAt >= 0 ? raw.slice(0, splitAt) : raw;
+  const body = splitAt >= 0 ? raw.slice(splitAt + 4) : "";
+  if (/Content-Transfer-Encoding: base64/i.test(head)) return Buffer.from(body.replace(/\s/g, ""), "base64").toString("utf8");
+  return body;
+}
+
+async function readResetCode(dir: string, db: ReturnType<typeof openDatabase>): Promise<string> {
+  const text = await readSent(dir, db);
+  const found = text.match(/验证码 (\d{6})/);
+  assert.ok(found && found[1]);
+  return found[1];
+}
 
 function cookieJar() {
   let cookie = "";

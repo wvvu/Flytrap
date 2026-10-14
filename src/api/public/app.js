@@ -200,6 +200,12 @@ document.querySelector("#btn-save-ai")?.addEventListener("click", () => void sav
 document.querySelector("#ai-enabled")?.addEventListener("change", syncAiSave);
 document.querySelector("#ai-thinking")?.addEventListener("change", syncAiSave);
 document.querySelector("#btn-save-password")?.addEventListener("click", () => void savePassword());
+document.querySelector("#btn-forgot")?.addEventListener("click", () => void startReset());
+document.querySelector("#btn-reset-close")?.addEventListener("click", () => closeReset(false));
+document.querySelector("#btn-reset-other")?.addEventListener("click", () => closeReset(true));
+document.querySelector("#btn-reset-continue")?.addEventListener("click", () => showResetPassword());
+document.querySelector("#btn-reset-save")?.addEventListener("click", () => void finishReset());
+document.querySelector("#btn-reset-resend")?.addEventListener("click", () => void sendResetCode());
 document.querySelector("#btn-refresh-logs")?.addEventListener("click", () => void loadLogs());
 document.querySelector("#btn-add-model")?.addEventListener("click", () => addModelRow());
 document.querySelector("#btn-add-key")?.addEventListener("click", () => addKeyRow());
@@ -510,6 +516,7 @@ function showLogin() {
   loginEl.style.display = "flex";
   appEl.hidden = true;
   appEl.style.display = "none";
+  closeReset(false);
   const username = document.querySelector("#username");
   if (username instanceof HTMLInputElement) username.focus();
 }
@@ -3239,6 +3246,185 @@ function markOpened(id) {
   return request("/v1/messages/" + encodeURIComponent(id) + "/read", { method: "POST", body: {} })
     .then(() => refreshUnread())
     .catch(() => undefined);
+}
+
+const resetModal = document.querySelector("#reset-modal");
+const resetCodeStep = document.querySelector("#reset-code-step");
+const resetPasswordStep = document.querySelector("#reset-password-step");
+const resetError = document.querySelector("#reset-error");
+const resetDigits = [...document.querySelectorAll("#reset-digits input")];
+const btnResetResend = document.querySelector("#btn-reset-resend");
+let resetEmail = "";
+let resetLeft = 0;
+let resetTimer = 0;
+
+bindResetDigits();
+
+function bindResetDigits() {
+  resetDigits.forEach((input, index) => {
+    input.addEventListener("input", () => {
+      const digits = input.value.replace(/\D/g, "");
+      if (digits.length > 1) {
+        fillResetDigits(digits);
+        return;
+      }
+      input.value = digits;
+      if (digits && resetDigits[index + 1]) resetDigits[index + 1].focus();
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Backspace" && !input.value && resetDigits[index - 1]) resetDigits[index - 1].focus();
+    });
+    input.addEventListener("paste", (event) => {
+      const text = (event.clipboardData && event.clipboardData.getData("text") || "").replace(/\D/g, "");
+      if (!text) return;
+      event.preventDefault();
+      fillResetDigits(text);
+    });
+  });
+}
+
+function fillResetDigits(digits) {
+  for (let i = 0; i < resetDigits.length; i += 1) resetDigits[i].value = digits[i] || "";
+  const focusAt = Math.min(Math.max(digits.length, 1), resetDigits.length) - 1;
+  resetDigits[focusAt].focus();
+}
+
+function resetCodeValue() {
+  return resetDigits.map((input) => input.value).join("");
+}
+
+function clearResetDigits() {
+  for (const input of resetDigits) input.value = "";
+}
+
+async function startReset() {
+  loginError.textContent = "";
+  const username = document.querySelector("#username");
+  const email = username ? username.value.trim() : "";
+  if (!email) {
+    loginError.textContent = "先填写邮箱";
+    if (username) username.focus();
+    return;
+  }
+  resetEmail = email;
+  openResetModal();
+  await sendResetCode();
+}
+
+function openResetModal() {
+  showResetCode();
+  clearResetDigits();
+  const next = document.querySelector("#reset-next");
+  const again = document.querySelector("#reset-again");
+  if (next) next.value = "";
+  if (again) again.value = "";
+  if (resetError) resetError.textContent = "";
+  if (resetModal) resetModal.hidden = false;
+  if (resetDigits[0]) resetDigits[0].focus();
+}
+
+async function sendResetCode() {
+  if (resetError) resetError.textContent = "";
+  try {
+    await request("/v1/password/forgot", { method: "POST", body: { email: resetEmail } });
+    showResetCode();
+    startResetCountdown(60);
+  } catch (err) {
+    if (resetError) resetError.textContent = explain(err);
+  }
+}
+
+function showResetCode() {
+  if (resetCodeStep) resetCodeStep.hidden = false;
+  if (resetPasswordStep) resetPasswordStep.hidden = true;
+}
+
+function showResetPassword() {
+  if (resetError) resetError.textContent = "";
+  if (!/^\d{6}$/.test(resetCodeValue())) {
+    if (resetError) resetError.textContent = "请输入验证码";
+    return;
+  }
+  if (resetCodeStep) resetCodeStep.hidden = true;
+  if (resetPasswordStep) resetPasswordStep.hidden = false;
+  document.querySelector("#reset-next")?.focus();
+}
+
+async function finishReset() {
+  const nextInput = document.querySelector("#reset-next");
+  const againInput = document.querySelector("#reset-again");
+  const next = nextInput ? nextInput.value : "";
+  const again = againInput ? againInput.value : "";
+  if (resetError) resetError.textContent = "";
+  if (next.length < 8) {
+    if (resetError) resetError.textContent = "新密码至少 8 位";
+    return;
+  }
+  if (next !== again) {
+    if (resetError) resetError.textContent = "两次输入不一致";
+    return;
+  }
+  const btn = document.querySelector("#btn-reset-save");
+  if (btn) btn.disabled = true;
+  try {
+    await request("/v1/password/reset", {
+      method: "POST",
+      body: { email: resetEmail, code: resetCodeValue(), next },
+    });
+    closeReset(false);
+    const password = document.querySelector("#password");
+    if (password) password.value = "";
+    loginError.textContent = "密码已更新，请登录";
+  } catch (err) {
+    if (err && err.status === 401) {
+      showResetCode();
+      clearResetDigits();
+      if (resetError) resetError.textContent = "验证码不正确";
+      if (resetDigits[0]) resetDigits[0].focus();
+    } else if (err && err.status === 400) {
+      if (resetError) resetError.textContent = "新密码至少 8 位";
+    } else if (resetError) {
+      resetError.textContent = explain(err);
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function closeReset(focusEmail) {
+  window.clearInterval(resetTimer);
+  resetTimer = 0;
+  resetLeft = 0;
+  if (resetModal) resetModal.hidden = true;
+  showResetCode();
+  paintResend();
+  if (focusEmail) document.querySelector("#username")?.focus();
+}
+
+function startResetCountdown(seconds) {
+  resetLeft = seconds;
+  paintResend();
+  window.clearInterval(resetTimer);
+  resetTimer = window.setInterval(() => {
+    resetLeft -= 1;
+    if (resetLeft <= 0) {
+      window.clearInterval(resetTimer);
+      resetTimer = 0;
+      resetLeft = 0;
+    }
+    paintResend();
+  }, 1000);
+}
+
+function paintResend() {
+  if (!btnResetResend) return;
+  if (resetLeft > 0) {
+    btnResetResend.disabled = true;
+    btnResetResend.textContent = "重新发送验证码 (" + resetLeft + "s)";
+  } else {
+    btnResetResend.disabled = false;
+    btnResetResend.textContent = "重新发送验证码";
+  }
 }
 
 async function savePassword() {

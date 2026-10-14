@@ -34,7 +34,7 @@
       <form id="login-form" class="login-panel">
         <h1 class="login-title">登录</h1>
         <div class="form-group">
-          <label for="username">账号</label>
+          <label for="username">邮箱</label>
           <input id="username" name="username" autocomplete="username" maxlength="128" required>
         </div>
         <div class="form-group">
@@ -42,8 +42,45 @@
           <input id="password" name="password" type="password" autocomplete="current-password" maxlength="512" required>
         </div>
         <button type="submit" id="btn-login" class="btn-primary">继续</button>
+        <button type="button" id="btn-forgot" class="login-forgot">忘记密码</button>
         <p id="login-error" class="error-text" role="alert"></p>
       </form>
+    </div>
+
+    <div id="reset-modal" class="modal" hidden>
+      <div class="modal-card reset-card" role="dialog" aria-modal="true" aria-labelledby="reset-title">
+        <div class="reset-head">
+          <h2 id="reset-title">密码重置</h2>
+          <button type="button" id="btn-reset-close" class="reset-close" aria-label="关闭">×</button>
+        </div>
+        <div id="reset-code-step" class="reset-step">
+          <h3>请查看您的电子邮件</h3>
+          <p class="reset-note">如果存在匹配的账号，验证码会发到该邮箱。请输入验证码以重置密码。</p>
+          <div id="reset-digits" class="reset-digits">
+            <input inputmode="numeric" maxlength="1" autocomplete="one-time-code" aria-label="验证码第 1 位">
+            <input inputmode="numeric" maxlength="1" autocomplete="off" aria-label="验证码第 2 位">
+            <input inputmode="numeric" maxlength="1" autocomplete="off" aria-label="验证码第 3 位">
+            <input inputmode="numeric" maxlength="1" autocomplete="off" aria-label="验证码第 4 位">
+            <input inputmode="numeric" maxlength="1" autocomplete="off" aria-label="验证码第 5 位">
+            <input inputmode="numeric" maxlength="1" autocomplete="off" aria-label="验证码第 6 位">
+          </div>
+          <button type="button" id="btn-reset-continue" class="btn-primary">继续</button>
+          <div class="reset-actions">
+            <button type="button" id="btn-reset-resend" disabled>重新发送验证码</button>
+            <button type="button" id="btn-reset-other">使用不同的电子邮件地址</button>
+          </div>
+        </div>
+        <div id="reset-password-step" class="reset-step" hidden>
+          <h3>设置新密码</h3>
+          <p class="reset-note">至少 8 位。</p>
+          <div class="reset-fields">
+            <input id="reset-next" type="password" placeholder="新密码" maxlength="200" autocomplete="new-password">
+            <input id="reset-again" type="password" placeholder="再输一次" maxlength="200" autocomplete="new-password">
+          </div>
+          <button type="button" id="btn-reset-save" class="btn-primary">继续</button>
+        </div>
+        <p id="reset-error" class="error-text" role="alert"></p>
+      </div>
     </div>
 
     <!-- 已经登录的主工作区 (三列架构) -->
@@ -551,7 +588,7 @@
               <div class="block-head">
                 <div>
                   <h2>账号</h2>
-                  <p class="muted">改掉登录密码。至少 8 位。</p>
+                  <p class="muted">改掉登录密码。至少 8 位。忘记密码时，验证码发到登录邮箱。</p>
                 </div>
                 <button type="button" id="btn-save-password" class="btn-fit">保存</button>
               </div>

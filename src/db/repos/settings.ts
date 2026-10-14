@@ -17,6 +17,15 @@ export const SETTING_AI_KEYS = "ai_keys";
 export const SETTING_AI_ENABLED = "ai_enabled";
 export const SETTING_AI_THINKING = "ai_thinking";
 export const SETTING_PASSWORD_HASH = "password_hash";
+export const SETTING_PASSWORD_RESET = "password_reset";
+
+export interface ResetSeal {
+  salt: string;
+  hash: string;
+  expiresAt: number;
+  attempts: number;
+  sentAt: number;
+}
 export const SETTING_BLOCKED_SENDERS = "blocked_senders";
 
 export const THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
@@ -613,6 +622,36 @@ export function readPasswordHash(db: Db): string | null {
 
 export function savePasswordHash(db: Db, hash: string, now: number): void {
   writeRaw(db, SETTING_PASSWORD_HASH, hash, now);
+}
+
+export function readResetSeal(db: Db): ResetSeal | null {
+  const raw = readRaw(db, SETTING_PASSWORD_RESET);
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const row = parsed as Record<string, unknown>;
+  if (typeof row.salt !== "string" || row.salt.length < 8 || typeof row.hash !== "string" || row.hash.length < 8) return null;
+  if (!Number.isFinite(row.expiresAt) || !Number.isFinite(row.attempts) || !Number.isFinite(row.sentAt)) return null;
+  return {
+    salt: row.salt,
+    hash: row.hash,
+    expiresAt: row.expiresAt as number,
+    attempts: row.attempts as number,
+    sentAt: row.sentAt as number,
+  };
+}
+
+export function saveResetSeal(db: Db, seal: ResetSeal, now: number): void {
+  writeRaw(db, SETTING_PASSWORD_RESET, JSON.stringify(seal), now);
+}
+
+export function clearResetSeal(db: Db): void {
+  db.prepare("DELETE FROM settings WHERE key = ?").run(SETTING_PASSWORD_RESET);
 }
 
 function readRaw(db: Db, key: string): string | null {

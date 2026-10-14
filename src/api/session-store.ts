@@ -49,6 +49,10 @@ export function sqliteSessionStore(db: Db, defaultTtlMs = DEFAULT_SESSION_TTL_MS
   };
 }
 
+export function clearSessions(db: Db): void {
+  db.prepare("DELETE FROM sessions").run();
+}
+
 function expiresAt(session: Session, now: number, defaultTtlMs = DEFAULT_SESSION_TTL_MS): number {
   const cookie = session.cookie;
   const expires = cookie?.expires;
