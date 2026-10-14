@@ -20,20 +20,20 @@ import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, 
 import { getOutbox, listOutbox, listOutboxByIds } from "../db/repos/outbox.js";
 import { listThread } from "../db/repos/thread.js";
 import { fallbackAiPool } from "../ai/pool.js";
-import { presentAiPool, readAiEnabled, readAiThinking, readBlockedSenders, readEffectiveAiPool, readPasswordHash, saveAcceptDomains, saveAiControls, saveAiPool, saveBlockedSenders, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
+import { presentAiPool, readAiEnabled, readAiThinking, readBlockedSenders, readEffectiveAiPool, readPasswordHash, readResetSeal, saveAcceptDomains, saveAiControls, saveAiPool, saveBlockedSenders, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, saveResetSeal, clearResetSeal, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
 import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
 import { countTrash, countUnread, deleteMessage, emptyTrash, getMessage, listMessages, markMessageRead, restoreMessage, trashMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
 import { readRaw } from "../ingest/read-raw.js";
 import { removeStoredFiles } from "../ingest/remove-stored.js";
-import { OutboundError } from "../mail/address.js";
+import { normalizeAddress, OutboundError } from "../mail/address.js";
 import { rfc822HeaderBlock } from "../mail/headers.js";
 import { submitOutbox } from "../mail/submit.js";
 import { PathEscapeError, resolveInside } from "../paths.js";
 import { actorName, contentDisposition, decodeCursor, encodeCursor, errorName, HttpError, iso, parseJson, publicError, safeMime } from "./http.js";
-import { hashPassword, loginOk } from "./password.js";
+import { hashPassword, loginOk, makeResetCode, RESET_MAX_ATTEMPTS, RESET_RESEND_MS, resetCodeOk, sameAccount, sealResetCode } from "./password.js";
 import { recentLogs } from "../log.js";
-import { sqliteSessionStore } from "./session-store.js";
+import { clearSessions, sqliteSessionStore } from "./session-store.js";
 import { isPanelAsset, registerPanel } from "./static.js";
 
 declare module "fastify" {
@@ -91,6 +91,16 @@ const aiSettingsBody = z.object({
 
 const passwordBody = z.object({
   current: z.string().min(1).max(200),
+  next: z.string().min(8).max(200),
+}).strict();
+
+const resetRequestBody = z.object({
+  email: z.string().min(1).max(254),
+}).strict();
+
+const resetBody = z.object({
+  email: z.string().min(1).max(254),
+  code: z.string().min(1).max(16),
   next: z.string().min(8).max(200),
 }).strict();
 
@@ -249,6 +259,68 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     request.session.user = config.apiUsername;
     writeAudit(db, { id: ulid(), at: now(), actor: config.apiUsername, action: "login" });
     return reply.send({ user: config.apiUsername });
+  });
+
+  app.post("/v1/password/forgot", { config: { rateLimit: { max: 5, timeWindow: "15 minutes" } } }, async (request, reply) => {
+    const body = resetRequestBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    const email = normalizeAddress(body.data.email);
+    const account = normalizeAddress(config.apiUsername);
+    if (email && account && sameAccount(email, account)) {
+      const at = now();
+      const current = readResetSeal(db);
+      const cooling = current
+        && current.attempts < RESET_MAX_ATTEMPTS
+        && at < current.expiresAt
+        && at < current.sentAt + RESET_RESEND_MS;
+      if (!cooling) {
+        const code = makeResetCode();
+        const from = normalizeAddress(`noreply@${config.acceptDomains[0] ?? ""}`);
+        if (from) {
+          try {
+            await submitOutbox(
+              { db, dataDir: config.mailDataDir, codec, acceptDomains: config.acceptDomains, now },
+              {
+                from,
+                to: [email],
+                subject: "登录验证码",
+                text: `验证码 ${code}\n\n10 分钟内有效。\n`,
+              },
+            );
+            saveResetSeal(db, sealResetCode(code, at), at);
+            writeAudit(db, { id: ulid(), at, actor: email, action: "password_reset_sent" });
+          } catch (err) {
+            request.log.error({ err: err instanceof Error ? err.name : "password reset send failed" }, "password reset send failed");
+          }
+        }
+      }
+    }
+    return reply.send({ ok: true });
+  });
+
+  app.post("/v1/password/reset", { config: { rateLimit: { max: 20, timeWindow: "15 minutes" } } }, async (request, reply) => {
+    const body = resetBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    if (body.data.next === "admin") throw new HttpError(400);
+    const email = normalizeAddress(body.data.email);
+    const account = normalizeAddress(config.apiUsername);
+    const at = now();
+    const matched = Boolean(email && account && sameAccount(email, account));
+    const seal = matched ? readResetSeal(db) : null;
+    const verdict = seal ? resetCodeOk(body.data.code, seal, at) : { ok: false as const, seal: null };
+    if (!verdict.ok) {
+      if (verdict.seal) saveResetSeal(db, verdict.seal, at);
+      else if (seal) clearResetSeal(db);
+      if (matched) writeAudit(db, { id: ulid(), at, actor: actorName(email ?? ""), action: "password_reset_failed" });
+      throw new HttpError(401, "unauthorized");
+    }
+    db.transaction(() => {
+      savePasswordHash(db, hashPassword(body.data.next), at);
+      clearResetSeal(db);
+      clearSessions(db);
+      writeAudit(db, { id: ulid(), at, actor: email ?? account ?? "unknown", action: "password_reset" });
+    })();
+    return reply.send({ ok: true });
   });
 
   app.post("/v1/logout", async (request, reply) => {
@@ -1066,7 +1138,7 @@ function envelopeList(raw: string | null): string {
 
 function isPublic(url: string): boolean {
   const path = url.split("?")[0] ?? url;
-  return path === "/healthz" || path === "/v1/login" || path === "/v1/csrf" || isPanelAsset(path);
+  return path === "/healthz" || path === "/v1/login" || path === "/v1/csrf" || path === "/v1/password/forgot" || path === "/v1/password/reset" || isPanelAsset(path);
 }
 
 function messageId(request: FastifyRequest): string {
