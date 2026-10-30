@@ -8,6 +8,7 @@ import { openDatabase } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
 import { enqueueJob } from "../src/db/repos/jobs.js";
 import { insertMessage } from "../src/db/repos/messages.js";
+import { readPrompt, savePrompt, listPrompts } from "../src/ai/prompt.js";
 import {
   readEffectiveAiPool,
   readRuntimeSettings,
@@ -177,6 +178,22 @@ test("new jobs take the saved attempt limit unless the caller sets one", () => {
     assert.equal(explicit.max_attempts, 9);
   } finally {
     db.close();
+  }
+});
+
+test("prompts can be saved to settings table and override disk", () => {
+  const db = tempDb();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-prompts-"));
+  fs.writeFileSync(path.join(dir, "classify-v1.txt"), "disk prompt", "utf8");
+  try {
+    assert.equal(readPrompt(dir, "classify-v1", db), "disk prompt");
+    savePrompt(dir, "classify-v1", "db prompt", db, 100);
+    assert.equal(readPrompt(dir, "classify-v1", db), "db prompt");
+    const list = listPrompts(dir, db);
+    assert.ok(list.some((p) => p.id === "classify-v1"));
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

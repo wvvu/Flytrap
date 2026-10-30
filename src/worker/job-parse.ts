@@ -42,7 +42,7 @@ export async function runParseJob(deps: ParseJobDeps, job: JobRow): Promise<void
     parsed: JSON.stringify(result.parsed),
     now: deps.now(),
   });
-  if (isBlockedSender(deps.db, fromAddr)) {
+  if (isBlockedSender(deps.db, fromAddr) || isBlockedSender(deps.db, message.envelope_from)) {
     trashMessage(deps.db, message.id, deps.now());
     deps.log.info({ messageId: message.id }, "blocked sender moved to trash");
     return;

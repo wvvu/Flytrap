@@ -67,6 +67,7 @@ function record(db: Db, hash: string, rawPath: string, input: AcceptInput): { id
   }
   const id = ulid();
   const domains = uniqueDomains(input.meta.rcptTo);
+  db.prepare("DELETE FROM purged_messages WHERE sha256 = ?").run(hash);
   insertMessage(db, {
     id,
     sha256: hash,

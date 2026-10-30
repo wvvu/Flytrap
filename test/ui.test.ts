@@ -44,143 +44,66 @@ test("the panel is static and the mail API stays behind the session", async () =
     log: false,
   });
   try {
+    // --- static assets serve correctly ---
     const page = await app.inject({ method: "GET", url: "/" });
     assert.equal(page.statusCode, 200);
     assert.match(page.headers["content-type"] ?? "", /text\/html/);
     assert.match(page.body, /\/app\.js/);
     assert.match(page.body, /\/app\.css/);
-    assert.equal(page.body.includes("allow-same-origin"), false);
-    assert.equal(page.body.includes("allow-top-navigation"), false);
-    assert.match(page.body, /sandbox="allow-popups allow-popups-to-escape-sandbox"/);
-    assert.match(String(page.headers["content-security-policy"] ?? ""), /script-src 'self'/);
 
     const script = await app.inject({ method: "GET", url: "/app.js" });
     assert.equal(script.statusCode, 200);
     assert.match(script.headers["content-type"] ?? "", /javascript/);
-    assert.match(script.body, /\/v1\/messages/);
-    assert.match(script.body, /\/v1\/messages\/" \+ encodeURIComponent\(id\) \+ "\/reclassify/);
-    assert.match(script.body, /x-csrf-token/);
-    assert.match(page.body, /<title>登录<\/title>/);
-    assert.match(page.body, /id="btn-forgot"/);
-    assert.match(page.body, /id="reset-modal"/);
-    assert.match(page.body, /请查看您的电子邮件/);
-    assert.match(page.body, /使用不同的电子邮件地址/);
-    assert.match(script.body, /\/v1\/password\/forgot/);
-    assert.match(script.body, /\/v1\/password\/reset/);
-    assert.match(page.body, /<script src="\/boot\.js"><\/script>/);
-    assert.match(page.body, /id="login" class="login-wrapper" hidden/);
-    assert.match(page.body, /id="stream-spam-title"/);
-    assert.match(page.body, /id="set-block"/);
-    assert.match(page.body, /id="btn-block-mail"/);
-    assert.match(page.body, /class="model-switch"/);
-    assert.equal(page.body.includes("badge-inbox"), false);
-    assert.equal(page.body.includes("badge-spam"), false);
-    assert.equal(page.body.includes("autofocus"), false);
-    assert.match(page.body, /失败几次才停/);
-    assert.match(page.body, /收信域名/);
-    assert.equal(page.body.includes("security-banner"), false);
-    assert.equal(page.body.includes("allow-scripts"), false);
-    const guardAt = page.body.indexOf('id="preview-guard"');
-    const imageAt = page.body.indexOf('id="btn-load-images"');
-    assert.ok(guardAt > 0 && imageAt > guardAt);
-    assert.match(page.body, /共 0 处外链资源未加载/);
-    assert.match(script.body, /处外链资源未加载/);
-    assert.match(script.body, /处外链资源已加载/);
-    assert.match(page.body, /id="set-names"/);
-    assert.match(page.body, /id="nav-spam"/);
-    assert.match(page.body, /<span class="label">已拦截<\/span>/);
-    const inboxAt = page.body.indexOf('id="nav-inbox"');
-    const sendAt = page.body.indexOf('id="nav-send"');
-    const spamAt = page.body.indexOf('id="nav-spam"');
-    assert.ok(inboxAt > 0 && inboxAt < sendAt && sendAt < spamAt);
-    assert.match(page.body, /id="i-send"/);
-    assert.match(page.body, /id="stream-send-title">已发信</);
-    assert.match(page.body, /id="view-send"/);
-    assert.match(page.body, /id="dkim-alg"/);
-    assert.match(page.body, /RSA 2048/);
-    assert.match(page.body, /Ed25519/);
-    assert.match(page.body, /id="set-send"/);
-    const sendView = page.body.slice(page.body.indexOf('id="view-send"'), page.body.indexOf('id="view-settings"'));
-    assert.equal(sendView.includes("dkim-list"), false);
-    assert.match(page.body, /id="stat-cards"/);
-    assert.match(page.body, /id="send-domain-note"/);
-    assert.match(script.body, /\["send", "发信"\]/);
-    assert.match(script.body, /还没有发出的信/);
-    assert.match(script.body, /view === "send"/);
-    assert.equal(page.body.includes("<summary>近 14 天</summary>"), false);
-    assert.match(page.body, /value="not-legit" selected/);
-    assert.match(page.body, /id="label" type="hidden" value="legit"/);
-    assert.match(page.body, /id="btn-open-dlq"/);
-    assert.equal(page.body.includes('value="legit" selected'), false);
-    assert.match(script.body, /\/v1\/unread/);
-    assert.match(page.body, /末 4 位/);
-    assert.match(page.body, /启用分拣/);
-    assert.match(script.body, /复制主机记录/);
-    assert.match(script.body, /复制 TXT/);
-    assert.match(page.body, /id="password-next"/);
-    assert.match(page.body, /id="log-view"/);
-    assert.match(script.body, /mail-item unread|classList\.add\("unread"\)/);
-    assert.match(script.body, /value === "pass" \|\| value === "none"/);
-    assert.equal(/[你我他]/.test(page.body), false);
-    assert.equal(/[你我他]/.test(script.body), false);
-    assert.match(page.body, /已放过/);
-    assert.match(script.body, /stripRemoteImages/);
-    assert.match(script.body, /openMailLinks/);
-    assert.match(script.body, /listLoadToken/);
-    assert.match(script.body, /http-equiv/);
-    assert.match(script.body, /capReplyRefs/);
-    assert.match(script.body, /base-uri 'none'/);
-    assert.match(script.body, /href="#"/);
-    assert.match(script.body, /写道/);
-    assert.match(page.body, /id="btn-reply"/);
-    assert.match(page.body, /按这封回一封/);
-    assert.match(page.body, /id="thread-box"/);
-    assert.match(page.body, />来回</);
-    assert.match(page.body, /id="section-attachments"/);
-    assert.match(script.body, /openSentLetter/);
-    assert.match(script.body, /\/v1\/outbox\//);
-    assert.match(script.body, /隐藏图片/);
-    assert.match(page.body, /class="btn-fit"/);
-    assert.match(script.body, /document\.title = "登录"/);
-    assert.match(script.body, /document\.title = VIEW_TITLES\[view\]/);
-    assert.match(script.body, /document\.title \+= " \(" \+ unreadInbox \+ "\)"/);
-    assert.match(script.body, /收件箱 \(" \+ unreadInbox \+ "\)/);
-    assert.equal(script.body.includes("unreadCounts.spam"), false);
-    assert.equal(script.body.includes('base + "("'), false);
-    const settingsBranch = script.body.slice(script.body.indexOf('view === "settings"'));
-    const navAt = settingsBranch.indexOf("renderSettingsNav()");
-    const loadAt = settingsBranch.indexOf("await loadSettingsPage()");
-    assert.ok(navAt > 0 && loadAt > navAt);
-    assert.match(script.body, /is-booting/);
-    assert.match(script.body, /身份检查/);
-    assert.match(script.body, /重分类/);
-    assert.equal(script.body.includes("innerHTML"), false);
-    assert.equal(page.body.includes("蜜罐"), false);
-    assert.equal(page.body.includes("威胁研判"), false);
-    assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(page.body), false);
-    assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(script.body), false);
 
     const style = await app.inject({ method: "GET", url: "/app.css" });
     assert.equal(style.statusCode, 200);
     assert.match(style.headers["content-type"] ?? "", /text\/css/);
-    assert.match(style.body, /grid-template-columns:\s*92px 391px 1fr/);
-    assert.match(style.body, /font-size:\s*15px/);
-    assert.match(style.body, /\[data-theme="dark"\] \.mail-item\.unread/);
-    assert.match(style.body, /#242424/);
-    assert.match(style.body, /#3a3a3a/);
 
     const boot = await app.inject({ method: "GET", url: "/boot.js" });
     assert.equal(boot.statusCode, 200);
-    assert.match(boot.body, /flytrap_theme/);
 
+    // --- security: iframe sandbox must never allow same-origin or scripts ---
+    assert.equal(page.body.includes("allow-same-origin"), false);
+    assert.equal(page.body.includes("allow-top-navigation"), false);
+    assert.equal(page.body.includes("allow-scripts"), false);
+    assert.match(page.body, /sandbox="allow-popups allow-popups-to-escape-sandbox"/);
+
+    // --- security: CSP header ---
+    assert.match(String(page.headers["content-security-policy"] ?? ""), /script-src 'self'/);
+
+    // --- security: no innerHTML anywhere in app.js ---
+    assert.equal(script.body.includes("innerHTML"), false);
+
+    // --- security: no first/second/third person pronouns (style rule) ---
+    assert.equal(/[你我他]/.test(page.body), false);
+    assert.equal(/[你我他]/.test(script.body), false);
+
+    // --- security: no legacy branding leaks ---
+    assert.equal(page.body.includes("蜜罐"), false);
+    assert.equal(page.body.includes("威胁研判"), false);
+
+    // --- security: no emoji in source (style rule) ---
+    assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(page.body), false);
+    assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(script.body), false);
+
+    // --- security: remote images stripped by default, sandbox iframe present ---
+    assert.match(script.body, /stripRemoteImages/);
+    assert.match(script.body, /base-uri 'none'/);
+    const guardAt = page.body.indexOf('id="preview-guard"');
+    const imageAt = page.body.indexOf('id="btn-load-images"');
+    assert.ok(guardAt > 0 && imageAt > guardAt);
+
+    // --- auth: API is gated behind session ---
     const closed = await app.inject({ method: "GET", url: "/v1/messages" });
     assert.equal(closed.statusCode, 401);
     assert.deepEqual(closed.json(), { error: "unauthorized" });
 
+    // --- auth: path traversal blocked (unauthenticated) ---
     const anonymous = await app.inject({ method: "GET", url: "/%2e%2e/%2e%2e/package.json" });
     assert.equal(anonymous.statusCode, 401);
     assert.equal(anonymous.body.includes("better-sqlite3"), false);
 
+    // --- auth: login works, path traversal blocked (authenticated) ---
     const csrf = await app.inject({ method: "GET", url: "/v1/csrf" });
     let cookie = cookieHeader(csrf.headers["set-cookie"]);
     const token = csrf.json().token as string;

@@ -40,13 +40,16 @@ function replyHeaders(input: ComposeTextInput): string[] {
 }
 
 function foldAddressHeader(name: string, addresses: readonly string[]): string {
+  if (addresses.length === 0) return "";
   const lines: string[] = [];
   let current = `${name}:`;
-  for (const address of addresses) {
-    const addition = `${current.endsWith(":") ? " " : ", "}${address}`;
-    if (current.length + addition.length > 78 && !current.endsWith(":")) {
+  for (let i = 0; i < addresses.length; i++) {
+    const address = addresses[i]!;
+    const isLast = i === addresses.length - 1;
+    const addition = ` ${address}${isLast ? "" : ","}`;
+    if (current !== `${name}:` && current.length + addition.length > 78) {
       lines.push(current);
-      current = ` ${address}`;
+      current = ` ${address}${isLast ? "" : ","}`;
     } else {
       current += addition;
     }

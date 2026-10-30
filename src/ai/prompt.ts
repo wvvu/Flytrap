@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import type { Db } from "../db/index.js";
 import { resolveInside } from "../paths.js";
 import { splitAddress } from "../smtp/policy.js";
 
@@ -34,7 +35,11 @@ export interface ClassifyFacts {
   attachments: PromptAttachment[];
 }
 
-export function readPrompt(dir: string, id = "classify-v1"): string {
+export function readPrompt(dir: string, id = "classify-v1", db?: Db): string {
+  if (db) {
+    const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(`prompt:${id}`) as { value: string } | undefined;
+    if (row && typeof row.value === "string") return row.value;
+  }
   let file: string;
   try {
     file = resolveInside(dir, `${id}.txt`);
@@ -48,26 +53,43 @@ export function readPrompt(dir: string, id = "classify-v1"): string {
   }
 }
 
-export function listPrompts(dir: string): Array<{ id: string; name: string }> {
+export function listPrompts(dir: string, db?: Db): Array<{ id: string; name: string }> {
+  const ids = new Set<string>();
+  if (db) {
+    const rows = db.prepare("SELECT key FROM settings WHERE key LIKE 'prompt:%'").all() as Array<{ key: string }>;
+    for (const r of rows) {
+      ids.add(r.key.slice("prompt:".length));
+    }
+  }
   try {
     const files = readdirSync(dir);
-    return files
-      .filter((f) => f.endsWith(".txt"))
-      .map((f) => {
-        const id = f.replace(/\.txt$/, "");
-        return { id, name: id };
-      });
+    for (const f of files) {
+      if (f.endsWith(".txt")) ids.add(f.replace(/\.txt$/, ""));
+    }
   } catch {
-    return [{ id: "classify-v1", name: "classify-v1" }];
+    // ignore
   }
+  if (ids.size === 0) ids.add("classify-v1");
+  return Array.from(ids).sort().map((id) => ({ id, name: id }));
 }
 
-export function savePrompt(dir: string, id: string, content: string): void {
+export function savePrompt(dir: string, id: string, content: string, db?: Db, now = Date.now()): void {
   if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
     throw new Error("invalid prompt id");
   }
-  const file = resolveInside(dir, `${id}.txt`);
-  writeFileSync(file, content, "utf8");
+  if (db) {
+    db.prepare(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    ).run(`prompt:${id}`, content, now);
+  }
+  try {
+    const file = resolveInside(dir, `${id}.txt`);
+    writeFileSync(file, content, "utf8");
+  } catch {
+    // on read-only file systems (e.g. docker read_only: true), ignore disk write failure
+    // as sqlite settings table already stores the updated prompt.
+  }
 }
 
 function sanitizeXmlBoundary(text: string): string {

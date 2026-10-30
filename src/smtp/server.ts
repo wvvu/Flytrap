@@ -143,7 +143,7 @@ function handleData(input: {
   const ip = normalizeIp(session.remoteAddress);
   const rate = limiter.admitData(ip, input.now(), config.smtpMaxDataPerHour);
   if (!rate.accept) {
-    return finishAfterDrain(stream, () => input.callback(smtpError(rate.responseCode, rate.message)));
+    return finishAfterDrain(stream, config.smtpMaxBytes, () => input.callback(smtpError(rate.responseCode, rate.message)));
   }
 
   const chunks: Buffer[] = [];
@@ -240,18 +240,26 @@ function handleData(input: {
  * when the stream is still readable. Over the size limit we destroy instead,
  * so the 552 is not stuck behind a client that keeps sending.
  */
-function finishAfterDrain(stream: SMTPServerDataStream, callback: () => void): Promise<void> {
+function finishAfterDrain(stream: SMTPServerDataStream, maxBytes: number, callback: () => void): Promise<void> {
   return new Promise((resolve) => {
     let settled = false;
+    let seen = 0;
     const done = () => {
       if (settled) return;
       settled = true;
       callback();
       resolve();
     };
-    stream.on("data", () => undefined);
+    stream.on("data", (chunk: Buffer) => {
+      seen += chunk.length;
+      if (seen > maxBytes || stream.sizeExceeded) {
+        stream.destroy();
+        done();
+      }
+    });
     stream.on("end", done);
     stream.on("error", done);
+    stream.on("close", done);
   });
 }
 

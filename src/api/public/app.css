@@ -570,7 +570,7 @@ input:focus, select:focus, textarea:focus {
 }
 
 .stream-filter-select:hover {
-  border-color: var(--border-default);
+  border-color: var(--border-strong);
   background: var(--bg-card-hover);
 }
 
@@ -2050,7 +2050,7 @@ input.field-narrow {
   line-height: 1.4;
   word-break: break-all;
   user-select: all;
-  background: var(--bg-hover);
+  background: var(--bg-card-hover);
   padding: 6px 8px;
   border-radius: 6px;
   border: 1px solid var(--border-subtle);
