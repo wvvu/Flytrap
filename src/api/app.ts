@@ -441,23 +441,36 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const body = labelOverrideBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
 
+    const at = now();
     const existingAi = parseJson(message.ai_result) as Record<string, unknown> | null;
-    const ai = existingAi && typeof existingAi === "object" ? { ...existingAi } : {};
+    const ai: Record<string, unknown> =
+      existingAi && typeof existingAi === "object" && !Array.isArray(existingAi)
+        ? { ...existingAi }
+        : {};
 
     if (typeof ai.originalLabel !== "string" && typeof ai.label === "string") {
       ai.originalLabel = ai.label;
-      ai.originalConfidence = ai.confidence;
+      ai.originalConfidence = typeof ai.confidence === "number" ? ai.confidence : null;
     }
 
-    const prevLabel = (ai.label as string) ?? "none";
+    const prevLabel = typeof ai.label === "string" ? ai.label : "none";
+    ai.schema = 1;
+    if (typeof ai.prompt_id !== "string" || !ai.prompt_id) ai.prompt_id = "manual";
+    if (typeof ai.model !== "string" || !ai.model) ai.model = "manual";
+    if (typeof ai.provider !== "string" || !ai.provider) ai.provider = "manual";
+    if (typeof ai.at !== "string" || !ai.at) ai.at = new Date(at).toISOString();
+    if (typeof ai.confidence !== "number") ai.confidence = 1;
+    if (typeof ai.summary !== "string" || !ai.summary) ai.summary = "已手动修改分类";
+    if (!Array.isArray(ai.tags)) ai.tags = [];
+    if (!Array.isArray(ai.signals)) ai.signals = [];
     ai.label = body.data.label;
     ai.manualOverride = true;
     ai.overrideActor = request.session.user ?? "admin";
-    ai.overrideAt = now();
+    ai.overrideAt = at;
 
     const updatedJson = JSON.stringify(ai);
     db.prepare("UPDATE messages SET ai_result = ?, status = 'classified', updated_at = ? WHERE id = ?")
-      .run(updatedJson, now(), id);
+      .run(updatedJson, at, id);
 
     writeAudit(db, {
       id: ulid(),
@@ -501,10 +514,11 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   app.post("/v1/messages/:id/block", async (request, reply) => {
     const id = messageId(request);
     const message = requireMessage(db, id);
-    if (!message.from_addr) throw new HttpError(400);
+    const sender = message.from_addr || message.envelope_from;
+    if (!sender) throw new HttpError(400);
     let blockedSenders;
     try {
-      blockedSenders = saveBlockedSenders(db, readBlockedSenders(db).concat(message.from_addr), now());
+      blockedSenders = saveBlockedSenders(db, readBlockedSenders(db).concat(sender), now());
     } catch (err) {
       if (err instanceof SettingsError) throw new HttpError(400);
       throw err;
@@ -516,7 +530,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       actor: request.session.user ?? "unknown",
       action: "block_sender",
       target: id,
-      detail: message.from_addr,
+      detail: sender,
     });
     return reply.send({ ok: true, id, blockedSenders, trashed: true });
   });
@@ -685,7 +699,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.get("/v1/prompts", async () => {
-    const list = listPrompts(config.promptsDir);
+    const list = listPrompts(config.promptsDir, db);
     return {
       items: list.map((item) => ({
         id: item.id,
@@ -700,7 +714,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const id = params.id;
     if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) throw new HttpError(400);
     try {
-      const content = readPrompt(config.promptsDir, id);
+      const content = readPrompt(config.promptsDir, id, db);
       return { id, content };
     } catch {
       throw new HttpError(404, "not_found");
@@ -711,9 +725,11 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const params = request.params as Record<string, string>;
     const id = params.id;
     if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) throw new HttpError(400);
-    const body = request.body as { content?: string };
-    if (!body || typeof body.content !== "string") throw new HttpError(400);
-    savePrompt(config.promptsDir, id, body.content);
+    const body = request.body as { content?: unknown };
+    if (!body || typeof body.content !== "string" || body.content.trim().length === 0 || body.content.length > 100_000) {
+      throw new HttpError(400);
+    }
+    savePrompt(config.promptsDir, id, body.content, db, now());
     writeAudit(db, { id: ulid(), at: now(), actor: request.session.user ?? "unknown", action: "prompt_update", target: id });
     return reply.send({ ok: true, id });
   });
@@ -810,6 +826,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     );
     if (!currentOk) throw new HttpError(401, "unauthorized");
     savePasswordHash(db, hashPassword(body.data.next), now());
+    clearResetSeal(db);
     writeAudit(db, {
       id: ulid(),
       at: now(),

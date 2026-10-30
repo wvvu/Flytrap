@@ -74,7 +74,7 @@ export async function runClassifyJob(deps: ClassifyJobDeps, job: JobRow): Promis
   };
   const produced = await deps.classifier.classify({
     promptId: PROMPT_ID,
-    systemPrompt: readPrompt(deps.promptsDir, PROMPT_ID),
+    systemPrompt: readPrompt(deps.promptsDir, PROMPT_ID, deps.db),
     userMessage: buildUserMessage(facts),
     facts,
   });

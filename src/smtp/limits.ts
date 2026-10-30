@@ -18,6 +18,7 @@ export class IpLimiter {
   private readonly data = new Map<string, number[]>();
 
   admitConnect(ip: string, now: number, limits: ConnectLimits): Decision {
+    this.sweepIfNeeded(now);
     const recent = this.window(this.connects, ip, now, MINUTE_MS);
     const decision = evaluateConnect({
       activeConnections: this.active.get(ip) ?? 0,
@@ -25,9 +26,15 @@ export class IpLimiter {
       maxActive: limits.maxActive,
       maxPerMinute: limits.maxPerMinute,
     });
-    recent.push(now);
-    this.connects.set(ip, recent);
-    if (decision.accept) this.active.set(ip, (this.active.get(ip) ?? 0) + 1);
+    if (decision.accept) {
+      recent.push(now);
+      this.connects.set(ip, recent);
+      this.active.set(ip, (this.active.get(ip) ?? 0) + 1);
+    } else if (recent.length === 0) {
+      this.connects.delete(ip);
+    } else {
+      this.connects.set(ip, recent);
+    }
     return decision;
   }
 
@@ -40,8 +47,14 @@ export class IpLimiter {
   admitData(ip: string, now: number, maxPerHour: number): Decision {
     const recent = this.window(this.data, ip, now, HOUR_MS);
     const decision = evaluateDataRate(countInWindow(recent, now, HOUR_MS), maxPerHour);
-    recent.push(now);
-    this.data.set(ip, recent);
+    if (decision.accept) {
+      recent.push(now);
+      this.data.set(ip, recent);
+    } else if (recent.length === 0) {
+      this.data.delete(ip);
+    } else {
+      this.data.set(ip, recent);
+    }
     return decision;
   }
 
@@ -51,5 +64,15 @@ export class IpLimiter {
     let index = 0;
     while (index < current.length && (current[index] ?? 0) < cutoff) index += 1;
     return index === 0 ? current : current.slice(index);
+  }
+
+  private sweepIfNeeded(now: number): void {
+    if (this.connects.size + this.data.size < 2048) return;
+    for (const [ip, list] of this.connects) {
+      if ((list[list.length - 1] ?? 0) < now - MINUTE_MS) this.connects.delete(ip);
+    }
+    for (const [ip, list] of this.data) {
+      if ((list[list.length - 1] ?? 0) < now - HOUR_MS) this.data.delete(ip);
+    }
   }
 }

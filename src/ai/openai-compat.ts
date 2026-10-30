@@ -86,7 +86,10 @@ async function complete(
   if (response.status === 400) {
     response = await post(fetchImpl, endpoint, apiKey, { model, temperature: 0, messages }, timeoutMs);
   }
-  if (!response.ok) throw new Error(`openai ${response.status}`);
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail ? `openai ${response.status}: ${detail.slice(0, 300)}` : `openai ${response.status}`);
+  }
   const payload = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
   const content = payload.choices?.[0]?.message?.content;
   if (typeof content !== "string" || content.trim().length === 0) throw new Error("openai empty completion");

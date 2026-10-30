@@ -92,7 +92,10 @@ export function createGeminiClassifier(options: GeminiClassifierOptions): Gemini
 
   function stateFor(item: GeminiPoolKey): KeyState {
     const current = states.get(item.id);
-    if (current) return current;
+    if (current) {
+      current.key = item.secret;
+      return current;
+    }
     const created: KeyState = {
       key: item.secret,
       cooldownUntil: 0,
@@ -107,15 +110,19 @@ export function createGeminiClassifier(options: GeminiClassifierOptions): Gemini
 
   function pickAvailableKey(keys: readonly GeminiPoolKey[]): { item: GeminiPoolKey; state: KeyState } {
     const currentNow = now();
-    const available = keys.filter((item) => stateFor(item).cooldownUntil <= currentNow);
-    if (available.length === 0) {
-      const minWait = Math.min(...keys.map((item) => Math.max(0, stateFor(item).cooldownUntil - currentNow)));
-      throw new Error(`gemini key pool exhausted: all ${keys.length} keys in cooldown (retry in ${Math.ceil(minWait / 1000)}s)`);
+    const n = keys.length;
+    for (let offset = 0; offset < n; offset += 1) {
+      const idx = (roundRobinIdx + offset) % n;
+      const candidate = keys[idx];
+      if (!candidate) continue;
+      const state = stateFor(candidate);
+      if (state.cooldownUntil <= currentNow) {
+        roundRobinIdx = (idx + 1) % n;
+        return { item: candidate, state };
+      }
     }
-    const picked = available[roundRobinIdx % available.length];
-    if (!picked) throw new Error("gemini key pool unexpected empty pick");
-    roundRobinIdx = (roundRobinIdx + 1) % available.length;
-    return { item: picked, state: stateFor(picked) };
+    const minWait = Math.min(...keys.map((item) => Math.max(0, stateFor(item).cooldownUntil - currentNow)));
+    throw new Error(`gemini key pool exhausted: all ${keys.length} keys in cooldown (retry in ${Math.ceil(minWait / 1000)}s)`);
   }
 
   return {

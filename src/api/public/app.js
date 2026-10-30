@@ -433,12 +433,24 @@ async function revealApp() {
   showApp();
   try {
     await loadAppearance();
+    const deepId = hashMailId();
     await switchNav("inbox");
+    if (deepId) await selectMail(deepId);
     await Promise.all([updateDlqBadge(), refreshUnread()]);
   } finally {
     holdBoot = false;
     appEl.classList.remove("is-booting");
   }
+}
+
+window.addEventListener("hashchange", () => {
+  const deepId = hashMailId();
+  if (deepId && !appEl.hidden) void openFailedMail(deepId);
+});
+
+function hashMailId() {
+  const match = /^#\/m\/([\w-]+)$/.exec(window.location.hash || "");
+  return match ? match[1] : "";
 }
 
 function setGlyph(el, name) {
@@ -597,6 +609,14 @@ async function switchNav(view) {
   listEl.replaceChildren();
   cursor = null;
   loadingMore = false;
+  if (view === "inbox" || view === "spam" || view === "trash") {
+    selectedMailId = null;
+    readingSentId = null;
+    openDetail = null;
+    if (mailDetailEl) mailDetailEl.hidden = true;
+    if (mailLoadingEl) mailLoadingEl.hidden = true;
+    if (mailEmptyEl) mailEmptyEl.hidden = false;
+  }
   setMobilePane("list");
   placeMailSearch(view);
   setEmptyCopy(view);
@@ -1022,10 +1042,10 @@ async function loadRawHeaders(id, token, detail) {
 function countRemoteImages(html) {
   if (!html) return 0;
   const patterns = [
-    /\s(?:src|poster)\s*=\s*['"]\s*https?:\/\//gi,
-    /\s(?:src|poster)\s*=\s*https?:\/\//gi,
-    /\ssrcset\s*=\s*['"][^'"]*https?:\/\//gi,
-    /url\(\s*['"]?https?:\/\//gi,
+    /\s(?:src|poster|background)\s*=\s*['"]\s*(?:https?:)?\/\//gi,
+    /\s(?:src|poster|background)\s*=\s*(?:https?:)?\/\//gi,
+    /\ssrcset\s*=\s*['"][^'"]*(?:https?:)?\/\//gi,
+    /url\(\s*['"]?(?:https?:)?\/\//gi,
   ];
   let count = 0;
   for (const pattern of patterns) {
@@ -1037,11 +1057,11 @@ function countRemoteImages(html) {
 
 function stripRemoteImages(html) {
   return html
-    .replace(/(\s(?:src|poster)\s*=\s*)(['"])\s*https?:\/\/[^'"]*\2/gi, "$1$2$2")
-    .replace(/(\s(?:src|poster)\s*=\s*)https?:\/\/[^\s>]+/gi, '$1""')
-    .replace(/\ssrcset\s*=\s*(['"])[^'"]*https?:\/\/[^'"]*\1/gi, " srcset=$1$1")
-    .replace(/\ssrcset\s*=\s*[^\s>]*https?:\/\/[^\s>]+/gi, ' srcset=""')
-    .replace(/url\(\s*(['"]?)https?:\/\/[^)'"]*\1\s*\)/gi, "url('')");
+    .replace(/(\s(?:src|poster|background)\s*=\s*)(['"])\s*(?:https?:)?\/\/[^'"]*\2/gi, "$1$2$2")
+    .replace(/(\s(?:src|poster|background)\s*=\s*)(?:https?:)?\/\/[^\s>]+/gi, '$1""')
+    .replace(/\ssrcset\s*=\s*(['"])[^'"]*(?:https?:)?\/\/[^'"]*\1/gi, " srcset=$1$1")
+    .replace(/\ssrcset\s*=\s*[^\s>]*(?:https?:)?\/\/[^\s>]+/gi, ' srcset=""')
+    .replace(/url\(\s*(['"]?)(?:https?:)?\/\/[^)'"]*\1\s*\)/gi, "url('')");
 }
 
 function openMailLinks(html) {
@@ -1164,6 +1184,10 @@ async function openSentLetter(id) {
 function paintSentLetter(letter) {
   showInboundExtras(false);
   if (detailVerdictSelect) detailVerdictSelect.hidden = true;
+  const confidenceChip = document.querySelector(".confidence-chip");
+  if (confidenceChip) confidenceChip.hidden = true;
+  const detailTags = document.querySelector("#detail-tags");
+  if (detailTags) detailTags.replaceChildren();
   openDetail = null;
   if (btnReply) btnReply.hidden = true;
   if (btnReclassify) btnReclassify.hidden = true;
@@ -1691,7 +1715,6 @@ function stepState(job) {
 }
 
 async function openFailedMail(id) {
-  selectedMailId = id;
   await switchNav("inbox");
   await selectMail(id);
 }
@@ -2621,8 +2644,23 @@ async function saveAiSettings() {
 }
 
 function openComposer() {
+  readingSentId = null;
+  if (viewMail) viewMail.hidden = true;
+  if (viewSend) viewSend.hidden = false;
+  document.querySelectorAll("#list .mail-item").forEach((el) => el.classList.remove("selected"));
   setMobilePane("detail");
   document.querySelector("#send-from")?.focus();
+}
+
+async function selectSentFromList(id) {
+  if (viewSend) viewSend.hidden = true;
+  if (viewMail) viewMail.hidden = false;
+  if (threadBox) threadBox.hidden = true;
+  document.querySelectorAll("#list .mail-item").forEach((el) => {
+    el.classList.toggle("selected", el.dataset.id === id);
+  });
+  setMobilePane("detail");
+  await openSentLetter(id);
 }
 
 function clearReplyDraft() {
@@ -2766,9 +2804,14 @@ async function submitSend() {
   const textInput = document.querySelector("#send-text");
   const button = document.querySelector("#btn-send");
   const from = normalizeAddress(extractEmail(fromInput ? fromInput.value : ""));
-  const to = splitAddresses(toInput ? toInput.value : "").map((item) => normalizeAddress(extractEmail(item))).filter(Boolean);
+  const rawParts = splitAddresses(toInput ? toInput.value : "");
+  const to = rawParts.map((item) => normalizeAddress(extractEmail(item))).filter(Boolean);
   if (!from || to.length === 0) {
     toast("请填写发件和收件");
+    return;
+  }
+  if (to.length !== rawParts.length) {
+    toast("收件地址格式有误");
     return;
   }
   if (to.length > 20) {
@@ -2805,7 +2848,12 @@ async function submitSend() {
 }
 
 function splitAddresses(raw) {
-  return String(raw || "").split(/[,;\s]+/).map((part) => part.trim()).filter(Boolean);
+  const text = String(raw || "").trim();
+  if (!text) return [];
+  if (/[,;\uff0c\uff1b\u3001\r\n]/.test(text)) {
+    return text.split(/[,;\uff0c\uff1b\u3001\r\n]+/).map((part) => part.trim()).filter(Boolean);
+  }
+  return text.split(/\s+/).map((part) => part.trim()).filter(Boolean);
 }
 
 function renderSentList() {
@@ -2859,11 +2907,15 @@ function createSentListItem(item) {
     retry.type = "button";
     retry.className = "btn-sm";
     retry.textContent = "再试";
-    retry.addEventListener("click", () => void retrySent(item.id));
+    retry.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void retrySent(item.id);
+    });
     line3.append(retry);
   }
 
   card.append(line1, subject, line3);
+  card.addEventListener("click", () => void selectSentFromList(item.id));
   return card;
 }
 

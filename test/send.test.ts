@@ -276,7 +276,9 @@ test("composeText preserves multi-byte UTF-8 subject and base64 encodes long ASC
     messageId: "m2@example.com",
     date: new Date(1_000_000),
   });
-  assert.match(folded.toString("utf8"), /To: one@example.com,.*\r\n five@example.com/);
+  assert.match(folded.toString("utf8"), /To: one@example.com,.*,\r\n five@example.com/);
+  const parsedFolded = await new PostalMime().parse(folded);
+  assert.equal(parsedFolded.to?.length, 5);
 });
 
 test("an ed25519 key signs and publishes a 32-byte DNS record", async () => {
