@@ -28,6 +28,7 @@ const STEP_ORDER = ["auth", "parse", "classify", "notify", "rebuild", "send"];
 
 let currentTab = "ai";
 let currentView = "inbox";
+let inboxPromoOnly = false;
 let currentDlqScope = "open";
 let selectedMailId = null;
 let promptBaseline = "";
@@ -39,7 +40,7 @@ let currentMailHtml = "";
 let currentMailPlain = "";
 let allowExternalImages = false;
 let labelNames = { ...LABEL_NAMES };
-let panelTitle = "Flytrap";
+let panelTitle = "邮箱";
 let domainNames = {};
 let senderMap = new Map();
 let mailboxNames = new Map();
@@ -101,6 +102,7 @@ const queryInput = document.querySelector("#q");
 const labelInput = document.querySelector("#label");
 const filterSelect = document.querySelector("#filter-select");
 const refreshBtn = document.querySelector("#btn-refresh");
+const promoBtn = document.querySelector("#btn-promo");
 const spamRefreshBtn = document.querySelector("#btn-spam-refresh");
 const dlqRefreshBtn = document.querySelector("#btn-dlq-refresh");
 const retryAllBtn = document.querySelector("#btn-retry-all");
@@ -180,6 +182,7 @@ navTrashBtn?.addEventListener("click", () => switchNav("trash"));
 navSettingsBtn?.addEventListener("click", () => switchNav("settings"));
 
 refreshBtn?.addEventListener("click", () => void reloadMessages());
+promoBtn?.addEventListener("click", () => setPromoMode(!inboxPromoOnly));
 spamRefreshBtn?.addEventListener("click", () => void reloadMessages());
 document.querySelector("#btn-open-dlq")?.addEventListener("click", () => switchNav("dlq"));
 document.querySelector("#btn-dlq-back")?.addEventListener("click", () => switchNav("settings"));
@@ -241,6 +244,12 @@ document.querySelector("#send-q")?.addEventListener("input", () => {
 document.querySelector("#send-form")?.addEventListener("submit", (event) => {
   event.preventDefault();
   void submitSend();
+});
+document.querySelector("#btn-cc-toggle")?.addEventListener("click", () => {
+  for (const id of ["#send-cc-row", "#send-bcc-row"]) {
+    const row = document.querySelector(id);
+    if (row) row.hidden = !row.hidden;
+  }
 });
 document.querySelector("#send-from")?.addEventListener("input", refreshSendNote);
 document.querySelector("#btn-dkim-generate")?.addEventListener("click", () => {
@@ -466,7 +475,12 @@ function setGlyph(el, name) {
 }
 
 function initTheme() {
-  const saved = localStorage.getItem("flytrap_theme") || "dark";
+  const legacy = localStorage.getItem("flytrap_theme");
+  const saved = localStorage.getItem("mail_theme") || legacy || "dark";
+  if (legacy) {
+    localStorage.setItem("mail_theme", saved);
+    localStorage.removeItem("flytrap_theme");
+  }
   document.documentElement.setAttribute("data-theme", saved);
   setGlyph(themeIcon, saved === "dark" ? "sun" : "moon");
 }
@@ -475,7 +489,7 @@ function toggleTheme() {
   const cur = document.documentElement.getAttribute("data-theme") || "dark";
   const next = cur === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", next);
-  localStorage.setItem("flytrap_theme", next);
+  localStorage.setItem("mail_theme", next);
   setGlyph(themeIcon, next === "dark" ? "sun" : "moon");
   if (currentMailHtml) {
     renderSandboxHtml(currentMailHtml);
@@ -542,9 +556,10 @@ function showApp() {
 
 function setViewTitle(view) {
   document.title = VIEW_TITLES[view] || "收件箱";
-  if (view === "inbox" && unreadInbox > 0) document.title += " (" + unreadInbox + ")";
-  if (panelTitle !== "Flytrap") document.title = panelTitle + " · " + document.title;
-  if (streamTitle) streamTitle.textContent = unreadInbox > 0 ? "收件箱 (" + unreadInbox + ")" : "收件箱";
+  if (view === "inbox" && inboxPromoOnly) document.title = "推广";
+  else if (view === "inbox" && unreadInbox > 0) document.title += " (" + unreadInbox + ")";
+  if (panelTitle !== "邮箱") document.title = panelTitle + " · " + document.title;
+  if (streamTitle) streamTitle.textContent = view === "inbox" && inboxPromoOnly ? "推广" : unreadInbox > 0 ? "收件箱 (" + unreadInbox + ")" : "收件箱";
 }
 
 function placeMailSearch(view) {
@@ -557,17 +572,33 @@ function setEmptyCopy(view) {
   if (!mailEmptyCopy) return;
   if (view === "spam") mailEmptyCopy.textContent = "这里是已拦截。选全部才会看到正常来信。";
   else if (view === "trash") mailEmptyCopy.textContent = "这里是垃圾桶。";
+  else if (view === "inbox" && inboxPromoOnly) mailEmptyCopy.textContent = "这里是推广。没有推广信。";
   else mailEmptyCopy.textContent = "这里是收件箱，包含尚未分类的来信。其余在已拦截。";
+}
+
+function paintPromoBtn() {
+  if (!promoBtn) return;
+  promoBtn.classList.toggle("active", inboxPromoOnly);
+  promoBtn.setAttribute("aria-pressed", inboxPromoOnly ? "true" : "false");
+}
+
+function setPromoMode(on) {
+  if (currentView !== "inbox" || inboxPromoOnly === on) return;
+  inboxPromoOnly = on;
+  paintPromoBtn();
+  setViewTitle("inbox");
+  setEmptyCopy("inbox");
+  void reloadMessages();
 }
 
 function syncListLabel() {
   if (!labelInput) return;
-  if (currentView === "inbox") labelInput.value = "legit";
+  if (currentView === "inbox") labelInput.value = inboxPromoOnly ? "unsolicited-admin" : "legit";
   else if (currentView === "spam") labelInput.value = filterSelect ? filterSelect.value : "not-legit";
 }
 
 function staysInList(newLabel) {
-  if (currentView === "inbox") return newLabel === "legit";
+  if (currentView === "inbox") return newLabel === (inboxPromoOnly ? "unsolicited-admin" : "legit");
   if (currentView !== "spam") return true;
   const filter = filterSelect ? filterSelect.value : "not-legit";
   if (!filter) return true;
@@ -588,6 +619,11 @@ async function refreshUnread() {
 async function switchNav(view) {
   const keepReply = replyArmed;
   replyArmed = false;
+  // 切走别的栏目、或从左栏再点一次收件箱，推广模式都回到正常，避免状态藏着。
+  if (inboxPromoOnly) {
+    inboxPromoOnly = false;
+    paintPromoBtn();
+  }
   if (view === "send" && !keepReply && replyContext) clearReplyDraft();
   currentView = view;
   setViewTitle(view);
@@ -997,9 +1033,18 @@ async function selectMail(id, options = {}) {
     if (mailLoadingEl) mailLoadingEl.hidden = true;
     mailDetailEl.hidden = false;
 
-    // 加载 HTML 与真正的 RFC822 信头。带会话进来时等这一封画完再揭开，避免连闪。
+    // 加载 HTML 与真正的 RFC822 信头。信头随 HTML 一起回来，省一次请求；
+    // 只有 HTML 里没带信头时才单独拉一次。带会话进来时等这一封画完再揭开，避免连闪。
     const htmlReady = loadMailHtml(id, token);
-    const headersReady = loadRawHeaders(id, token, detail);
+    const headersReady = (async () => {
+      const headers = await htmlReady;
+      if (token !== mailLoadToken) return;
+      if (headers && headers.trim()) {
+        rawHeaders.textContent = headers;
+        return;
+      }
+      await loadRawHeaders(id, token, detail);
+    })();
     const threadReady = loadThread(id, token);
     const opened = markOpened(id);
     if (holdBoot) await Promise.all([htmlReady, headersReady, threadReady, opened]);
@@ -1018,13 +1063,15 @@ async function selectMail(id, options = {}) {
 async function loadMailHtml(id, token) {
   try {
     const res = await request("/v1/messages/" + encodeURIComponent(id) + "/html");
-    if (token !== mailLoadToken) return;
+    if (token !== mailLoadToken) return null;
     currentMailHtml = res.html || "";
     renderSandboxHtml(currentMailHtml);
+    return typeof res.headers === "string" ? res.headers : null;
   } catch {
-    if (token !== mailLoadToken) return;
+    if (token !== mailLoadToken) return null;
     currentMailHtml = "<p style='color:#888;padding:20px'>没有 HTML 正文</p>";
     renderSandboxHtml(currentMailHtml);
+    return null;
   }
 }
 
@@ -2258,7 +2305,7 @@ async function loadAppearance() {
 }
 
 function applyAppearance(settings) {
-  panelTitle = (settings && settings.panelTitle) || "Flytrap";
+  panelTitle = (settings && settings.panelTitle) || "邮箱";
   labelNames = { ...LABEL_NAMES, ...(settings && settings.labelNames ? settings.labelNames : {}) };
   domainNames = (settings && settings.domainNames) || {};
   senderMap = new Map(
@@ -2270,7 +2317,7 @@ function applyAppearance(settings) {
   if (mark) mark.title = panelTitle;
   const eyebrow = document.querySelector("#panel-name");
   if (eyebrow) {
-    const custom = panelTitle !== "Flytrap";
+    const custom = panelTitle !== "邮箱";
     eyebrow.hidden = !custom;
     eyebrow.textContent = custom ? panelTitle : "";
   }
@@ -2299,7 +2346,7 @@ function labelName(id) {
 
 function renderNameEditors(settings) {
   const title = document.querySelector("#panel-title");
-  if (title) title.value = settings.panelTitle || "Flytrap";
+  if (title) title.value = settings.panelTitle || "邮箱";
   const labels = document.querySelector("#label-names");
   if (labels) {
     labels.replaceChildren();
@@ -2643,12 +2690,40 @@ async function saveAiSettings() {
   }
 }
 
+const LAST_FROM_KEY = "mail_last_from";
+
+function lastUsedFrom() {
+  try {
+    return localStorage.getItem(LAST_FROM_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberFrom(from) {
+  try {
+    if (from) localStorage.setItem(LAST_FROM_KEY, from);
+  } catch {
+    // Private mode or storage off: the next compose just starts blank.
+  }
+}
+
+/** The address the mail was delivered to is a valid From; fall back to the last used one. */
+function replyFromAddress(detail) {
+  const to = detail && detail.envelopeTo;
+  const list = Array.isArray(to) ? to : to ? [to] : [];
+  const first = list.map((item) => normalizeAddress(extractEmail(String(item)))).find(Boolean);
+  return first || lastUsedFrom();
+}
+
 function openComposer() {
   readingSentId = null;
   if (viewMail) viewMail.hidden = true;
   if (viewSend) viewSend.hidden = false;
   document.querySelectorAll("#list .mail-item").forEach((el) => el.classList.remove("selected"));
   setMobilePane("detail");
+  const fromInput = document.querySelector("#send-from");
+  if (fromInput && !fromInput.value.trim()) fromInput.value = lastUsedFrom();
   document.querySelector("#send-from")?.focus();
 }
 
@@ -2666,9 +2741,13 @@ async function selectSentFromList(id) {
 function clearReplyDraft() {
   replyContext = null;
   const toInput = document.querySelector("#send-to");
+  const ccInput = document.querySelector("#send-cc");
+  const bccInput = document.querySelector("#send-bcc");
   const subjectInput = document.querySelector("#send-subject");
   const textInput = document.querySelector("#send-text");
   if (toInput) toInput.value = "";
+  if (ccInput) ccInput.value = "";
+  if (bccInput) bccInput.value = "";
   if (subjectInput) subjectInput.value = "";
   if (textInput) textInput.value = "";
 }
@@ -2722,9 +2801,11 @@ async function startReply() {
   const references = capReplyRefs(parent ? (prior.includes(parent) ? prior : prior.concat(parent)) : prior);
   replyContext = parent ? { inReplyTo: parent, references } : null;
   replyArmed = true;
+  const fromInput = document.querySelector("#send-from");
   const toInput = document.querySelector("#send-to");
   const subjectInput = document.querySelector("#send-subject");
   const textInput = document.querySelector("#send-text");
+  if (fromInput) fromInput.value = replyFromAddress(detail);
   if (toInput) toInput.value = replyAddress(detail);
   if (subjectInput) subjectInput.value = replySubject(detail.subject);
   if (textInput) textInput.value = quoteLetter(detail);
@@ -2800,6 +2881,8 @@ function refreshSendNote() {
 async function submitSend() {
   const fromInput = document.querySelector("#send-from");
   const toInput = document.querySelector("#send-to");
+  const ccInput = document.querySelector("#send-cc");
+  const bccInput = document.querySelector("#send-bcc");
   const subjectInput = document.querySelector("#send-subject");
   const textInput = document.querySelector("#send-text");
   const button = document.querySelector("#btn-send");
@@ -2818,6 +2901,18 @@ async function submitSend() {
     toast("收件太多");
     return;
   }
+  const ccParts = splitAddresses(ccInput ? ccInput.value : "");
+  const bccParts = splitAddresses(bccInput ? bccInput.value : "");
+  const cc = ccParts.map((item) => normalizeAddress(extractEmail(item))).filter(Boolean);
+  const bcc = bccParts.map((item) => normalizeAddress(extractEmail(item))).filter(Boolean);
+  if (cc.length !== ccParts.length || bcc.length !== bccParts.length) {
+    toast("抄送或密送地址格式有误");
+    return;
+  }
+  if (cc.length > 20 || bcc.length > 20) {
+    toast("抄送或密送太多");
+    return;
+  }
   if (button) button.disabled = true;
   try {
     const payload = {
@@ -2826,6 +2921,8 @@ async function submitSend() {
       subject: subjectInput ? subjectInput.value : "",
       text: textInput ? textInput.value : "",
     };
+    if (cc.length > 0) payload.cc = cc;
+    if (bcc.length > 0) payload.bcc = bcc;
     if (replyContext && replyContext.inReplyTo) {
       payload.inReplyTo = replyContext.inReplyTo;
       payload.references = replyContext.references;
@@ -2835,7 +2932,10 @@ async function submitSend() {
       body: payload,
     });
     replyContext = null;
+    rememberFrom(from);
     if (toInput) toInput.value = "";
+    if (ccInput) ccInput.value = "";
+    if (bccInput) bccInput.value = "";
     if (subjectInput) subjectInput.value = "";
     if (textInput) textInput.value = "";
     toast(queued.dkim === "signed" ? "已排队，并签了 DKIM" : "已排队，没有签名");
@@ -3023,7 +3123,7 @@ function dkimAlgLabel(alg) {
 }
 
 async function generateDkim(domain, selector) {
-  const name = (selector || "flytrap").trim().toLowerCase();
+  const name = (selector || "mail").trim().toLowerCase();
   const algorithm = selectedDkimAlg();
   const exists = dkimKeys.some((key) => key.domain === domain && key.selector === name);
   if (exists && !(await askConfirm("重新生成后，原来的 DNS 记录要换成新的。"))) return;
@@ -3179,10 +3279,23 @@ async function pollLive() {
       items.every((item, index) => item.id === currentMessages[index]?.id && item.label === currentMessages[index]?.label && item.read === currentMessages[index]?.read);
     if (same) return;
     if (currentView === "trash") await reloadTrash();
-    else await reloadMessages();
+    else {
+      mergeFreshMail(items);
+      // The response was a full page, so anything missing has left this view.
+      if (items.length < 40) removeStaleMail(items);
+    }
   } catch {
     // The next tick tries again.
   }
+}
+
+function removeStaleMail(items) {
+  const kept = new Set(items.map((item) => item.id));
+  for (const item of currentMessages) {
+    if (kept.has(item.id)) continue;
+    findByDataId(listEl, ".mail-item", item.id)?.remove();
+  }
+  currentMessages = currentMessages.filter((item) => kept.has(item.id));
 }
 
 function mergeFreshMail(items) {
@@ -3540,7 +3653,7 @@ function formatRawHeaders(detail) {
   if (detail.envelopeTo) lines.push(`Delivered-To: ${Array.isArray(detail.envelopeTo) ? detail.envelopeTo.join(", ") : detail.envelopeTo}`);
   if (detail.subject) lines.push(`Subject: ${detail.subject}`);
   if (detail.receivedAt) lines.push(`Date: ${new Date(detail.receivedAt).toUTCString()}`);
-  if (detail.smtpMeta) lines.push(`X-Flytrap-Smtp: ${JSON.stringify(detail.smtpMeta)}`);
+  if (detail.smtpMeta) lines.push(`X-Mail-Smtp: ${JSON.stringify(detail.smtpMeta)}`);
   return lines.join("\n");
 }
 

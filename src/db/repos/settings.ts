@@ -34,7 +34,7 @@ export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "low";
 
 export const DEFAULT_JOB_MAX_ATTEMPTS = 5;
 export const MAX_JOB_ATTEMPTS = 20;
-export const DEFAULT_PANEL_TITLE = "Flytrap";
+export const DEFAULT_PANEL_TITLE = "邮箱";
 export const MAX_PANEL_TITLE = 40;
 export const MAX_LABEL_NAME = 16;
 export const MAX_DOMAIN_NAME = 24;

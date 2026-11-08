@@ -35,7 +35,7 @@ export function notifyPayload(input: NotifyInput): {
 
 export function notifyText(input: NotifyInput): string {
   return [
-    `Flytrap ${input.label} (${input.confidence.toFixed(2)})`,
+    `[${input.label}] (${input.confidence.toFixed(2)})`,
     input.subject ? `Subject: ${input.subject}` : "",
     input.from ? `From: ${input.from}` : "",
     input.summary,

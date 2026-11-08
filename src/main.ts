@@ -159,6 +159,9 @@ async function boot(stops: Array<() => Promise<void>>): Promise<void> {
               baseUrl: config.openaiBaseUrl ?? "",
               resolve: () => readEffectiveAiPool(db, fallbackAiPool(config)),
             });
+    if (config.classifier !== "fake" && readEffectiveAiPool(db, fallbackAiPool(config)).keys.length === 0) {
+      log.warn("no AI key configured yet; classification waits until a key is saved in the panel");
+    }
     const notifiers: Notifier[] = [];
     if (config.notifyWebhookUrl) {
       notifiers.push(createWebhookNotifier({ url: config.notifyWebhookUrl, bearer: config.notifyWebhookBearer }));
@@ -184,6 +187,7 @@ async function boot(stops: Array<() => Promise<void>>): Promise<void> {
       promptsDir: config.promptsDir,
       panelBaseUrl: config.panelBaseUrl ?? `http://127.0.0.1:${config.apiPort}`,
       pollMs: config.workerPollMs,
+      diskAlertBytes: config.diskAlertBytes,
     });
     stops.push(() => worker.close());
     log.info({ workerId: worker.workerId, classifier: classifier.id, notifiers: notifiers.map((item) => item.id) }, "worker started");

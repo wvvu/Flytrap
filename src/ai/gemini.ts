@@ -1,4 +1,5 @@
 import { scrubSecrets, keyTail } from "./secret.js";
+import { MISSING_API_KEY_MESSAGE } from "./pool.js";
 
 export type ThinkingLevel = "off" | "low" | "medium" | "high";
 
@@ -130,7 +131,7 @@ export function createGeminiClassifier(options: GeminiClassifierOptions): Gemini
     model,
     async classify(input: ClassifyInput) {
       const pool = snapshot();
-      if (pool.keys.length === 0) throw new Error("no api key configured");
+      if (pool.keys.length === 0) throw new Error(MISSING_API_KEY_MESSAGE);
       const secrets = pool.keys.map((item) => item.secret);
       let lastErr: Error | null = null;
 

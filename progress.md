@@ -26,17 +26,17 @@
 
 ### 一、高优先级（架构 / 配置双轨制收尾）
 
-- [ ] **打通 `.env` 与面板 AI 密钥配置**
+- [x] **打通 `.env` 与面板 AI 密钥配置**（2026-11-08 已做，未推库：`config.ts` 放宽启动要求，gemini 无 Key 可启动，openai-compat 只留 `OPENAI_BASE_URL` 必填；无 Key 时分类任务 `releaseJob` 暂缓 60 秒、不耗重试；面板保存 AI 设置后只要 AI 开着就 `wakeClassifyJobs` 立即激活；启动时无 Key 打 warning 日志）
   - **痛点**：当前在 `.env` 写了 `CLASSIFIER=gemini` 但没填 Key（想进面板再填），启动时会被 `config.ts` 强行拦截退出；设为 `fake` 启动后在面板配了 Key，Worker 又不工作。
   - **涉及文件**：`src/config.ts`、`src/worker/job-classify.ts`
   - **做法**：放宽 `config.ts` 启动时必须有 Key 的报错，允许无 Key 启动；分类任务在发现没 Key 时不消耗重试次数，暂缓或跳过，面板配好 Key 并保存后调 `wakeClassifyJobs` 立即激活。
 
-- [ ] **启用 `DISK_ALERT_BYTES` 磁盘容量告警**
+- [x] **启用 `DISK_ALERT_BYTES` 磁盘容量告警**（2026-11-08 已做，未推库：新增 `src/worker/disk-alert.ts`，`dirSizeBytes` 递归统计、`checkDiskAlert` 超限打 warning 日志；Worker 启动时立即查一次，之后每 15 分钟查一次，`diskAlertBytes` 为 0 时不挂定时器）
   - **痛点**：`.env.example` 和 `src/config.ts` 都定义了该变量，但代码中没有任何地方调用。
   - **涉及文件**：`src/worker/loop.ts`、`src/main.ts`
   - **做法**：在 Worker 启动时根据 `diskAlertBytes` 挂一个每 15 分钟异步统计 `dataDir` 大小的定时器（递归计算文件大小），超限时打 warning 日志。
 
-- [ ] **全仓 100% 中性化（去 Flytrap 项目名）**
+- [x] **全仓 100% 中性化（去 Flytrap 项目名）**（2026-11-08 已做，未推库：面板标题默认 `"邮箱"`、主题键 `mail_theme`（读一次旧键并迁移）、Cookie `mail.sid`、Telegram 首行 `[label] (0.90)`、DKIM 默认选择器 `mail`、原始信头展示 `X-Mail-Smtp`；注意：Cookie 改名后已登录会话失效一次，需重新登录；已生成的 DKIM 密钥不受影响，只影响新生成的）
   - **痛点**：面板希望作为无品牌的私人小邮局使用。目前残留 7 处硬编码项目名。
   - **涉及文件**：`src/api/public/index.html`、`src/api/public/app.js`、`src/api/public/boot.js`、`src/db/repos/settings.ts`、`src/api/app.ts`、`src/mail/dkim.ts`、`src/notify/types.ts`
   - **做法**：
@@ -50,7 +50,7 @@
 
 ### 二、中优先级（界面动线与设置页重塑）
 
-- [ ] **最左栏（Icon Rail）动线排布重塑**
+- [x] **最左栏（Icon Rail）动线排布重塑**（2026-11-08 已做，未推库：仅改 `index.html` 顺序，上半区收件箱 → 已拦截 → 发信 → 垃圾桶，设置沉到左下角主题切换上方，带失败任务角标；无需改 CSS）
   - **痛点**：「发信」横插在「收件箱」和「已拦截」中间打断了查信动线；「设置」作为低频操作与日常信箱混在顶部。
   - **涉及文件**：`src/api/public/index.html`、`src/api/public/app.css`
   - **做法**：
@@ -82,30 +82,30 @@
 
 ### 三、低优先级（日常收发信体验打磨）
 
-- [ ] **点击「回复」自动填入发件人别名**
+- [x] **点击「回复」自动填入发件人别名**（2026-11-08 已做，未推库：`startReply()` 取 `envelopeTo` 第一个地址填 `#send-from`，没有时用上次使用的；发信成功后把发件人记到 `localStorage` 的 `mail_last_from`，新写信时自动填）
   - **痛点**：Catch-all 模式下，对方可能寄到 `me@domainA` 或 `work@domainB`。目前点回复发件人是空的，需要手敲回忆。
   - **涉及文件**：`src/api/public/app.js`
   - **做法**：在 `startReply()` 中读取当前信的 `envelopeTo`，匹配出属于当前收信域名的地址自动填入 `#send-from`；日常写信时记住上一次使用的发件人地址到 `localStorage`。
 
-- [ ] **发信支持「发件人称呼（Display Name）」与界面抄送/密送**
+- [x] **发信支持「发件人称呼（Display Name）」与界面抄送/密送**（2026-11-08 已做，未推库：发信接口在 `mailbox_history` 查发件地址的称呼，拼成 `From: 名称 <地址>`；发信表单加「抄送 / 密送」展开按钮和两个输入框，抄送进信头、密送只在信封）
   - **痛点**：后端底层早已支持 Cc/Bcc 和别名记录，但前端发信界面没画输入框，发信也只发裸邮箱地址。
   - **涉及文件**：`src/mail/submit.ts`、`src/api/public/index.html`、`src/api/public/app.js`
   - **做法**：后端发信时在 `mailbox_history` 查询发件人是否有设置称呼，拼入 `From: Display Name <email>`；前端收件人右侧加小按钮展开 Cc / Bcc 输入框。
 
-- [ ] **点开邮件合并网络请求**
+- [x] **点开邮件合并网络请求**（2026-11-08 已做，未推库：`/v1/messages/:id/html` 顺带返回 `headers`，前端直接用，失败时才单独调 `/headers`；`/headers` 接口保留作兜底）
   - **痛点**：点开一封信同时请求详情、`/html` 和 `/headers`，后两者各自去磁盘解压一次原始邮件。
   - **涉及文件**：`src/api/app.ts`、`src/api/public/app.js`
   - **做法**：在 `/v1/messages/:id/html` 返回结果中顺带返回解压后解析好的 `headers`，前端免调 `/headers` 请求，节省一次磁盘 I/O 和内存解压。
 
-- [ ] **15 秒后台轮询改为无感增量更新**
+- [x] **15 秒后台轮询改为无感增量更新**（2026-11-08 已做，未推库：短列表（<40 封）轮询不再 `reloadMessages()` 全量重绘，改走 `mergeFreshMail()` + `removeStaleMail()`，被 AI 移走的信从 DOM 里 `.remove()`；超过 40 封的长列表本来就走增量，不动）
   - **痛点**：列表信件较少时，轮询发现新信会调用 `reloadMessages()` 清空 DOM 重绘，导致滚动条回顶闪烁。
   - **涉及文件**：`src/api/public/app.js`
   - **做法**：废弃 `reloadMessages()`，统一走 `mergeFreshMail()` 增量插入新信，并把被 AI 移走或判成垃圾的信从当前 DOM 中 `.remove()`。
 
-- [ ] **收件箱「正事 / 推广」胶囊切换**
+- [x] **收件箱「正事 / 推广」胶囊切换**（2026-11-08 已做，未推库）
   - **痛点**：把大厂推广信与钓鱼木马一起扔进「已拦截」显得过重，放在收件箱又淹没重要通知。
   - **涉及文件**：`src/api/public/index.html`、`src/api/public/app.js`
-  - **做法**：收件箱顶部放两个小胶囊 `[ 正事 ]` | `[ 推广 ]`；默认看正事，随时可切推广浏览或清空。
+  - **做法**：收件箱顶部刷新按钮左侧放一个「推广」小按钮（复用现成的 `.pill.pill-promo` 样式），不是两个胶囊；点一下只看推广（`label=unsolicited-admin`），按钮变紫、标题变「推广」，再点一下回正常。15 秒轮询自动沿用当前模式；推广里改成正常、或正常里改成推广的信会从当前列表消失；切走别的栏目再回来自动回正常。未读数暂不挂：`/v1/unread` 只有收件箱和已拦截两个数，推广没有单独的数。
 
 ---
 

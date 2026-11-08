@@ -3,6 +3,8 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 export interface ComposeTextInput {
   from: string;
+  /** Display name for the From header. Omitted when the sender has none. */
+  fromName?: string;
   to: readonly string[];
   cc: readonly string[];
   subject: string;
@@ -17,7 +19,7 @@ export interface ComposeTextInput {
 export function composeText(input: ComposeTextInput): Buffer {
   const encoded = encodeBody(input.text);
   const lines = [
-    `From: ${input.from}`,
+    `From: ${formatFrom(input.fromName, input.from)}`,
     foldAddressHeader("To", input.to),
     input.cc.length > 0 ? foldAddressHeader("Cc", input.cc) : "",
     `Subject: ${encodeHeader(input.subject)}`,
@@ -29,6 +31,12 @@ export function composeText(input: ComposeTextInput): Buffer {
     `Content-Transfer-Encoding: ${encoded.cte}`,
   ].filter((line) => line.length > 0);
   return Buffer.from(`${lines.join("\r\n")}\r\n\r\n${encoded.body}`, "utf8");
+}
+
+function formatFrom(name: string | undefined, address: string): string {
+  const clean = (name ?? "").trim().replace(/["<>\r\n]/g, "");
+  if (!clean) return address;
+  return `${encodeHeader(clean)} <${address}>`;
 }
 
 function replyHeaders(input: ComposeTextInput): string[] {

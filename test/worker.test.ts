@@ -14,6 +14,8 @@ import { saveBlockedSenders } from "../src/db/repos/settings.js";
 import { insertMessage } from "../src/db/repos/messages.js";
 import { storeRaw } from "../src/ingest/store-raw.js";
 import { fakeClassifier } from "../src/ai/classifier.js";
+import { MISSING_API_KEY_MESSAGE } from "../src/ai/pool.js";
+import { checkDiskAlert, dirSizeBytes } from "../src/worker/disk-alert.js";
 import type { AppLog } from "../src/log.js";
 import { authResultSchema, authenticateMessage, DnsTimeoutError, type AuthResult } from "../src/mail/auth.js";
 import { defaultPromptsDir, migrationsDir } from "../src/paths.js";
@@ -179,6 +181,65 @@ test("dns failures stop after three tries and the body is still parsed", async (
     assert.equal((db.prepare("SELECT status FROM messages WHERE id = ?").get(messageId) as { status: string }).status, "parsed");
   } finally {
     db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a classify job with no api key waits instead of burning an attempt", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-nokey-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  try {
+    const messageId = await seed(db, dir, Buffer.from("Subject: plain\r\n\r\njust text\r\n"));
+    let clock = 1_000_000;
+    const base = workerOptions(db, dir, async () => failedAuth(), () => clock);
+    assert.equal(await processNext(base, "worker-nokey"), true);
+    assert.equal(await processNext(base, "worker-nokey"), true);
+    assert.equal((db.prepare("SELECT status FROM messages WHERE id = ?").get(messageId) as { status: string }).status, "parsed");
+    assert.equal(jobStatus(db, "classify"), "queued");
+    const throwing: WorkerOptions = {
+      ...base,
+      classifier: {
+        id: "no-key",
+        model: "no-key",
+        async classify() {
+          throw new Error(MISSING_API_KEY_MESSAGE);
+        },
+      },
+    };
+    assert.equal(await processNext(throwing, "worker-nokey"), true);
+    const row = db.prepare("SELECT status, attempts, run_after FROM jobs WHERE type = 'classify'").get() as {
+      status: string;
+      attempts: number;
+      run_after: number;
+    };
+    assert.equal(row.status, "queued");
+    assert.equal(row.attempts, 0);
+    assert.equal(row.run_after, clock + 60_000);
+    assert.equal(await processNext(throwing, "worker-nokey"), false);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("disk alert measures a directory tree and warns only over the limit", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-disk-"));
+  try {
+    fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "a"), Buffer.alloc(100));
+    fs.writeFileSync(path.join(dir, "sub", "b"), Buffer.alloc(50));
+    assert.equal(await dirSizeBytes(dir), 150);
+    assert.equal(await dirSizeBytes(path.join(dir, "missing")), 0);
+    const warned: Array<{ bytes: number; limitBytes: number }> = [];
+    const log: AppLog = { ...silent, warn(obj: unknown) { warned.push(obj as { bytes: number; limitBytes: number }); } };
+    assert.deepEqual(await checkDiskAlert({ dataDir: dir, limitBytes: 200, log }), { bytes: 150, over: false });
+    assert.equal(warned.length, 0);
+    assert.deepEqual(await checkDiskAlert({ dataDir: dir, limitBytes: 100, log }), { bytes: 150, over: true });
+    assert.equal(warned.length, 1);
+    assert.equal(warned[0]?.bytes, 150);
+    assert.equal(warned[0]?.limitBytes, 100);
+  } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

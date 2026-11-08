@@ -178,6 +178,8 @@ test("the api requires a session, hides paths, and pages the list", async () => 
     assert.equal(htmlRes.statusCode, 200);
     assert.equal(typeof htmlRes.json().html, "string");
     assert.equal(htmlRes.json().subject, "invoice");
+    // The html response carries the RFC822 headers too, so the panel opens a mail with one request.
+    assert.match(htmlRes.json().headers, /Subject: invoice/);
 
     await client.csrf(app);
     const reclassify = await client.post(app, "/v1/messages/msg_visible/reclassify", {});
@@ -212,6 +214,18 @@ test("the api requires a session, hides paths, and pages the list", async () => 
     assert.equal(named.statusCode, 201);
     const namedHistory = await client.get(app, "/v1/mailbox-history?domain=example.com");
     assert.equal((namedHistory.json().items as Array<{ displayName: string | null }>)[0]?.displayName, "管理");
+
+    // The name from mailbox history goes on the From line of outgoing mail.
+    const queued = await client.post(app, "/v1/outbox", {
+      from: "admin@example.com",
+      to: ["friend@example.net"],
+      subject: "你好",
+      text: "正文",
+    });
+    assert.equal(queued.statusCode, 202);
+    const letter = await client.get(app, `/v1/outbox/${queued.json().id}/raw`);
+    assert.equal(letter.statusCode, 200);
+    assert.match(letter.body, /^From: =\?UTF-8\?B\?[^ ]+ <admin@example\.com>/m);
 
     const patchRes = await client.patch(app, "/v1/messages/msg_visible/label", { label: "legit" });
     assert.equal(patchRes.statusCode, 200);
@@ -443,7 +457,7 @@ test("settings override notify, domains, and the failure list", async () => {
     const saved = await client.get(app, "/v1/settings");
     assert.deepEqual(saved.json().acceptDomains, ["example.com", "other.test"]);
     assert.equal(saved.json().jobMaxAttempts, 3);
-    assert.equal(saved.json().panelTitle, "Flytrap");
+    assert.equal(saved.json().panelTitle, "邮箱");
     assert.equal(saved.json().labelNames.phish, "钓鱼");
 
     const names = await client.put(app, "/v1/settings/names", {

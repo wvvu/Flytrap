@@ -105,18 +105,24 @@ test("production refuses the placeholder secret and the password admin", () => {
   assert.equal(config.nodeEnv, "production");
 });
 
-test("worker with openai-compat requires the model settings", () => {
+test("worker with openai-compat requires only the base URL; key and model may come from the panel", () => {
   assert.throws(() => loadConfig(env({ ROLES: "worker", CLASSIFIER: "openai-compat" })), /OPENAI_BASE_URL/);
   const config = loadConfig(
     env({
       ROLES: "worker",
       CLASSIFIER: "openai-compat",
       OPENAI_BASE_URL: "https://llm.example/v1",
-      OPENAI_API_KEY: "sk-test",
-      OPENAI_MODEL: "gpt-test",
     }),
   );
-  assert.equal(config.openaiModel, "gpt-test");
+  assert.equal(config.openaiBaseUrl, "https://llm.example/v1");
+  assert.equal(config.openaiApiKey, undefined);
+  assert.equal(config.openaiModel, undefined);
+});
+
+test("worker with gemini boots with no key; classification waits for one", () => {
+  const config = loadConfig(env({ ROLES: "worker", CLASSIFIER: "gemini" }));
+  assert.equal(config.classifier, "gemini");
+  assert.deepEqual(config.geminiApiKeys, []);
 });
 
 test("tls files must be paired and unknown roles fail", () => {
