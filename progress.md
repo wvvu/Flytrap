@@ -36,7 +36,7 @@
   - **涉及文件**：`src/worker/loop.ts`、`src/main.ts`
   - **做法**：在 Worker 启动时根据 `diskAlertBytes` 挂一个每 15 分钟异步统计 `dataDir` 大小的定时器（递归计算文件大小），超限时打 warning 日志。
 
-- [x] **全仓 100% 中性化（去 Flytrap 项目名）**（2026-11-08 已做，未推库：面板标题默认 `"邮箱"`、主题键 `mail_theme`（读一次旧键并迁移）、Cookie `mail.sid`、Telegram 首行 `[label] (0.90)`、DKIM 默认选择器 `mail`、原始信头展示 `X-Mail-Smtp`；注意：Cookie 改名后已登录会话失效一次，需重新登录；已生成的 DKIM 密钥不受影响，只影响新生成的）
+- [x] **全仓 100% 中性化（去 Flytrap 项目名）**（2026-11-08 已做，未推库：面板标题默认 `"邮箱"`、主题键 `mail_theme`（读一次旧键并迁移）、Cookie `mail.sid`、Telegram 首行 `[label] (0.90)`、DKIM 默认选择器 `mail`、原始信头展示 `X-Mail-Smtp`；注意：Cookie 改名后已登录会话失效一次，需重新登录；已生成的 DKIM 密钥不受影响，只影响新生成的。2026-11-09 跟进：删掉 `#panel-name` eyebrow（html/js/css 三处），并让已存库里的旧 `"Flytrap"` 标题读作默认 `"邮箱"`，否则旧标题还会从浏览器标签页冒出来）
   - **痛点**：面板希望作为无品牌的私人小邮局使用。目前残留 7 处硬编码项目名。
   - **涉及文件**：`src/api/public/index.html`、`src/api/public/app.js`、`src/api/public/boot.js`、`src/db/repos/settings.ts`、`src/api/app.ts`、`src/mail/dkim.ts`、`src/notify/types.ts`
   - **做法**：

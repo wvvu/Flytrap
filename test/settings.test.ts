@@ -57,6 +57,16 @@ test("an empty settings table keeps the environment defaults", () => {
   }
 });
 
+test("a stored pre-debrand panel title reads as the new default", () => {
+  const db = tempDb();
+  try {
+    saveNameSettings(db, { panelTitle: "Flytrap", labelNames: {}, domainNames: {}, senderNames: [] }, 1);
+    assert.equal(readRuntimeSettings(db, defaults).panelTitle, "邮箱");
+  } finally {
+    db.close();
+  }
+});
+
 test("a blocked sender is stored once, and a bad address is refused", () => {
   const db = tempDb();
   try {

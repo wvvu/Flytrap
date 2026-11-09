@@ -2315,12 +2315,6 @@ function applyAppearance(settings) {
   );
   const mark = document.querySelector("#rail-mark");
   if (mark) mark.title = panelTitle;
-  const eyebrow = document.querySelector("#panel-name");
-  if (eyebrow) {
-    const custom = panelTitle !== "邮箱";
-    eyebrow.hidden = !custom;
-    eyebrow.textContent = custom ? panelTitle : "";
-  }
   for (const select of [filterSelect, detailVerdictSelect]) {
     if (!select) continue;
     for (const option of select.options) {
