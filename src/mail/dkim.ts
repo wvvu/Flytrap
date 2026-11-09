@@ -2,7 +2,7 @@ import { generateKeyPairSync, type KeyObject } from "node:crypto";
 import { dkimSign } from "mailauth";
 import { OutboundError } from "./address.js";
 
-export const DEFAULT_DKIM_SELECTOR = "flytrap";
+export const DEFAULT_DKIM_SELECTOR = "mail";
 
 const SELECTOR_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");

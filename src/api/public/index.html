@@ -88,30 +88,29 @@
       <!-- 第一列: 全局主功能轨 (Icon / Global Rail) -->
       <nav class="rail" aria-label="全局导航">
         <div class="rail-top">
-          <div class="logo-mark" id="rail-mark" title="Flytrap"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></div>
+          <div class="logo-mark" id="rail-mark" title="邮箱"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></div>
           <button type="button" class="rail-btn active" id="nav-inbox" title="收件箱">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-inbox"></use></svg></span>
             <span class="label">收件箱</span>
-          </button>
-          <button type="button" class="rail-btn" id="nav-send" title="发信">
-            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-send"></use></svg></span>
-            <span class="label">发信</span>
           </button>
           <button type="button" class="rail-btn" id="nav-spam" title="已拦截">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spam"></use></svg></span>
             <span class="label">已拦截</span>
           </button>
+          <button type="button" class="rail-btn" id="nav-send" title="发信">
+            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-send"></use></svg></span>
+            <span class="label">发信</span>
+          </button>
           <button type="button" class="rail-btn" id="nav-trash" title="垃圾桶">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trash"></use></svg></span>
             <span class="label">垃圾桶</span>
           </button>
-          <button type="button" class="rail-btn" id="nav-settings" title="设置">
-            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"></use></svg></span>
-            <span class="label">设置</span>
-            <span class="badge badge-alert" id="badge-dlq" hidden>0</span>
-          </button>
         </div>
         <div class="rail-bottom">
+          <button type="button" class="rail-btn-sm" id="nav-settings" title="设置">
+            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"></use></svg></span>
+            <span class="badge badge-alert" id="badge-dlq" hidden>0</span>
+          </button>
           <button type="button" class="rail-btn-sm" id="btn-theme" title="切换深浅色">
             <span class="icon" id="theme-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sun"></use></svg></span>
           </button>
@@ -123,12 +122,12 @@
 
       <!-- 第二列: 分流与列表检索 (Contextual Stream) -->
       <aside class="stream">
-        <p id="panel-name" class="stream-eyebrow" hidden></p>
         <!-- 收件箱模式的顶部过滤栏 -->
         <div id="stream-inbox-header" class="stream-header">
           <div class="stream-title-row">
             <h2 id="stream-title">收件箱</h2>
             <div class="stream-actions">
+              <button type="button" id="btn-promo" class="pill pill-promo" title="只看推广" aria-pressed="false">推广</button>
               <button type="button" id="btn-refresh" class="btn-icon" title="刷新 (R)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
           </div>
@@ -387,6 +386,17 @@
                   <span class="name-key">收件</span>
                   <input id="send-to" maxlength="2000" autocomplete="off" required placeholder="多个地址用逗号分开">
                 </label>
+                <div class="inline-row">
+                  <button type="button" id="btn-cc-toggle" class="btn-sm">抄送 / 密送</button>
+                </div>
+                <label class="name-row" id="send-cc-row" hidden>
+                  <span class="name-key">抄送</span>
+                  <input id="send-cc" maxlength="2000" autocomplete="off" placeholder="多个地址用逗号分开">
+                </label>
+                <label class="name-row" id="send-bcc-row" hidden>
+                  <span class="name-key">密送</span>
+                  <input id="send-bcc" maxlength="2000" autocomplete="off" placeholder="多个地址用逗号分开">
+                </label>
                 <label class="name-row">
                   <span class="name-key">主题</span>
                   <input id="send-subject" maxlength="200" autocomplete="off">
@@ -413,7 +423,7 @@
               </div>
               <label class="name-row">
                 <span class="name-key">面板</span>
-                <input id="panel-title" maxlength="40" autocomplete="off" placeholder="Flytrap">
+                <input id="panel-title" maxlength="40" autocomplete="off" placeholder="邮箱">
               </label>
               <h3 class="field-title">分类</h3>
               <div id="label-names" class="name-grid"></div>

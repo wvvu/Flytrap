@@ -34,7 +34,7 @@ export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "low";
 
 export const DEFAULT_JOB_MAX_ATTEMPTS = 5;
 export const MAX_JOB_ATTEMPTS = 20;
-export const DEFAULT_PANEL_TITLE = "Flytrap";
+export const DEFAULT_PANEL_TITLE = "邮箱";
 export const MAX_PANEL_TITLE = 40;
 export const MAX_LABEL_NAME = 16;
 export const MAX_DOMAIN_NAME = 24;
@@ -382,7 +382,11 @@ function readPanelTitle(db: Db): string {
   const raw = readRaw(db, SETTING_PANEL_TITLE);
   if (raw === null) return DEFAULT_PANEL_TITLE;
   try {
-    return cleanName(raw, 1, MAX_PANEL_TITLE, "panel title");
+    const title = cleanName(raw, 1, MAX_PANEL_TITLE, "panel title");
+    // The old default brand name: databases that stored it before the de-brand
+    // read as unset, so the old name never surfaces again.
+    if (title === "Flytrap") return DEFAULT_PANEL_TITLE;
+    return title;
   } catch {
     return DEFAULT_PANEL_TITLE;
   }

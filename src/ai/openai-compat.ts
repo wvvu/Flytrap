@@ -1,4 +1,5 @@
 import { scrubSecrets } from "./secret.js";
+import { MISSING_API_KEY_MESSAGE } from "./pool.js";
 import { finalizeAiResult, parseModelJson, parseModelOutput } from "./types.js";
 import type { Classifier, ClassifyInput } from "./classifier.js";
 
@@ -28,7 +29,7 @@ export function createOpenAiClassifier(options: OpenAiCompatOptions): Classifier
           };
       const models = pool.models.map((item) => item.trim()).filter(Boolean);
       const keys = pool.keys.map((item) => ({ ...item, secret: item.secret.trim() })).filter((item) => item.secret);
-      if (models.length === 0 || keys.length === 0) throw new Error("no api key configured");
+      if (models.length === 0 || keys.length === 0) throw new Error(MISSING_API_KEY_MESSAGE);
       const secrets = keys.map((item) => item.secret);
       let lastErr: Error | null = null;
       for (const modelName of models) {

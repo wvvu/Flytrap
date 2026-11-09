@@ -48,10 +48,20 @@ test("an empty settings table keeps the environment defaults", () => {
     assert.equal(settings.notifyMinConfidence, 0.6);
     assert.deepEqual(settings.acceptDomains, ["example.com"]);
     assert.equal(settings.jobMaxAttempts, 5);
-    assert.equal(settings.panelTitle, "Flytrap");
+    assert.equal(settings.panelTitle, "邮箱");
     assert.equal(settings.labelNames.phish, "钓鱼");
     assert.deepEqual(settings.domainNames, {});
     assert.deepEqual(settings.senderNames, []);
+  } finally {
+    db.close();
+  }
+});
+
+test("a stored pre-debrand panel title reads as the new default", () => {
+  const db = tempDb();
+  try {
+    saveNameSettings(db, { panelTitle: "Flytrap", labelNames: {}, domainNames: {}, senderNames: [] }, 1);
+    assert.equal(readRuntimeSettings(db, defaults).panelTitle, "邮箱");
   } finally {
     db.close();
   }

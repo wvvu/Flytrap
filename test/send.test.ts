@@ -133,7 +133,7 @@ test("outbound mail is stored, signed when a key exists, and not received as new
     });
     assert.equal(signed.domainKnown, true);
     assert.equal(signed.dkim, "signed");
-    assert.equal(signed.selector, "flytrap");
+    assert.equal(signed.selector, "mail");
 
     const row = getOutbox(db, signed.id);
     assert.ok(row);
@@ -235,7 +235,7 @@ test("the panel can queue a letter for a domain that was not added", async () =>
 
     const key = await client.post(app, "/v1/dkim", { domain: "example.com" });
     assert.equal(key.statusCode, 200);
-    assert.equal(key.json().dnsName, "flytrap._domainkey.example.com");
+    assert.equal(key.json().dnsName, "mail._domainkey.example.com");
     assert.match(key.json().txt, /^v=DKIM1; k=rsa; p=/);
     assert.equal(JSON.stringify(key.json()).includes("PRIVATE"), false);
 
@@ -247,6 +247,32 @@ test("the panel can queue a letter for a domain that was not added", async () =>
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("composeText puts a display name on From and keeps Bcc off the header", () => {
+  const raw = composeText({
+    from: "a@example.com",
+    fromName: "小明",
+    to: ["b@example.com"],
+    cc: ["c@example.com"],
+    subject: "s",
+    text: "t",
+    messageId: "m3@example.com",
+    date: new Date(1_000_000),
+  });
+  const text = raw.toString("utf8");
+  assert.match(text, /^From: =\?UTF-8\?B\?[^ ]+ <a@example\.com>/m);
+  assert.match(text, /^Cc: c@example\.com/m);
+  const plain = composeText({
+    from: "a@example.com",
+    to: ["b@example.com"],
+    cc: [],
+    subject: "s",
+    text: "t",
+    messageId: "m4@example.com",
+    date: new Date(1_000_000),
+  });
+  assert.match(plain.toString("utf8"), /^From: a@example\.com\r\n/m);
 });
 
 test("composeText preserves multi-byte UTF-8 subject and base64 encodes long ASCII lines", async () => {

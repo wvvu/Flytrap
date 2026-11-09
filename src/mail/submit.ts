@@ -13,6 +13,7 @@ import { normalizeMessageId, threadKeyOf } from "./thread.js";
 
 export interface SubmitInput {
   from: string;
+  fromName?: string;
   to: readonly string[];
   cc?: readonly string[];
   bcc?: readonly string[];
@@ -80,6 +81,7 @@ export async function submitOutbox(deps: SubmitDeps, input: SubmitInput): Promis
   const messageId = `${id}@${domain}`.toLowerCase();
   let raw = composeText({
     from,
+    fromName: input.fromName,
     to,
     cc,
     subject,

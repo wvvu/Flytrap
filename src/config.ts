@@ -175,19 +175,16 @@ function assertRoleRequirements(config: z.infer<typeof draftSchema>): void {
       }
     }
   }
+  // The API key and model may come from the panel later (settings table), so a
+  // keyless start is allowed: classify jobs wait instead of failing until a key
+  // is saved. Only the base URL cannot come from the panel, so it stays required.
   if (config.roles.includes("worker") && config.classifier === "openai-compat") {
     if (!config.openaiBaseUrl) problems.push("OPENAI_BASE_URL is required for the openai-compat classifier");
-    if (!config.openaiApiKey) problems.push("OPENAI_API_KEY is required for the openai-compat classifier");
-    if (!config.openaiModel) problems.push("OPENAI_MODEL is required for the openai-compat classifier");
     if (config.openaiBaseUrl && !isHttpUrl(config.openaiBaseUrl)) {
       problems.push("OPENAI_BASE_URL must be an http(s) URL");
     }
   }
-  if (config.roles.includes("worker") && config.classifier === "gemini") {
-    if (config.geminiApiKeys.length === 0) {
-      problems.push("GEMINI_API_KEYS (or GEMINI_API_KEY) is required for the gemini classifier");
-    }
-  }
+  // gemini needs no key at startup either: GEMINI_API_KEYS may be added in the panel.
   if (config.notifyWebhookUrl && !isHttpUrl(config.notifyWebhookUrl)) {
     problems.push("NOTIFY_WEBHOOK_URL must be an http(s) URL");
   }

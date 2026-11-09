@@ -12,6 +12,8 @@ import type { Authenticator } from "../mail/auth.js";
 import type { Notifier } from "../notify/types.js";
 import type { MailSender } from "../mail/deliver.js";
 import { createMxSender, SMTP_SOCKET_TIMEOUT_MS } from "../mail/deliver.js";
+import { MISSING_API_KEY_MESSAGE } from "../ai/pool.js";
+import { checkDiskAlert } from "./disk-alert.js";
 import { runAuthJob } from "./job-auth.js";
 import { runClassifyJob } from "./job-classify.js";
 import { runNotifyJob } from "./job-notify.js";
@@ -34,6 +36,10 @@ export interface WorkerOptions {
   ehloName?: string;
   sendMail?: MailSender;
   pollMs?: number;
+  /** 0 or unset disables the disk alert. */
+  diskAlertBytes?: number;
+  /** Test hook. Defaults to 15 minutes. */
+  diskAlertIntervalMs?: number;
   now?: () => number;
   shutdownWaitMs?: number;
   workerId?: string;
@@ -72,6 +78,19 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     now,
   });
 
+  let diskTimer: ReturnType<typeof setInterval> | undefined;
+  if ((options.diskAlertBytes ?? 0) > 0) {
+    const alertInput = { dataDir: options.dataDir, limitBytes: options.diskAlertBytes!, log: options.log };
+    const runAlert = () => {
+      void checkDiskAlert(alertInput).catch((err) =>
+        options.log.error({ err: err instanceof Error ? err.message : "disk alert failed" }, "disk alert failed"),
+      );
+    };
+    runAlert();
+    diskTimer = setInterval(runAlert, options.diskAlertIntervalMs ?? 15 * 60_000);
+    diskTimer.unref?.();
+  }
+
   return {
     workerId,
     settled: Promise.all([inbound.settled, send.settled]).then(
@@ -79,6 +98,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
       () => undefined,
     ),
     async close() {
+      if (diskTimer) clearInterval(diskTimer);
       await Promise.all([inbound.close(), send.close()]);
     },
   };
@@ -154,6 +174,13 @@ async function runClaimed(options: WorkerOptions, job: JobRow, now: () => number
     completeJob(options.db, job.id, now());
   } catch (err) {
     const message = err instanceof Error ? err.message : "job failed";
+    // No key yet is not a failure: the key may be saved in the panel later.
+    // Put the job back without spending an attempt, like classification off.
+    if (job.type === "classify" && message === MISSING_API_KEY_MESSAGE) {
+      releaseJob(options.db, job.id, now() + 60_000, now());
+      options.log.info({ jobId: job.id, messageId: job.message_id }, "classify deferred, no api key yet");
+      return;
+    }
     options.log.error({ jobId: job.id, type: job.type, messageId: job.message_id, err: message }, "job failed");
     const outcome = failJob(options.db, job.id, message, now());
     if (job.type === "send") {

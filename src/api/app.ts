@@ -21,7 +21,7 @@ import { getOutbox, listOutbox, listOutboxByIds } from "../db/repos/outbox.js";
 import { listThread } from "../db/repos/thread.js";
 import { fallbackAiPool } from "../ai/pool.js";
 import { presentAiPool, readAiEnabled, readAiThinking, readBlockedSenders, readEffectiveAiPool, readPasswordHash, readResetSeal, saveAcceptDomains, saveAiControls, saveAiPool, saveBlockedSenders, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, saveResetSeal, clearResetSeal, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
-import { listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
+import { findMailboxHistory, listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
 import { countTrash, countUnread, deleteMessage, emptyTrash, getMessage, listMessages, markMessageRead, restoreMessage, trashMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
 import { readRaw } from "../ingest/read-raw.js";
@@ -187,7 +187,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   const sessionTtlMs = config.sessionDays * 24 * 60 * 60 * 1000;
   await app.register(session, {
     secret: config.sessionSecret ?? "",
-    cookieName: "flytrap.sid",
+    cookieName: "mail.sid",
     saveUninitialized: false,
     rolling: true,
     store: sqliteSessionStore(db, sessionTtlMs),
@@ -381,7 +381,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       throw new HttpError(404, "not_found");
     }
     const email = await PostalMime.parse(bytes);
-    return { html: email.html ?? "", subject: email.subject ?? "" };
+    return { html: email.html ?? "", subject: email.subject ?? "", headers: rfc822HeaderBlock(bytes) };
   });
 
   app.get("/v1/messages/:id/raw", async (request, reply) => {
@@ -776,8 +776,9 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     }
     if (body.data.enabled !== undefined && body.data.thinking !== undefined) {
       saveAiControls(db, body.data.enabled, body.data.thinking, now());
-      if (body.data.enabled) wakeClassifyJobs(db, now());
     }
+    // Keys alone also wake deferred classify jobs when AI is on.
+    if (readAiEnabled(db)) wakeClassifyJobs(db, now());
     writeAudit(db, {
       id: ulid(),
       at: now(),
@@ -987,9 +988,13 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const body = sendBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     try {
+      // A name set for this sending address in mailbox history goes on the From line.
+      const at = body.data.from.lastIndexOf("@");
+      const history =
+        at > 0 ? findMailboxHistory(db, body.data.from.slice(at + 1), body.data.from.slice(0, at)) : undefined;
       const queued = await submitOutbox(
         { db, dataDir: config.mailDataDir, codec, acceptDomains: config.acceptDomains, now },
-        body.data,
+        { ...body.data, fromName: history?.display_name ?? undefined },
       );
       writeAudit(db, {
         id: ulid(),
