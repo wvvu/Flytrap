@@ -508,10 +508,35 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
 
 .rail-btn-sm:hover {
   background: var(--bg-card-hover);
+}
+
+.rail-btn-sm.active {
+  background: var(--bg-card-active);
+}
+
+.rail-btn-sm.active .icon {
+  color: var(--primary);
+}
+
+.rail-btn-sm .badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 1149px;
+  background: var(--border-strong);
+  color: #fff;
+}
+
+.rail-btn-sm .badge-alert {
+  background: var(--phish);
 }
 
 /* 第二列: 分流与列表检索 (Stream) */
