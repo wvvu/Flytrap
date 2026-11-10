@@ -69,7 +69,7 @@
       5. **界面与账号**：面板名称与分类显示名 + 修改密码。
     - **交互统一**：所有列表的「添加 / 移除 / 排序」点击后直接写库生效并 toast 提示，彻底消除保存假动作。
 
-- [ ] **`app.js` 拆分为原生 ES Modules**
+- [x] **`app.js` 拆分为原生 ES Modules**（2026-11-10 已做：3,660 行单文件 → 14 个模块，零行为改动，测试 85/85）
   - **痛点**：1,700 行单文件，顶部挂着 30 多个全局变量，缺少状态机，AI 局部打补丁容易遗漏状态重置。
   - **涉及文件**：`src/api/public/`
   - **做法**：坚决不引入 React/Vue/Webpack 等重型构建链，直接利用浏览器原生的 `<script type="module">`，拆为 4 个职责单一的文件：
@@ -77,6 +77,7 @@
     - `mail-view.js`：收件/拦截/垃圾桶列表、正文 iframe、AI 摘要条、分类与拉黑；
     - `send-view.js`：发信表单、已发信列表与详情、重发；
     - `settings-view.js`：各个设置板块的交互与异步保存。
+  - **实际落点（与上面 4 文件计划有出入）**：按 AST 依赖分析拆成了 14 个模块才没有循环引用 —— `constants.js`（常量）、`state.js`（49 个 let 收进一个 `state` 对象，跨模块只能读写 `state.xxx`）、`dom.js`（89 个元素引用）、`util.js`（纯函数，含 `replyAddress`/`quoteLetter`/`outboxStatus` 等回复推导）、`net.js`（`request`/`fetchCsrf`）、`ui.js`（提示/确认框/标题/未读数）、`nav.js`（`switchNav` 注册表，断开 dlq/send 与 shell 的环）、`shell.js`（主题/栏目切换）、`auth.js`（登录/启动引导/找回密码）、`mail-view.js`（859 行）、`dlq-view.js`、`settings-view.js`（964 行）、`send-view.js`、`app.js`（391 行入口，只剩事件绑定 + `init` + 15 秒轮询）。附带两处配套改动：`src/api/static.ts` 的 `PANEL_FILES` 白名单加了 12 个新模块（否则浏览器 import 会 404），`test/ui.test.ts` 的安全基线（no innerHTML / 无你我他 / 无 emoji / stripRemoteImages）改为覆盖全部 14 个 JS 文件。核对过：196 个函数、49 个 let、88 个 DOM 引用一个不少；依赖图是无环的；`node --check`、typecheck、全量测试、build 全过。
 
 ---
 

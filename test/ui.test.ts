@@ -55,6 +55,21 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.equal(script.statusCode, 200);
     assert.match(script.headers["content-type"] ?? "", /javascript/);
 
+    // Panel JS is split into ES modules; every module must serve, and the
+    // safety baselines below apply to all of them, not just the entry.
+    const panelModules = [
+      "constants.js", "state.js", "dom.js", "util.js", "net.js", "ui.js",
+      "nav.js", "shell.js", "auth.js", "mail-view.js", "dlq-view.js",
+      "settings-view.js", "send-view.js",
+    ];
+    let panelJs = script.body;
+    for (const mod of panelModules) {
+      const res = await app.inject({ method: "GET", url: "/" + mod });
+      assert.equal(res.statusCode, 200, mod);
+      assert.match(res.headers["content-type"] ?? "", /javascript/, mod);
+      panelJs += "\n" + res.body;
+    }
+
     const style = await app.inject({ method: "GET", url: "/app.css" });
     assert.equal(style.statusCode, 200);
     assert.match(style.headers["content-type"] ?? "", /text\/css/);
@@ -71,12 +86,12 @@ test("the panel is static and the mail API stays behind the session", async () =
     // --- security: CSP header ---
     assert.match(String(page.headers["content-security-policy"] ?? ""), /script-src 'self'/);
 
-    // --- security: no innerHTML anywhere in app.js ---
-    assert.equal(script.body.includes("innerHTML"), false);
+    // --- security: no innerHTML anywhere in panel JS ---
+    assert.equal(panelJs.includes("innerHTML"), false);
 
     // --- security: no first/second/third person pronouns (style rule) ---
     assert.equal(/[你我他]/.test(page.body), false);
-    assert.equal(/[你我他]/.test(script.body), false);
+    assert.equal(/[你我他]/.test(panelJs), false);
 
     // --- security: no legacy branding leaks ---
     assert.equal(page.body.includes("蜜罐"), false);
@@ -84,11 +99,11 @@ test("the panel is static and the mail API stays behind the session", async () =
 
     // --- security: no emoji in source (style rule) ---
     assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(page.body), false);
-    assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(script.body), false);
+    assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(panelJs), false);
 
     // --- security: remote images stripped by default, sandbox iframe present ---
-    assert.match(script.body, /stripRemoteImages/);
-    assert.match(script.body, /base-uri 'none'/);
+    assert.match(panelJs, /stripRemoteImages/);
+    assert.match(panelJs, /base-uri 'none'/);
     const guardAt = page.body.indexOf('id="preview-guard"');
     const imageAt = page.body.indexOf('id="btn-load-images"');
     assert.ok(guardAt > 0 && imageAt > guardAt);
