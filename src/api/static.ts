@@ -9,6 +9,19 @@ const PANEL_FILES: Record<string, { name: string; type: string }> = {
   "/boot.js": { name: "boot.js", type: "text/javascript; charset=utf-8" },
   "/app.css": { name: "app.css", type: "text/css; charset=utf-8" },
   "/app.js": { name: "app.js", type: "text/javascript; charset=utf-8" },
+  "/constants.js": { name: "constants.js", type: "text/javascript; charset=utf-8" },
+  "/state.js": { name: "state.js", type: "text/javascript; charset=utf-8" },
+  "/dom.js": { name: "dom.js", type: "text/javascript; charset=utf-8" },
+  "/util.js": { name: "util.js", type: "text/javascript; charset=utf-8" },
+  "/net.js": { name: "net.js", type: "text/javascript; charset=utf-8" },
+  "/ui.js": { name: "ui.js", type: "text/javascript; charset=utf-8" },
+  "/nav.js": { name: "nav.js", type: "text/javascript; charset=utf-8" },
+  "/shell.js": { name: "shell.js", type: "text/javascript; charset=utf-8" },
+  "/auth.js": { name: "auth.js", type: "text/javascript; charset=utf-8" },
+  "/mail-view.js": { name: "mail-view.js", type: "text/javascript; charset=utf-8" },
+  "/dlq-view.js": { name: "dlq-view.js", type: "text/javascript; charset=utf-8" },
+  "/settings-view.js": { name: "settings-view.js", type: "text/javascript; charset=utf-8" },
+  "/send-view.js": { name: "send-view.js", type: "text/javascript; charset=utf-8" },
 };
 
 /** Paths the login page needs before a session exists. */
