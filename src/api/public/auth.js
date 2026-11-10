@@ -1,29 +1,9 @@
-// 登录 / 登出 / 启动引导 / 找回密码。
+// 登录 / 登出 / 找回密码。
 import { state } from "./state.js";
 import { appEl, btnResetResend, loginEl, loginError, resetCodeStep, resetDigits, resetError, resetModal, resetPasswordStep } from "./dom.js";
 import { request } from "./net.js";
-import { explain, refreshUnread, toast } from "./ui.js";
-import { hashMailId } from "./util.js";
-import { switchNav } from "./shell.js";
-import { selectMail } from "./mail-view.js";
-import { updateDlqBadge } from "./dlq-view.js";
-import { loadAppearance } from "./settings-view.js";
-
-export async function revealApp() {
-  state.holdBoot = true;
-  appEl.classList.add("is-booting");
-  showApp();
-  try {
-    await loadAppearance();
-    const deepId = hashMailId();
-    await switchNav("inbox");
-    if (deepId) await selectMail(deepId);
-    await Promise.all([updateDlqBadge(), refreshUnread()]);
-  } finally {
-    state.holdBoot = false;
-    appEl.classList.remove("is-booting");
-  }
-}
+import { explain, toast } from "./ui.js";
+import { revealApp } from "./nav.js";
 
 export async function signIn() {
   loginError.textContent = "";
@@ -74,13 +54,6 @@ export function showLogin() {
   closeReset(false);
   const username = document.querySelector("#username");
   if (username instanceof HTMLInputElement) username.focus();
-}
-
-export function showApp() {
-  loginEl.hidden = true;
-  loginEl.style.display = "none";
-  appEl.hidden = false;
-  appEl.style.display = "grid";
 }
 
 export function bindResetDigits() {

@@ -1,7 +1,7 @@
 // 通用 UI：提示、确认框、标题、未读数、移动端面板、详情小组件。
 import { VIEW_TITLES } from "./constants.js";
 import { state } from "./state.js";
-import { appEl, confirmCancel, confirmModal, confirmOk, confirmText, streamTitle, toastEl } from "./dom.js";
+import { appEl, confirmCancel, confirmModal, confirmOk, confirmText, loginEl, streamTitle, toastEl } from "./dom.js";
 import { request } from "./net.js";
 
 export function setGlyph(el, name) {
@@ -45,6 +45,13 @@ export async function copyText(text) {
 
 export function setMobilePane(pane) {
   if (appEl) appEl.dataset.pane = pane;
+}
+
+export function showApp() {
+  loginEl.hidden = true;
+  loginEl.style.display = "none";
+  appEl.hidden = false;
+  appEl.style.display = "grid";
 }
 
 export function isTypingTarget(target) {

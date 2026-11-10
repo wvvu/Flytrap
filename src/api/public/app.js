@@ -4,8 +4,8 @@ import { appEl, backListBtn, btnBlockMail, btnDeleteMail, btnLoadImages, btnRecl
 import { request } from "./net.js";
 import { explain, findByDataId, isTypingTarget, refreshUnread, setMobilePane, toast } from "./ui.js";
 import { debounce, hashMailId } from "./util.js";
-import { initTheme, setPromoMode, switchNav, toggleTheme } from "./shell.js";
-import { closeReset, finishReset, revealApp, savePassword, sendResetCode, showLogin, showResetPassword, signIn, signOut, startReset } from "./auth.js";
+import { initTheme, revealApp, setPromoMode, switchNav, toggleTheme } from "./shell.js";
+import { closeReset, finishReset, savePassword, sendResetCode, showLogin, showResetPassword, signIn, signOut, startReset } from "./auth.js";
 import { handleBlockMail, handleDeleteMail, handleEmptyTrash, handleRestoreMail, handleTrashMail, maybeLoadMore, mergeFreshMail, navigateMail, reclassify, reloadMessages, reloadTrash, removeStaleMail, renderSandboxHtml, staysInList, switchTab, syncListLabel } from "./mail-view.js";
 import { loadDlqJobs, openFailedMail, renderFailureGroups, retryAllDead, updateDlqBadge } from "./dlq-view.js";
 import { addBlocked, addDomain, addKeyRow, addModelRow, addSenderRow, generateDkim, labelName, loadLogs, saveAiSettings, saveAttemptSettings, saveCurrentPrompt, saveMailbox, saveNameSettings, saveNotifySettings, syncAiSave, syncAttemptSave, syncNamesSave, syncNotifySave, syncPromptSave } from "./settings-view.js";

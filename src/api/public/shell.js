@@ -1,12 +1,14 @@
-// 应用外壳：主题、栏目切换、推广模式、视图标题与空列表文案。
-import { setSwitchNav } from "./nav.js";
+// 应用外壳：主题、栏目切换、推广模式、视图标题与空列表文案，
+// 外加登录后引导（revealApp：它编排各视图，本就属于外壳层）。
+import { setRevealApp, setSwitchNav } from "./nav.js";
 import { state } from "./state.js";
 import { appEl, dlqNoticeEl, filtersForm, listEl, mailDetailEl, mailEmptyCopy, mailEmptyEl, mailLoadingEl, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, streamDlqHeader, streamInboxHeader, streamSendHeader, streamSettingsHeader, streamSpamHeader, streamTrashHeader, themeIcon, viewDlq, viewMail, viewSend, viewSettings } from "./dom.js";
-import { setGlyph, setMobilePane, setViewTitle } from "./ui.js";
-import { reloadMessages, reloadTrash, renderSandboxHtml, syncListLabel } from "./mail-view.js";
-import { loadDlqJobs } from "./dlq-view.js";
-import { loadSettingsPage, renderSettingsNav, showSettingsSection } from "./settings-view.js";
+import { refreshUnread, setGlyph, setMobilePane, setViewTitle, showApp } from "./ui.js";
+import { reloadMessages, reloadTrash, renderSandboxHtml, selectMail, syncListLabel } from "./mail-view.js";
+import { loadDlqJobs, updateDlqBadge } from "./dlq-view.js";
+import { loadAppearance, loadSettingsPage, renderSettingsNav, showSettingsSection } from "./settings-view.js";
 import { clearReplyDraft, loadSendPage } from "./send-view.js";
+import { hashMailId } from "./util.js";
 
 export function initTheme() {
   const legacy = localStorage.getItem("flytrap_theme");
@@ -137,4 +139,21 @@ export async function switchNav(view) {
   }
 }
 
+export async function revealApp() {
+  state.holdBoot = true;
+  appEl.classList.add("is-booting");
+  showApp();
+  try {
+    await loadAppearance();
+    const deepId = hashMailId();
+    await switchNav("inbox");
+    if (deepId) await selectMail(deepId);
+    await Promise.all([updateDlqBadge(), refreshUnread()]);
+  } finally {
+    state.holdBoot = false;
+    appEl.classList.remove("is-booting");
+  }
+}
+
 setSwitchNav(switchNav);
+setRevealApp(revealApp);
