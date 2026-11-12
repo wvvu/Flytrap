@@ -10,6 +10,7 @@ export async function loadSettingsPage() {
   try {
     const settings = await request("/v1/settings");
     applyAppearance(settings);
+    state.settingsDomains = Array.isArray(settings.acceptDomains) ? settings.acceptDomains.slice() : [];
     renderNameEditors(settings);
     renderNotify(settings);
     renderDomains(settings.acceptDomains || []);
@@ -50,7 +51,7 @@ export async function loadSettingsPage() {
 export function renderSettingsNav() {
   if (state.currentView !== "settings") return;
   listEl.replaceChildren();
-  for (const [id, label] of SETTING_SECTIONS) {
+  for (const [id, label, hint] of SETTING_SECTIONS) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "mail-item";
@@ -59,7 +60,10 @@ export function renderSettingsNav() {
     const title = document.createElement("span");
     title.className = "item-from";
     title.textContent = label;
-    button.append(title);
+    const sub = document.createElement("span");
+    sub.className = "item-subject";
+    sub.textContent = hint;
+    button.append(title, sub);
     button.addEventListener("click", () => showSettingsSection(id));
     listEl.append(button);
   }
@@ -68,14 +72,18 @@ export function renderSettingsNav() {
 export function showSettingsSection(id, options = {}) {
   state.currentSettingsSection = id;
   for (const block of document.querySelectorAll("#view-settings .block")) {
-    block.hidden = block.id !== `set-${id}`;
+    block.hidden = block.dataset.group !== id;
   }
   for (const button of listEl.querySelectorAll(".mail-item")) {
     button.classList.toggle("selected", button.dataset.section === id);
   }
   if (!options.keepListOnNarrow) setMobilePane("detail");
-  if (id === "logs") void loadLogs();
-  if (id === "send") void loadDkimSection();
+  if (id === "status") {
+    void loadLogs();
+    void loadMachineLine();
+  }
+  if (id === "domains") void loadDkimSection();
+  if (id === "people") void loadMailboxesView();
 }
 
 export function describeAi(ai) {
@@ -142,23 +150,7 @@ export function syncAttemptSave() {
 
 export function renderDomains(domains) {
   state.settingsDomains = Array.isArray(domains) ? domains.slice() : [];
-  const host = document.querySelector("#domain-list");
-  if (!host) return;
-  host.replaceChildren();
-  for (const domain of state.settingsDomains) {
-    const row = document.createElement("div");
-    row.className = "domain-row";
-    const input = document.createElement("input");
-    input.value = domain;
-    input.readOnly = true;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "btn-fit ghost";
-    button.textContent = "移除";
-    button.addEventListener("click", () => void removeDomain(domain));
-    row.append(input, button);
-    host.append(row);
-  }
+  renderDomainCards();
 }
 
 export async function saveNotifySettings() {
@@ -238,18 +230,22 @@ export async function addDomain() {
   const input = document.querySelector("#domain-add");
   const domain = input ? input.value.trim() : "";
   if (!domain) return;
+  const ok = await addDomainName(domain);
+  if (ok && input) input.value = "";
+}
+
+export async function addDomainName(domain) {
   try {
     const res = await request("/v1/settings/domains", {
       method: "PUT",
       body: { domains: state.settingsDomains.concat([domain]) },
     });
-    if (input) input.value = "";
     renderDomains(res.acceptDomains || []);
-    renderDomainNameRows(res.acceptDomains || [], collectDomainNames());
-    syncNamesSave();
     toast("域名已添加");
+    return true;
   } catch (err) {
     toast("添加域名失败: " + explain(err));
+    return false;
   }
 }
 
@@ -264,12 +260,11 @@ export async function removeDomain(domain) {
       method: "PUT",
       body: { domains: state.settingsDomains.filter((item) => item !== domain) },
     });
+    const hadShortName = Boolean((state.domainShortNames[domain] || "").trim());
+    delete state.domainShortNames[domain];
     renderDomains(res.acceptDomains || []);
-    const names = collectDomainNames();
-    delete names[domain];
-    renderDomainNameRows(res.acceptDomains || [], names);
-    syncNamesSave();
-    toast("已移除 " + domain);
+    if (hadShortName) enqueueNames("已移除 " + domain);
+    else toast("已移除 " + domain);
   } catch (err) {
     toast("移除域名失败: " + explain(err));
   }
@@ -500,27 +495,24 @@ export function renderNameEditors(settings) {
       labels.append(nameRow(id, labelName(id), "label"));
     }
   }
-  renderDomainNameRows(settings.acceptDomains || [], settings.domainNames || {});
-  renderSenderRows(settings.senderNames || []);
+  state.domainShortNames = { ...(settings.domainNames || {}) };
+  state.savedSenders = Array.isArray(settings.senderNames)
+    ? settings.senderNames.map((item) => ({ address: item.address, name: item.name }))
+    : [];
+  renderDomainCards();
+  renderSenderRows(state.savedSenders);
   state.namesBaseline = JSON.stringify(collectNames());
   syncNamesSave();
 }
 
-export function renderDomainNameRows(domains, names) {
-  const host = document.querySelector("#domain-names");
-  if (!host) return;
-  host.replaceChildren();
-  const list = Array.isArray(domains) ? domains : [];
-  if (list.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "muted";
-    empty.textContent = "请先添加收信域名。";
-    host.append(empty);
-    return;
-  }
-  for (const domain of list) {
-    host.append(nameRow(domain, (names && names[domain]) || "", "domain"));
-  }
+export function refreshNotifyLabels() {
+  const notifyHost = document.querySelector("#notify-labels");
+  if (!notifyHost) return;
+  notifyHost.querySelectorAll("label.chk").forEach((wrap) => {
+    const input = wrap.querySelector("input");
+    const text = wrap.querySelector("span");
+    if (input && text) text.textContent = labelName(input.value);
+  });
 }
 
 export function renderSenderRows(senders) {
@@ -561,14 +553,22 @@ export function senderRow(address, name) {
   nameInput.maxLength = 40;
   nameInput.dataset.senderName = "1";
   nameInput.placeholder = "名称";
-  nameInput.addEventListener("input", syncNamesSave);
+  nameInput.dataset.savedName = name || "";
+  nameInput.addEventListener("change", () => {
+    if (!nameInput.value.trim()) {
+      nameInput.value = nameInput.dataset.savedName || "";
+      toast("请填写名称");
+      return;
+    }
+    enqueueNames("发件人已保存");
+  });
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "btn-fit ghost";
   remove.textContent = "移除";
   remove.addEventListener("click", () => {
     row.remove();
-    syncNamesSave();
+    enqueueNames("发件人已移除");
   });
   row.append(addressInput, nameInput, remove);
   return row;
@@ -597,34 +597,86 @@ export function addSenderRow() {
   }
   if (addressInput) addressInput.value = "";
   if (nameInput) nameInput.value = "";
-  syncNamesSave();
+  enqueueNames("发件人已保存");
 }
 
-export function collectNames() {
+export function collectNames(options = {}) {
   const labelNamesOut = {};
   document.querySelectorAll('#label-names input[data-name-kind="label"]').forEach((input) => {
     labelNamesOut[input.dataset.nameKey] = input.value.trim();
   });
+  const typedTitle = document.querySelector("#panel-title")?.value.trim() || "";
+  return {
+    panelTitle: typedTitle || (options.fallbackTitle ? (state.panelTitle || "邮箱") : ""),
+    labelNames: labelNamesOut,
+    domainNames: collectDomainNames(),
+    senderNames: collectSenderList(),
+  };
+}
+
+export function collectSenderList() {
   const senderNames = [];
   document.querySelectorAll("#sender-names .name-row").forEach((row) => {
     const address = row.querySelector("input[data-sender-address]")?.value.trim() || "";
     const name = row.querySelector("input[data-sender-name]")?.value.trim() || "";
     if (address && name) senderNames.push({ address, name });
   });
-  return {
-    panelTitle: document.querySelector("#panel-title")?.value.trim() || "",
-    labelNames: labelNamesOut,
-    domainNames: collectDomainNames(),
-    senderNames,
-  };
+  return senderNames;
 }
 
 export function collectDomainNames() {
   const domainNamesOut = {};
-  document.querySelectorAll('#domain-names input[data-name-kind="domain"]').forEach((input) => {
-    domainNamesOut[input.dataset.nameKey] = input.value.trim();
+  const inputs = document.querySelectorAll('#domain-cards input[data-name-kind="domain"]');
+  if (inputs.length === 0) return { ...state.domainShortNames };
+  inputs.forEach((input) => {
+    const value = input.value.trim();
+    if (value) domainNamesOut[input.dataset.nameKey] = value;
   });
   return domainNamesOut;
+}
+
+export function enqueueNames(message) {
+  state.namesJob = state.namesJob.then(() => commitNamesNow(message)).catch(() => {});
+}
+
+export async function commitNamesNow(message) {
+  const backupSenders = state.savedSenders.map((item) => ({ address: item.address, name: item.name }));
+  const backupShort = { ...state.domainShortNames };
+  try {
+    const saved = await request("/v1/settings/names", {
+      method: "PUT",
+      body: collectNames({ fallbackTitle: true }),
+    });
+    applyNamesSaved(saved);
+    toast(message);
+  } catch (err) {
+    state.savedSenders = backupSenders;
+    state.domainShortNames = backupShort;
+    renderSenderRows(state.savedSenders);
+    renderDomainCards({ discardPending: true });
+    toast("保存失败: " + explain(err));
+  }
+}
+
+export function applyNamesSaved(saved) {
+  applyAppearance(saved);
+  state.domainShortNames = { ...(saved.domainNames || {}) };
+  state.savedSenders = Array.isArray(saved.senderNames)
+    ? saved.senderNames.map((item) => ({ address: item.address, name: item.name }))
+    : [];
+  syncShortNameFields();
+  if (JSON.stringify(collectSenderList()) !== JSON.stringify(state.savedSenders)) renderSenderRows(state.savedSenders);
+  state.namesBaseline = JSON.stringify(collectNames());
+  syncNamesSave();
+  refreshNotifyLabels();
+}
+
+export function syncShortNameFields() {
+  document.querySelectorAll('#domain-cards input[data-name-kind="domain"]').forEach((input) => {
+    const saved = state.domainShortNames[input.dataset.nameKey] || "";
+    input.dataset.savedValue = saved;
+    if (document.activeElement !== input) input.value = saved;
+  });
 }
 
 export function syncNamesSave() {
@@ -635,33 +687,30 @@ export function syncNamesSave() {
 }
 
 export async function saveNameSettings() {
-  const draft = collectNames();
-  if (!draft.panelTitle) {
+  if (!collectNames().panelTitle) {
     toast("面板名称不能为空");
     return;
   }
-  try {
-    const saved = await request("/v1/settings/names", { method: "PUT", body: draft });
-    applyAppearance(saved);
-    renderNameEditors({
-      panelTitle: saved.panelTitle,
-      labelNames: saved.labelNames,
-      domainNames: saved.domainNames,
-      senderNames: saved.senderNames,
-      acceptDomains: state.settingsDomains,
-    });
-    const notifyHost = document.querySelector("#notify-labels");
-    if (notifyHost) {
-      notifyHost.querySelectorAll("label.chk").forEach((wrap) => {
-        const input = wrap.querySelector("input");
-        const text = wrap.querySelector("span");
-        if (input && text) text.textContent = labelName(input.value);
-      });
+  state.namesJob = state.namesJob.then(async () => {
+    if (!collectNames().panelTitle) {
+      toast("面板名称不能为空");
+      return;
     }
-    toast("名称已保存");
-  } catch (err) {
-    toast("保存名称失败: " + explain(err));
-  }
+    try {
+      const saved = await request("/v1/settings/names", { method: "PUT", body: collectNames() });
+      applyNamesSaved(saved);
+      renderNameEditors({
+        panelTitle: saved.panelTitle,
+        labelNames: saved.labelNames,
+        domainNames: saved.domainNames,
+        senderNames: saved.senderNames,
+        acceptDomains: state.settingsDomains,
+      });
+      toast("名称已保存");
+    } catch (err) {
+      toast("保存名称失败: " + explain(err));
+    }
+  }).catch(() => {});
 }
 
 export function renderAiEditors(pool) {
@@ -671,8 +720,86 @@ export function renderAiEditors(pool) {
     tail: item.tail || "",
   }));
   paintAiEditors();
-  state.aiBaseline = aiSnapshot();
-  syncAiSave();
+  rememberAiControls();
+}
+
+export function rememberAiControls() {
+  const thinking = document.querySelector("#ai-thinking");
+  if (thinking) thinking.dataset.prev = thinking.value;
+}
+
+export function captureAi() {
+  const enabled = document.querySelector("#ai-enabled");
+  const thinking = document.querySelector("#ai-thinking");
+  return {
+    models: state.aiModels.slice(),
+    keys: state.aiKeyRows.map((row) => ({ id: row.id, tail: row.tail, secret: row.secret })),
+    enabled: enabled ? enabled.checked : true,
+    thinking: thinking ? thinking.value : "low",
+  };
+}
+
+export function restoreAi(snapshot) {
+  state.aiModels = snapshot.models.slice();
+  state.aiKeyRows = snapshot.keys.map((row) => ({ id: row.id, tail: row.tail, secret: row.secret }));
+  const enabled = document.querySelector("#ai-enabled");
+  const thinking = document.querySelector("#ai-thinking");
+  if (enabled) enabled.checked = snapshot.enabled;
+  if (thinking) thinking.value = snapshot.thinking;
+  paintAiEditors();
+  rememberAiControls();
+}
+
+export function aiPayload() {
+  const enabled = document.querySelector("#ai-enabled");
+  const thinking = document.querySelector("#ai-thinking");
+  return {
+    models: state.aiModels.slice(),
+    keys: state.aiKeyRows.map((row) => (row.secret ? { secret: row.secret } : { id: row.id })),
+    enabled: enabled ? enabled.checked : true,
+    thinking: thinking ? thinking.value : "low",
+  };
+}
+
+export function enqueueAi(apply, message) {
+  state.aiJob = state.aiJob.then(() => applyAndSaveAi(apply, message)).catch(() => {});
+}
+
+export function aiStateKey(snapshot) {
+  return JSON.stringify({
+    models: snapshot.models,
+    keys: snapshot.keys.map((row) => ({ id: row.id || "", tail: row.tail || "", secret: row.secret || "" })),
+    enabled: snapshot.enabled,
+    thinking: snapshot.thinking,
+  });
+}
+
+export async function applyAndSaveAi(apply, message) {
+  const backup = captureAi();
+  try {
+    apply();
+    if (aiStateKey(captureAi()) === aiStateKey(backup)) return;
+    paintAiEditors();
+    const saved = await request("/v1/settings/ai", { method: "PUT", body: aiPayload() });
+    const enabled = document.querySelector("#ai-enabled");
+    const thinking = document.querySelector("#ai-thinking");
+    if (enabled) enabled.checked = saved.aiEnabled !== false;
+    if (thinking && saved.aiThinking) thinking.value = saved.aiThinking;
+    renderAiEditors(saved.aiPool || {});
+    toast(message);
+  } catch (err) {
+    restoreAi(backup);
+    toast("保存模型失败: " + explain(err));
+    return;
+  }
+  try {
+    const status = await request("/v1/ai/status");
+    const aiLine = document.querySelector("#ai-status-line");
+    const enabledNow = document.querySelector("#ai-enabled");
+    if (aiLine) aiLine.textContent = enabledNow && !enabledNow.checked ? "分拣已关" : describeAi(status);
+  } catch {
+    // The pool is already stored. The status line refreshes the next time settings open.
+  }
 }
 
 export function paintAiEditors() {
@@ -732,17 +859,22 @@ export function moveAiRow(kind, index, delta) {
   const list = kind === "model" ? state.aiModels : state.aiKeyRows;
   const next = index + delta;
   if (next < 0 || next >= list.length) return;
-  const [item] = list.splice(index, 1);
-  list.splice(next, 0, item);
-  paintAiEditors();
-  syncAiSave();
+  enqueueAi(() => {
+    const current = kind === "model" ? state.aiModels : state.aiKeyRows;
+    if (index < 0 || next >= current.length) return;
+    const [item] = current.splice(index, 1);
+    current.splice(next, 0, item);
+  }, "顺序已保存");
 }
 
 export function removeAiRow(kind, index) {
-  if (kind === "model") state.aiModels.splice(index, 1);
-  else state.aiKeyRows.splice(index, 1);
-  paintAiEditors();
-  syncAiSave();
+  const list = kind === "model" ? state.aiModels : state.aiKeyRows;
+  if (index < 0 || index >= list.length) return;
+  enqueueAi(() => {
+    const current = kind === "model" ? state.aiModels : state.aiKeyRows;
+    if (index < 0 || index >= current.length) return;
+    current.splice(index, 1);
+  }, kind === "model" ? "模型已移除" : "密钥已移除");
 }
 
 export function addModelRow() {
@@ -750,17 +882,21 @@ export function addModelRow() {
   const model = input ? input.value.trim() : "";
   if (!model) {
     toast("请输入模型名称");
-    return false;
+    return;
   }
   if (!/^[A-Za-z0-9._:@/-]{1,80}$/.test(model)) {
     toast("模型名称无效");
-    return false;
+    return;
   }
-  if (!state.aiModels.includes(model)) state.aiModels.push(model);
+  if (state.aiModels.includes(model)) {
+    if (input) input.value = "";
+    toast("这个模型已经在列表里");
+    return;
+  }
   if (input) input.value = "";
-  paintAiEditors();
-  syncAiSave();
-  return true;
+  enqueueAi(() => {
+    if (!state.aiModels.includes(model)) state.aiModels.push(model);
+  }, "模型已添加");
 }
 
 export function addKeyRow() {
@@ -768,72 +904,17 @@ export function addKeyRow() {
   const secret = input ? input.value.trim() : "";
   if (!secret) {
     toast("请输入密钥");
-    return false;
+    return;
   }
   if (secret.length < 8 || secret.length > 512 || /\s/.test(secret)) {
     toast("密钥无效");
-    return false;
+    return;
   }
   const tail = secret.length >= 12 ? secret.slice(-4) : "";
-  state.aiKeyRows.push({ secret, tail });
   if (input) input.value = "";
-  paintAiEditors();
-  syncAiSave();
-  return true;
-}
-
-export function aiSnapshot() {
-  const enabled = document.querySelector("#ai-enabled");
-  const thinking = document.querySelector("#ai-thinking");
-  return JSON.stringify({
-    models: state.aiModels,
-    keys: state.aiKeyRows.map((row) => (row.secret ? { secret: row.tail, pending: true } : { id: row.id, tail: row.tail })),
-    enabled: enabled ? enabled.checked : true,
-    thinking: thinking ? thinking.value : "low",
-  });
-}
-
-export function syncAiSave() {
-  const button = document.querySelector("#btn-save-ai");
-  if (!button) return;
-  const pendingModel = document.querySelector("#model-add")?.value.trim();
-  const pendingKey = document.querySelector("#key-add")?.value.trim();
-  button.disabled = aiSnapshot() === state.aiBaseline && !pendingModel && !pendingKey;
-}
-
-export async function saveAiSettings() {
-  const modelInput = document.querySelector("#model-add");
-  const pendingModel = modelInput ? modelInput.value.trim() : "";
-  if (pendingModel) {
-    if (!addModelRow()) return;
-  }
-  const keyInput = document.querySelector("#key-add");
-  const pendingKey = keyInput ? keyInput.value.trim() : "";
-  if (pendingKey) {
-    if (!addKeyRow()) return;
-  }
-  const keys = state.aiKeyRows.map((row) => (row.secret ? { secret: row.secret } : { id: row.id }));
-  const enabled = document.querySelector("#ai-enabled");
-  const thinking = document.querySelector("#ai-thinking");
-  try {
-    const saved = await request("/v1/settings/ai", {
-      method: "PUT",
-      body: {
-        models: state.aiModels,
-        keys,
-        enabled: enabled ? enabled.checked : true,
-        thinking: thinking ? thinking.value : "low",
-      },
-    });
-    for (const row of state.aiKeyRows) delete row.secret;
-    renderAiEditors(saved.aiPool || {});
-    const status = await request("/v1/ai/status");
-    const aiLine = document.querySelector("#ai-status-line");
-    if (aiLine) aiLine.textContent = saved.aiEnabled === false ? "分拣已关" : describeAi(status);
-    toast("模型已保存");
-  } catch (err) {
-    toast("保存模型失败: " + explain(err));
-  }
+  enqueueAi(() => {
+    state.aiKeyRows.push({ secret, tail });
+  }, "密钥已添加");
 }
 
 export async function loadDkimSection() {
@@ -847,11 +928,22 @@ export async function loadDkimSection() {
 }
 
 export function renderDkim(keys) {
-  const host = document.querySelector("#dkim-list");
+  if (Array.isArray(keys)) state.dkimKeys = keys;
+  renderDomainCards();
+}
+
+export function renderDomainCards(options = {}) {
+  const host = document.querySelector("#domain-cards");
   if (!host) return;
+  const pending = new Map();
+  if (!options.discardPending) {
+    host.querySelectorAll('input[data-name-kind="domain"]').forEach((input) => {
+      pending.set(input.dataset.nameKey, input.value);
+    });
+  }
   host.replaceChildren();
   const domains = new Set(state.settingsDomains);
-  for (const key of keys) domains.add(key.domain);
+  for (const key of state.dkimKeys) domains.add(key.domain);
   const ordered = [...domains].sort();
   if (ordered.length === 0) {
     const empty = document.createElement("p");
@@ -861,28 +953,80 @@ export function renderDkim(keys) {
     return;
   }
   for (const domain of ordered) {
-    const matches = keys.filter((key) => key.domain === domain);
-    host.append(dkimRow(domain, matches));
+    const typed = pending.has(domain) ? pending.get(domain) : (state.domainShortNames[domain] || "");
+    const matches = state.dkimKeys.filter((key) => key.domain === domain);
+    host.append(domainCard(domain, typed, matches));
   }
 }
 
-export function dkimRow(domain, keys) {
-  const row = document.createElement("div");
-  row.className = "send-item";
+export function domainCard(domain, shortName, keys) {
+  const card = document.createElement("div");
+  card.className = "domain-card";
+  const head = document.createElement("div");
+  head.className = "domain-card-head";
   const title = document.createElement("strong");
   title.textContent = domain;
-  row.append(title);
+  head.append(title);
+  const accepting = state.settingsDomains.includes(domain);
+  if (accepting) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn-fit ghost";
+    remove.textContent = "停止收信";
+    remove.addEventListener("click", () => void removeDomain(domain));
+    head.append(remove);
+  } else {
+    const join = document.createElement("button");
+    join.type = "button";
+    join.className = "btn-fit ghost";
+    join.textContent = "开始收信";
+    join.addEventListener("click", () => void addDomainName(domain));
+    head.append(join);
+  }
+  card.append(head);
+  if (accepting) {
+    const row = document.createElement("label");
+    row.className = "name-row";
+    const caption = document.createElement("span");
+    caption.className = "name-key";
+    caption.textContent = "短名";
+    const input = document.createElement("input");
+    input.value = shortName || "";
+    input.maxLength = 24;
+    input.autocomplete = "off";
+    input.placeholder = "短名，可空";
+    input.dataset.nameKey = domain;
+    input.dataset.nameKind = "domain";
+    input.dataset.savedValue = state.domainShortNames[domain] || "";
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        input.blur();
+      }
+    });
+    input.addEventListener("change", () => {
+      if (input.value.trim() === (input.dataset.savedValue || "")) return;
+      enqueueNames("短名已保存");
+    });
+    row.append(caption, input);
+    card.append(row);
+  }
+  fillDkim(card, domain, keys);
+  return card;
+}
+
+export function fillDkim(card, domain, keys) {
   if (keys.length === 0) {
     const missing = document.createElement("p");
     missing.className = "muted";
-    missing.textContent = "还没有密钥";
+    missing.textContent = "还没有密钥。生成后把 TXT 加到 DNS。换密钥后要改同一条记录。";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "btn-fit";
     button.textContent = "生成密钥";
     button.addEventListener("click", () => void generateDkim(domain));
-    row.append(missing, button);
-    return row;
+    card.append(missing, button);
+    return;
   }
   for (const key of keys) {
     const line = document.createElement("p");
@@ -899,9 +1043,8 @@ export function dkimRow(domain, keys) {
       dkimButton("重新生成", () => void generateDkim(domain, key.selector)),
       dkimButton("移除", () => void removeDkim(domain, key.selector)),
     );
-    row.append(line, txt, actions);
+    card.append(line, txt, actions);
   }
-  return row;
 }
 
 export function dkimButton(label, onClick) {

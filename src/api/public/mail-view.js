@@ -194,11 +194,12 @@ export async function selectMail(id, options = {}) {
   if (sectionSignals) sectionSignals.open = false;
   if (sectionUrls) sectionUrls.open = false;
 
-  // 更新左侧列表的高亮状态
+  // 更新左侧列表的高亮状态。已读先改列表，不等正文；已拦截的信往往更大，不该把已读拖在正文后面。
   document.querySelectorAll(".mail-item").forEach((el) => {
     if (el.dataset.id === id) el.classList.add("selected");
     else el.classList.remove("selected");
   });
+  const opened = markOpened(id);
 
   mailEmptyEl.hidden = true;
   mailDetailEl.hidden = true;
@@ -372,7 +373,6 @@ export async function selectMail(id, options = {}) {
       await loadRawHeaders(id, token, detail);
     })();
     const threadReady = loadThread(id, token);
-    const opened = markOpened(id);
     if (state.holdBoot) await Promise.all([htmlReady, headersReady, threadReady, opened]);
   } catch (err) {
     if (token !== state.mailLoadToken) return;
@@ -836,6 +836,8 @@ export function mergeFreshMail(items) {
       fresh.push(item);
       continue;
     }
+    // A list response that left before the read landed still says unread. Keep the row read.
+    if (prev.read && !item.read) item.read = true;
     if (prev.label === item.label && prev.read === item.read) continue;
     prev.label = item.label;
     prev.read = item.read;
@@ -849,10 +851,15 @@ export function mergeFreshMail(items) {
 
 export function markOpened(id) {
   const card = findByDataId(listEl, ".mail-item", id);
-  if (card) card.classList.remove("unread");
   const known = state.currentMessages.find((item) => item.id === id);
+  const wasRead = Boolean(known && known.read) || Boolean(card && !card.classList.contains("unread"));
+  if (card) card.classList.remove("unread");
   if (known) known.read = true;
   return request("/v1/messages/" + encodeURIComponent(id) + "/read", { method: "POST", body: {} })
     .then(() => refreshUnread())
-    .catch(() => undefined);
+    .catch(() => {
+      if (wasRead) return;
+      if (known) known.read = false;
+      if (card && card.isConnected) card.classList.add("unread");
+    });
 }

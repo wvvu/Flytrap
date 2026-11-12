@@ -210,7 +210,7 @@
           <div class="stream-title-row">
             <h2>设置</h2>
           </div>
-          <p class="stream-subtitle">各分区单独保存。内容未改时，保存为灰色。</p>
+          <p class="stream-subtitle">列表的添加、移除和排序会直接保存。</p>
         </div>
 
         <p id="notice" class="stream-notice" role="status"></p>
@@ -413,10 +413,10 @@
         <section id="view-settings" class="workspace-view" hidden>
           <div class="page-scroll">
             <button type="button" id="btn-back-settings" class="btn-sm mobile-back">返回</button>
-            <section class="block" id="set-names">
+            <section class="block" id="set-names" data-group="account" hidden>
               <div class="block-head">
                 <div>
-                  <h2>名称</h2>
+                  <h2>界面</h2>
                   <p class="muted">只改显示名。分类代号不变，模型与提醒仍按代号判断。</p>
                 </div>
                 <button type="button" id="btn-save-names" class="btn-fit" disabled>保存</button>
@@ -427,26 +427,14 @@
               </label>
               <h3 class="field-title">分类</h3>
               <div id="label-names" class="name-grid"></div>
-              <h3 class="field-title">收信域名的短名</h3>
-              <p class="muted">收件地址后面会带上这个短名。域名本身在下面「收信域名」里加减。</p>
-              <div id="domain-names" class="name-grid"></div>
-              <h3 class="field-title">发件人</h3>
-              <p class="muted">列表中的发件地址使用这里的名称。</p>
-              <div id="sender-names" class="name-list"></div>
-              <div class="inline-row">
-                <input id="sender-address" placeholder="发件地址" autocomplete="off" maxlength="254">
-                <input id="sender-name" placeholder="名称" maxlength="40" autocomplete="off">
-                <button type="button" id="btn-add-sender" class="btn-fit">添加</button>
-              </div>
             </section>
 
-            <section class="block" id="set-model" hidden>
+            <section class="block" id="set-model" data-group="classify" hidden>
               <div class="block-head">
                 <div>
                   <h2>模型</h2>
                   <p class="muted">按列表顺序使用。密钥只显示末 4 位，保存后不能再查看全文。</p>
                 </div>
-                <button type="button" id="btn-save-ai" class="btn-fit" disabled>保存</button>
               </div>
               <div class="model-switch">
                 <label class="chk"><input id="ai-enabled" type="checkbox" checked> 启用分拣</label>
@@ -460,7 +448,7 @@
                   </select>
                 </label>
               </div>
-              <p class="muted">关掉之后不再调用模型，已经收下的信仍在。思考等级只给 Gemini 用。</p>
+              <p class="muted">关掉之后不再调用模型，已经收下的信仍在。思考等级只给 Gemini 用。开关、添加、移除和排序会直接保存。</p>
               <h3 class="field-title">型号</h3>
               <div id="model-list" class="name-list"></div>
               <div class="inline-row">
@@ -475,7 +463,7 @@
               </div>
             </section>
 
-            <section class="block" id="set-prompt" hidden>
+            <section class="block" id="set-prompt" data-group="classify" hidden>
               <div class="block-head">
                 <div>
                   <h2>分拣</h2>
@@ -487,7 +475,7 @@
               <p class="muted">保存后，新邮件按这份提示词分类。已经分过的，打开邮件后再点「重分类」。</p>
             </section>
 
-            <section class="block" id="set-notify" hidden>
+            <section class="block" id="set-notify" data-group="classify" hidden>
               <div class="block-head">
                 <div>
                   <h2>提醒</h2>
@@ -503,30 +491,20 @@
               </div>
             </section>
 
-            <section class="block" id="set-domains" hidden>
+            <section class="block" id="set-domains" data-group="domains">
               <div class="block-head">
                 <div>
-                  <h2>收信域名</h2>
-                  <p class="muted">这些域名上的任何前缀都会收下。至少留一个。</p>
+                  <h2>域名与发信</h2>
+                  <p class="muted">这些域名上的任何前缀都会收下。短名出现在收件地址后面。密钥写进 DNS 后，发出的信才会签名。没有记录时照常发信。</p>
                 </div>
               </div>
-              <div id="domain-list" class="domain-list"></div>
+              <div id="domain-cards" class="domain-cards"></div>
               <div class="inline-row">
-                <input id="domain-add" placeholder="添加域名" autocomplete="off">
+                <input id="domain-add" placeholder="添加收信域名" autocomplete="off">
                 <button type="button" id="btn-add-domain" class="btn-fit">添加</button>
               </div>
-            </section>
-
-            <section class="block" id="set-send" hidden>
-              <div class="block-head">
-                <div>
-                  <h2>发信</h2>
-                  <p class="muted">生成后把记录加到域名的 DNS。换密钥后要改同一条记录。没有记录时照常发信。</p>
-                </div>
-              </div>
-              <div id="dkim-list" class="domain-list"></div>
               <div class="inline-row">
-                <input id="dkim-domain" placeholder="未添加的域名" autocomplete="off" maxlength="253">
+                <input id="dkim-domain" placeholder="只生成密钥的域名" autocomplete="off" maxlength="253">
                 <select id="dkim-alg" title="算法">
                   <option value="rsa">RSA 2048</option>
                   <option value="ed25519">Ed25519</option>
@@ -535,39 +513,7 @@
               </div>
             </section>
 
-            <section class="block" id="set-block" hidden>
-              <div class="block-head">
-                <div>
-                  <h2>黑名单</h2>
-                  <p class="muted">这些发件地址来的新信直接进垃圾桶，不分类，也不提醒。原文仍保留。</p>
-                </div>
-              </div>
-              <div id="block-list" class="domain-list"></div>
-              <p id="block-empty" class="muted">还没有地址。</p>
-              <div class="inline-row">
-                <input id="block-add" placeholder="发件地址" autocomplete="off" maxlength="254">
-                <button type="button" id="btn-add-block" class="btn-fit">添加</button>
-              </div>
-            </section>
-
-            <section class="block" id="set-jobs" hidden>
-              <div class="block-head">
-                <div>
-                  <h2>失败几次才停</h2>
-                  <p class="muted">只影响之后新进入队列的任务。已经在队列里的任务仍使用原来的次数。</p>
-                </div>
-                <button type="button" id="btn-save-attempts" class="btn-fit" disabled>保存</button>
-              </div>
-              <div class="inline-row">
-                <input id="job-max-attempts" class="field-narrow" inputmode="numeric" autocomplete="off">
-                <span class="muted">次之后不再自动试</span>
-              </div>
-              <div class="inline-row">
-                <button type="button" id="btn-open-dlq" class="btn-fit">查看处理失败</button>
-              </div>
-            </section>
-
-            <section class="block" id="set-mailboxes" hidden>
+            <section class="block" id="set-mailboxes" data-group="people" hidden>
               <div class="block-head">
                 <div>
                   <h2>地址</h2>
@@ -594,7 +540,73 @@
               </table>
             </section>
 
-            <section class="block" id="set-account" hidden>
+            <section class="block" id="set-senders" data-group="people" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>发件人称呼</h2>
+                  <p class="muted">列表里的发件地址使用这里的名称。添加、修改和移除会直接保存。</p>
+                </div>
+              </div>
+              <div id="sender-names" class="name-list"></div>
+              <div class="inline-row">
+                <input id="sender-address" placeholder="发件地址" autocomplete="off" maxlength="254">
+                <input id="sender-name" placeholder="名称" maxlength="40" autocomplete="off">
+                <button type="button" id="btn-add-sender" class="btn-fit">添加</button>
+              </div>
+            </section>
+
+            <section class="block" id="set-block" data-group="people" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>黑名单</h2>
+                  <p class="muted">这些发件地址来的新信直接进垃圾桶，不分类，也不提醒。原文仍保留。</p>
+                </div>
+              </div>
+              <div id="block-list" class="domain-list"></div>
+              <p id="block-empty" class="muted">还没有地址。</p>
+              <div class="inline-row">
+                <input id="block-add" placeholder="发件地址" autocomplete="off" maxlength="254">
+                <button type="button" id="btn-add-block" class="btn-fit">添加</button>
+              </div>
+            </section>
+
+            <section class="block" id="set-machine" data-group="status" hidden>
+              <h2>概况</h2>
+              <p class="muted" id="machine-line">在线</p>
+              <div id="stat-cards" class="stats-cards-grid"></div>
+              <h3 class="field-title">近 14 天</h3>
+              <div id="stat-trend" class="trend"></div>
+            </section>
+
+            <section class="block" id="set-jobs" data-group="status" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>失败几次才停</h2>
+                  <p class="muted">只影响之后新进入队列的任务。已经在队列里的任务仍使用原来的次数。</p>
+                </div>
+                <button type="button" id="btn-save-attempts" class="btn-fit" disabled>保存</button>
+              </div>
+              <div class="inline-row">
+                <input id="job-max-attempts" class="field-narrow" inputmode="numeric" autocomplete="off">
+                <span class="muted">次之后不再自动试</span>
+              </div>
+              <div class="inline-row">
+                <button type="button" id="btn-open-dlq" class="btn-fit">查看处理失败</button>
+              </div>
+            </section>
+
+            <section class="block" id="set-logs" data-group="status" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>日志</h2>
+                  <p class="muted">最近的运行记录，只留在这次进程里。</p>
+                </div>
+                <button type="button" id="btn-refresh-logs" class="btn-fit">刷新</button>
+              </div>
+              <pre id="log-view" class="log-view"></pre>
+            </section>
+
+            <section class="block" id="set-account" data-group="account" hidden>
               <div class="block-head">
                 <div>
                   <h2>账号</h2>
@@ -606,25 +618,6 @@
                 <input id="password-current" type="password" placeholder="当前密码" autocomplete="current-password">
                 <input id="password-next" type="password" placeholder="新密码" maxlength="200" autocomplete="new-password">
               </div>
-            </section>
-
-            <section class="block" id="set-logs" hidden>
-              <div class="block-head">
-                <div>
-                  <h2>日志</h2>
-                  <p class="muted">最近的运行记录，只留在这次进程里。</p>
-                </div>
-                <button type="button" id="btn-refresh-logs" class="btn-fit">刷新</button>
-              </div>
-              <pre id="log-view" class="log-view"></pre>
-            </section>
-
-            <section class="block" id="set-machine" hidden>
-              <h2>概况</h2>
-              <p class="muted" id="machine-line">在线</p>
-              <div id="stat-cards" class="stats-cards-grid"></div>
-              <h3 class="field-title">近 14 天</h3>
-              <div id="stat-trend" class="trend"></div>
             </section>
           </div>
         </section>

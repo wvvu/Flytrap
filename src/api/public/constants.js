@@ -26,17 +26,10 @@ export const STEP_NAMES = {
 };
 export const STEP_ORDER = ["auth", "parse", "classify", "notify", "rebuild", "send"];
 export const SETTING_SECTIONS = [
-  ["names", "名称"],
-  ["model", "模型"],
-  ["account", "账号"],
-  ["domains", "收信"],
-  ["send", "发信"],
-  ["mailboxes", "地址"],
-  ["block", "黑名单"],
-  ["notify", "提醒"],
-  ["prompt", "分拣"],
-  ["jobs", "失败"],
-  ["logs", "日志"],
-  ["machine", "概况"],
+  ["domains", "域名与发信", "收信、短名、签名"],
+  ["people", "地址与黑名单", "备注、称呼、拦截"],
+  ["classify", "分拣与提醒", "模型、提示词、推送"],
+  ["status", "状态与日志", "概况、失败、日志"],
+  ["account", "界面与账号", "名称、密码"],
 ];
 export const LAST_FROM_KEY = "mail_last_from";
