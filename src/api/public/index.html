@@ -109,10 +109,13 @@
         <div class="rail-bottom">
           <button type="button" class="rail-btn-sm" id="nav-settings" title="设置">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"></use></svg></span>
-            <span class="badge badge-alert" id="badge-dlq" hidden>0</span>
           </button>
           <button type="button" class="rail-btn-sm" id="btn-theme" title="切换深浅色">
             <span class="icon" id="theme-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sun"></use></svg></span>
+          </button>
+          <button type="button" class="rail-btn-sm" id="nav-dlq" title="处理失败">
+            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"></use></svg></span>
+            <span class="badge badge-alert" id="badge-dlq" hidden>0</span>
           </button>
           <button type="button" class="rail-btn-sm" id="logout" title="退出">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-logout"></use></svg></span>
@@ -189,7 +192,6 @@
           <div class="stream-title-row">
             <h2>处理失败</h2>
             <div class="stream-actions">
-              <button type="button" id="btn-dlq-back" class="btn-sm">返回设置</button>
               <button type="button" id="btn-retry-all" class="btn-sm">全部再试</button>
               <button type="button" id="btn-dlq-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
@@ -589,9 +591,6 @@
               <div class="inline-row">
                 <input id="job-max-attempts" class="field-narrow" inputmode="numeric" autocomplete="off">
                 <span class="muted">次之后不再自动试</span>
-              </div>
-              <div class="inline-row">
-                <button type="button" id="btn-open-dlq" class="btn-fit">查看处理失败</button>
               </div>
             </section>
 

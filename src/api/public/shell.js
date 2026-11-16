@@ -2,7 +2,7 @@
 // 外加登录后引导（revealApp：它编排各视图，本就属于外壳层）。
 import { setRevealApp, setSwitchNav } from "./nav.js";
 import { state } from "./state.js";
-import { appEl, dlqNoticeEl, filtersForm, listEl, mailDetailEl, mailEmptyCopy, mailEmptyEl, mailLoadingEl, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, streamDlqHeader, streamInboxHeader, streamSendHeader, streamSettingsHeader, streamSpamHeader, streamTrashHeader, themeIcon, viewDlq, viewMail, viewSend, viewSettings } from "./dom.js";
+import { appEl, dlqNoticeEl, filtersForm, listEl, mailDetailEl, mailEmptyCopy, mailEmptyEl, mailLoadingEl, navDlqBtn, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, streamDlqHeader, streamInboxHeader, streamSendHeader, streamSettingsHeader, streamSpamHeader, streamTrashHeader, themeIcon, viewDlq, viewMail, viewSend, viewSettings } from "./dom.js";
 import { refreshUnread, setGlyph, setMobilePane, setViewTitle, showApp } from "./ui.js";
 import { reloadMessages, reloadTrash, renderSandboxHtml, selectMail, syncListLabel } from "./mail-view.js";
 import { loadDlqJobs, updateDlqBadge } from "./dlq-view.js";
@@ -73,7 +73,7 @@ export async function switchNav(view) {
   state.currentView = view;
   setViewTitle(view);
   if (appEl) delete appEl.dataset.layout;
-  const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navSettingsBtn];
+  const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navSettingsBtn, navDlqBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
   const viewPanels = [viewMail, viewDlq, viewSend, viewSettings];
   viewPanels.forEach((p) => { if (p) p.hidden = true; });
@@ -125,7 +125,7 @@ export async function switchNav(view) {
     viewMail.hidden = false;
     await reloadTrash();
   } else if (view === "dlq") {
-    navSettingsBtn?.classList.add("active");
+    navDlqBtn?.classList.add("active");
     if (streamDlqHeader) streamDlqHeader.hidden = false;
     if (viewDlq) viewDlq.hidden = false;
     await loadDlqJobs(state.currentDlqScope);

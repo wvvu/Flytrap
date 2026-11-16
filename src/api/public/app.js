@@ -1,6 +1,6 @@
 // 入口：事件绑定、启动初始化、15 秒轮询。只组装，不放业务逻辑。
 import { state } from "./state.js";
-import { appEl, backListBtn, btnBlockMail, btnDeleteMail, btnLoadImages, btnReclassify, btnReply, btnRestoreMail, btnTrashMail, confirmModal, detailModelVerdict, detailVerdictSelect, dlqRefreshBtn, emptyTrashBtn, filterSelect, labelInput, listEl, loginForm, logoutBtn, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, queryInput, refreshBtn, retryAllBtn, spamRefreshBtn, themeBtn, trashQueryInput, trashRefreshBtn } from "./dom.js";
+import { appEl, backListBtn, btnBlockMail, btnDeleteMail, btnLoadImages, btnReclassify, btnReply, btnRestoreMail, btnTrashMail, confirmModal, detailModelVerdict, detailVerdictSelect, dlqRefreshBtn, emptyTrashBtn, filterSelect, labelInput, listEl, loginForm, logoutBtn, navDlqBtn, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, queryInput, refreshBtn, retryAllBtn, spamRefreshBtn, themeBtn, trashQueryInput, trashRefreshBtn } from "./dom.js";
 import { request } from "./net.js";
 import { explain, findByDataId, isTypingTarget, refreshUnread, setMobilePane, toast } from "./ui.js";
 import { debounce, hashMailId } from "./util.js";
@@ -31,15 +31,13 @@ navTrashBtn?.addEventListener("click", () => switchNav("trash"));
 
 navSettingsBtn?.addEventListener("click", () => switchNav("settings"));
 
+navDlqBtn?.addEventListener("click", () => switchNav("dlq"));
+
 refreshBtn?.addEventListener("click", () => void reloadMessages());
 
 promoBtn?.addEventListener("click", () => setPromoMode(!state.inboxPromoOnly));
 
 spamRefreshBtn?.addEventListener("click", () => void reloadMessages());
-
-document.querySelector("#btn-open-dlq")?.addEventListener("click", () => switchNav("dlq"));
-
-document.querySelector("#btn-dlq-back")?.addEventListener("click", () => switchNav("settings"));
 
 trashRefreshBtn?.addEventListener("click", () => void reloadTrash());
 
