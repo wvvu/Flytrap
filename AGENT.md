@@ -6,6 +6,8 @@
 
 仓库就是这个目录。命令在这里跑。远程 `https://github.com/wvvu/flytrap.git`。改动进 `dev`，上线再合 `main`。
 
+动手前先 `git fetch`，核对本地和 `origin/dev`。上次两边各做了一遍同一件事。做完直接推 `dev`，本机不方便看。
+
 改完跑 `npm test` 和 `npm run typecheck`。只改 `src/api/public/` 时，跑 `npm run test:ui && npm run typecheck` 就够了，界面效果留给浏览器看。不要在 `test/ui.test.ts` 里加页面文案、色号、元素顺序、CSS 数值等字面量断言；那里只守安全底线（沙箱属性、CSP、无 innerHTML、鉴权拦截、路径穿越）。面板是 `src/api/public` 的静态文件，禁止 `innerHTML`。预览 iframe 用空的 `sandbox=""`，外链图片默认不加载。文案里不要出现「你」「我」「他」。
 
 Windows 上 `MAIL_DATA_DIR` 用 `./data`。本地 `.env` 的 `admin` / `admin` 和占位 session secret 只给开发，生产启动会拒绝。`557555.xyz` 已在收信域名里，留着。不要提交 `sketch.html`。`docs/` 不入库。
