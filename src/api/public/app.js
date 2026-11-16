@@ -1,6 +1,6 @@
 // 入口：事件绑定、启动初始化、15 秒轮询。只组装，不放业务逻辑。
 import { state } from "./state.js";
-import { appEl, backListBtn, btnBlockMail, btnDeleteMail, btnLoadImages, btnReclassify, btnReply, btnRestoreMail, btnTrashMail, confirmModal, detailModelVerdict, detailVerdictSelect, dlqRefreshBtn, emptyTrashBtn, filterSelect, labelInput, listEl, loginForm, logoutBtn, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, queryInput, refreshBtn, retryAllBtn, spamRefreshBtn, themeBtn, trashQueryInput, trashRefreshBtn } from "./dom.js";
+import { appEl, backListBtn, btnBlockMail, btnDeleteMail, btnLoadImages, btnReclassify, btnReply, btnRestoreMail, btnTrashMail, confirmModal, detailModelVerdict, detailVerdictSelect, dlqRefreshBtn, emptyTrashBtn, filterSelect, labelInput, listEl, loginForm, logoutBtn, navDlqBtn, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, queryInput, refreshBtn, retryAllBtn, spamRefreshBtn, themeBtn, trashQueryInput, trashRefreshBtn } from "./dom.js";
 import { request } from "./net.js";
 import { explain, findByDataId, isTypingTarget, refreshUnread, setMobilePane, toast } from "./ui.js";
 import { debounce, hashMailId } from "./util.js";
@@ -8,7 +8,7 @@ import { initTheme, revealApp, setPromoMode, switchNav, toggleTheme } from "./sh
 import { closeReset, finishReset, savePassword, sendResetCode, showLogin, showResetPassword, signIn, signOut, startReset } from "./auth.js";
 import { handleBlockMail, handleDeleteMail, handleEmptyTrash, handleRestoreMail, handleTrashMail, maybeLoadMore, mergeFreshMail, navigateMail, reclassify, reloadMessages, reloadTrash, removeStaleMail, renderSandboxHtml, staysInList, switchTab, syncListLabel } from "./mail-view.js";
 import { loadDlqJobs, openFailedMail, renderFailureGroups, retryAllDead, updateDlqBadge } from "./dlq-view.js";
-import { addBlocked, addDomain, addKeyRow, addModelRow, addSenderRow, generateDkim, labelName, loadLogs, saveAiSettings, saveAttemptSettings, saveCurrentPrompt, saveMailbox, saveNameSettings, saveNotifySettings, syncAiSave, syncAttemptSave, syncNamesSave, syncNotifySave, syncPromptSave } from "./settings-view.js";
+import { addBlocked, addDomain, addKeyRow, addModelRow, addSenderRow, enqueueAi, generateDkim, labelName, loadLogs, saveAttemptSettings, saveCurrentPrompt, saveMailbox, saveNameSettings, saveNotifySettings, syncAttemptSave, syncNamesSave, syncNotifySave, syncPromptSave } from "./settings-view.js";
 import { loadSendPage, openComposer, refreshSendNote, refreshSentList, renderSentList, startReply, submitSend } from "./send-view.js";
 
 // 事件绑定
@@ -31,15 +31,13 @@ navTrashBtn?.addEventListener("click", () => switchNav("trash"));
 
 navSettingsBtn?.addEventListener("click", () => switchNav("settings"));
 
+navDlqBtn?.addEventListener("click", () => switchNav("dlq"));
+
 refreshBtn?.addEventListener("click", () => void reloadMessages());
 
 promoBtn?.addEventListener("click", () => setPromoMode(!state.inboxPromoOnly));
 
 spamRefreshBtn?.addEventListener("click", () => void reloadMessages());
-
-document.querySelector("#btn-open-dlq")?.addEventListener("click", () => switchNav("dlq"));
-
-document.querySelector("#btn-dlq-back")?.addEventListener("click", () => switchNav("settings"));
 
 trashRefreshBtn?.addEventListener("click", () => void reloadTrash());
 
@@ -65,11 +63,25 @@ document.querySelector("#btn-back-dlq")?.addEventListener("click", () => setMobi
 
 document.querySelector("#btn-back-settings")?.addEventListener("click", () => setMobilePane("list"));
 
-document.querySelector("#btn-save-ai")?.addEventListener("click", () => void saveAiSettings());
+document.querySelector("#ai-enabled")?.addEventListener("change", () => {
+  const box = document.querySelector("#ai-enabled");
+  if (!box) return;
+  const next = box.checked;
+  box.checked = !next;
+  enqueueAi(() => {
+    box.checked = next;
+  }, next ? "分拣已开启" : "分拣已关闭");
+});
 
-document.querySelector("#ai-enabled")?.addEventListener("change", syncAiSave);
-
-document.querySelector("#ai-thinking")?.addEventListener("change", syncAiSave);
+document.querySelector("#ai-thinking")?.addEventListener("change", () => {
+  const select = document.querySelector("#ai-thinking");
+  if (!select) return;
+  const next = select.value;
+  select.value = select.dataset.prev || "low";
+  enqueueAi(() => {
+    select.value = next;
+  }, "思考已保存");
+});
 
 document.querySelector("#btn-save-password")?.addEventListener("click", () => void savePassword());
 
@@ -98,16 +110,12 @@ document.querySelector("#model-add")?.addEventListener("keydown", (event) => {
   }
 });
 
-document.querySelector("#model-add")?.addEventListener("input", syncAiSave);
-
 document.querySelector("#key-add")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
     addKeyRow();
   }
 });
-
-document.querySelector("#key-add")?.addEventListener("input", syncAiSave);
 
 document.querySelector("#btn-save-prompt")?.addEventListener("click", () => void saveCurrentPrompt());
 
@@ -337,7 +345,6 @@ window.addEventListener("hashchange", () => {
 export async function init() {
   initTheme();
   try {
-    await request("/v1/me");
     await revealApp();
   } catch {
     showLogin();

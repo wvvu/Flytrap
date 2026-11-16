@@ -2,9 +2,9 @@
 // 外加登录后引导（revealApp：它编排各视图，本就属于外壳层）。
 import { setRevealApp, setSwitchNav } from "./nav.js";
 import { state } from "./state.js";
-import { appEl, dlqNoticeEl, filtersForm, listEl, mailDetailEl, mailEmptyCopy, mailEmptyEl, mailLoadingEl, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, streamDlqHeader, streamInboxHeader, streamSendHeader, streamSettingsHeader, streamSpamHeader, streamTrashHeader, themeIcon, viewDlq, viewMail, viewSend, viewSettings } from "./dom.js";
+import { appEl, dlqNoticeEl, filtersForm, listEl, mailDetailEl, mailEmptyCopy, mailEmptyEl, mailLoadingEl, navDlqBtn, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, streamDlqHeader, streamInboxHeader, streamSendHeader, streamSettingsHeader, streamSpamHeader, streamTrashHeader, themeIcon, viewDlq, viewMail, viewSend, viewSettings } from "./dom.js";
 import { refreshUnread, setGlyph, setMobilePane, setViewTitle, showApp } from "./ui.js";
-import { reloadMessages, reloadTrash, renderSandboxHtml, selectMail, syncListLabel } from "./mail-view.js";
+import { refreshShownNames, reloadMessages, reloadTrash, renderSandboxHtml, selectMail, syncListLabel } from "./mail-view.js";
 import { loadDlqJobs, updateDlqBadge } from "./dlq-view.js";
 import { loadAppearance, loadSettingsPage, renderSettingsNav, showSettingsSection } from "./settings-view.js";
 import { clearReplyDraft, loadSendPage } from "./send-view.js";
@@ -73,7 +73,7 @@ export async function switchNav(view) {
   state.currentView = view;
   setViewTitle(view);
   if (appEl) delete appEl.dataset.layout;
-  const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navSettingsBtn];
+  const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navSettingsBtn, navDlqBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
   const viewPanels = [viewMail, viewDlq, viewSend, viewSettings];
   viewPanels.forEach((p) => { if (p) p.hidden = true; });
@@ -107,7 +107,7 @@ export async function switchNav(view) {
     streamInboxHeader.hidden = false;
     viewMail.hidden = false;
     syncListLabel();
-    await reloadMessages();
+    return reloadMessages();
   } else if (view === "send") {
     navSendBtn?.classList.add("active");
     if (streamSendHeader) streamSendHeader.hidden = false;
@@ -125,7 +125,7 @@ export async function switchNav(view) {
     viewMail.hidden = false;
     await reloadTrash();
   } else if (view === "dlq") {
-    navSettingsBtn?.classList.add("active");
+    navDlqBtn?.classList.add("active");
     if (streamDlqHeader) streamDlqHeader.hidden = false;
     if (viewDlq) viewDlq.hidden = false;
     await loadDlqJobs(state.currentDlqScope);
@@ -140,19 +140,25 @@ export async function switchNav(view) {
 }
 
 export async function revealApp() {
-  state.holdBoot = true;
-  appEl.classList.add("is-booting");
+  const deepId = hashMailId();
+  // 深链只开目标那封。先开收件箱第一封会把启动再拖一次正文解析。
+  state.skipFirstOpen = Boolean(deepId);
+  const appearance = loadAppearance();
+  // 先占住布局再藏起来，列表高度才量得准。列表画完就揭开，不等第一封正文。
   showApp();
+  if (appEl) appEl.classList.add("is-booting");
+  let listed;
   try {
-    await loadAppearance();
-    const deepId = hashMailId();
-    await switchNav("inbox");
-    if (deepId) await selectMail(deepId);
-    await Promise.all([updateDlqBadge(), refreshUnread()]);
+    listed = await switchNav("inbox");
   } finally {
-    state.holdBoot = false;
-    appEl.classList.remove("is-booting");
+    state.skipFirstOpen = false;
   }
+  if (listed === false) return;
+  if (deepId) void selectMail(deepId);
+  if (appEl) appEl.classList.remove("is-booting");
+  void appearance.then(() => refreshShownNames());
+  void updateDlqBadge();
+  void refreshUnread();
 }
 
 setSwitchNav(switchNav);

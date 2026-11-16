@@ -13,13 +13,18 @@ export function sqliteSessionStore(db: Db, defaultTtlMs = DEFAULT_SESSION_TTL_MS
   );
   const remove = db.prepare("DELETE FROM sessions WHERE sid = ?");
   const sweep = db.prepare("DELETE FROM sessions WHERE expires_at <= ?");
+  let sweptAt = 0;
 
   return {
     set(sessionId, session, callback) {
       try {
         const now = Date.now();
         write.run(sessionId, JSON.stringify(session), expiresAt(session, now, defaultTtlMs));
-        sweep.run(now);
+        // 启动会连打多次会话写入。过期清理跟着每次写会抢 SQLite 的写锁，一分钟清一次就够。
+        if (now - sweptAt >= 60_000) {
+          sweptAt = now;
+          sweep.run(now);
+        }
         callback();
       } catch (err) {
         callback(err);

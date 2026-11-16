@@ -11,6 +11,7 @@ export const navSendBtn = document.querySelector("#nav-send");
 export const navSpamBtn = document.querySelector("#nav-spam");
 export const navTrashBtn = document.querySelector("#nav-trash");
 export const navSettingsBtn = document.querySelector("#nav-settings");
+export const navDlqBtn = document.querySelector("#nav-dlq");
 export const badgeDlq = document.querySelector("#badge-dlq");
 export const streamTitle = document.querySelector("#stream-title");
 export const streamInboxHeader = document.querySelector("#stream-inbox-header");
