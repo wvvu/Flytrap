@@ -6,7 +6,7 @@
 
 仓库就是这个目录。命令在这里跑。远程 `https://github.com/wvvu/flytrap.git`。改动进 `dev`，上线再合 `main`。
 
-动手前先 `git fetch`，核对本地和 `origin/dev`。上次两边各做了一遍同一件事。做完直接推 `dev`，本机不方便看。
+重要！新对话动手前务必先 `git fetch`，核对本地和 `origin/dev`，上次两边各做了一遍同一件事。做完直接推 `dev`，本机不方便看。
 
 改完跑 `npm test` 和 `npm run typecheck`。只改 `src/api/public/` 时，跑 `npm run test:ui && npm run typecheck` 就够了，界面效果留给浏览器看。不要在 `test/ui.test.ts` 里加页面文案、色号、元素顺序、CSS 数值等字面量断言；那里只守安全底线（沙箱属性、CSP、无 innerHTML、鉴权拦截、路径穿越）。面板是 `src/api/public` 的静态文件，禁止 `innerHTML`。预览 iframe 用空的 `sandbox=""`，外链图片默认不加载。文案里不要出现「你」「我」「他」。
 
@@ -28,7 +28,7 @@ Windows 上 `MAIL_DATA_DIR` 用 `./data`。本地 `.env` 的 `admin` / `admin` �
 
 只有 `main` 对外。公开面板跟着 `origin/main`。bug 在 `dev` 修，不改版本号，用 commit 哈希区分。`dev` 可以在 `flytrap-dev` 上跑，那不是发行。
 
-`dev` 合并进 `main` 时才升版本。这次只有修复，用 `npm version patch`。有新功能，用 `npm version minor`。主版本号先聊再升。一次合并升一次，修订号不是提交计数。
+`dev` 合并进 `main` 时才升版本。这次只有修复，用 `npm version patch`。有新功能，用 `npm version minor`。主版本号先聊再升。一次合并升一次，修订号不是提交计数。版本号只在合 `main` 发版那一刻改一次，`dev` 上开发不准提前 bump；小修小补升 patch，大功能攒一批才升 minor。
 
 `package.json` 是唯一版本来源。`npm version` 会改 `package-lock.json` 并打 tag。不要在 `docker-compose.yml` 里再手写一个号。
 
@@ -39,5 +39,3 @@ Windows 上 `MAIL_DATA_DIR` 用 `./data`。本地 `.env` 的 `admin` / `admin` �
 启动时读 `PRAGMA user_version`。库比这份代码认识的新，就拒绝启动，不要倒着迁。库更旧时，仍用 `migrations/*.sql` 往前迁。
 
 文档里不写会过期的数字，比如测试有多少个。
-
-追加：gray什么时候由灰色默认变成待看了？有空烦请解释给我听 以及 带cookie启动/打开速度是否还有提升空间
