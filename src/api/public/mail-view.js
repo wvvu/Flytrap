@@ -28,7 +28,8 @@ export async function reloadMessages() {
   state.loadingMore = false;
   listEl.replaceChildren();
   noticeEl.textContent = "";
-  await loadMessagesPage(true, token);
+  const ok = await loadMessagesPage(true, token);
+  if (ok === false) return false;
   if (token !== state.listLoadToken) return;
   maybeLoadMore();
 }
@@ -100,17 +101,18 @@ export async function loadMessagesPage(replace, token) {
     state.cursor = page.nextCursor || null;
 
     // 桌面端顺手打开第一封。窄屏留在列表，避免一进来就盖住收件流。
-    if (replace && items.length > 0 && !state.selectedMailId) {
-      const opening = selectMail(items[0].id, { keepListOnNarrow: true });
-      if (state.holdBoot) await opening;
-      else void opening;
+    // 不等正文。启动时壳子在列表画完就揭开，详情自己补上。
+    if (replace && items.length > 0 && !state.selectedMailId && !state.skipFirstOpen) {
+      void selectMail(items[0].id, { keepListOnNarrow: true });
     }
+    return true;
   } catch (err) {
     if (err && err.status === 401) {
       showLogin();
-      return;
+      return false;
     }
     noticeEl.textContent = explain(err);
+    return true;
   }
 }
 
@@ -161,6 +163,7 @@ export function createMailListItem(item) {
   // tag.textContent = labelName(item.label) + confText;
   const named = Boolean(item.label) && item.label !== "legit";
   tag.hidden = !named;
+  if (item.manualOverride) tag.dataset.manual = "1";
   tag.textContent = named ? labelName(item.label) + (item.manualOverride ? " 已改" : "") : "";
 
   line3.hidden = !named;
@@ -169,6 +172,26 @@ export function createMailListItem(item) {
   card.append(line1, subject, line3);
   card.addEventListener("click", () => void selectMail(item.id));
   return card;
+}
+
+// 称呼和分类名可能比列表晚到。补上已经画出来的行，避免先闪一截裸地址。
+export function refreshShownNames() {
+  if (state.currentView !== "inbox" && state.currentView !== "spam" && state.currentView !== "trash") return;
+  if (listEl) {
+    for (const card of listEl.querySelectorAll(".mail-item")) {
+      const from = card.querySelector(".item-from");
+      if (from instanceof HTMLElement && from.title) from.textContent = formatFrom(from.title);
+      const tag = card.querySelector(".verdict-tag");
+      if (!(tag instanceof HTMLElement)) continue;
+      const label = tag.dataset.label || "";
+      if (!label || label === "none" || label === "legit") continue;
+      tag.textContent = labelName(label) + (tag.dataset.manual ? " 已改" : "");
+    }
+  }
+  if (detailFrom && detailFrom.title) detailFrom.textContent = formatFrom(detailFrom.title);
+  if (detailTo && state.openDetail) {
+    detailTo.textContent = formatRecipients(state.openDetail.envelopeTo);
+  }
 }
 
 export async function selectMail(id, options = {}) {
@@ -199,7 +222,7 @@ export async function selectMail(id, options = {}) {
     if (el.dataset.id === id) el.classList.add("selected");
     else el.classList.remove("selected");
   });
-  const opened = markOpened(id);
+  markOpened(id);
 
   mailEmptyEl.hidden = true;
   mailDetailEl.hidden = true;
@@ -361,9 +384,9 @@ export async function selectMail(id, options = {}) {
     mailDetailEl.hidden = false;
 
     // 加载 HTML 与真正的 RFC822 信头。信头随 HTML 一起回来，省一次请求；
-    // 只有 HTML 里没带信头时才单独拉一次。带会话进来时等这一封画完再揭开，避免连闪。
+    // 只有 HTML 里没带信头时才单独拉一次。不等这些请求，列表先露面。
     const htmlReady = loadMailHtml(id, token);
-    const headersReady = (async () => {
+    void (async () => {
       const headers = await htmlReady;
       if (token !== state.mailLoadToken) return;
       if (headers && headers.trim()) {
@@ -372,8 +395,7 @@ export async function selectMail(id, options = {}) {
       }
       await loadRawHeaders(id, token, detail);
     })();
-    const threadReady = loadThread(id, token);
-    if (state.holdBoot) await Promise.all([htmlReady, headersReady, threadReady, opened]);
+    void loadThread(id, token);
   } catch (err) {
     if (token !== state.mailLoadToken) return;
     console.error("selectMail error:", err);

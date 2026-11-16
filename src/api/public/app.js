@@ -345,7 +345,6 @@ window.addEventListener("hashchange", () => {
 export async function init() {
   initTheme();
   try {
-    await request("/v1/me");
     await revealApp();
   } catch {
     showLogin();

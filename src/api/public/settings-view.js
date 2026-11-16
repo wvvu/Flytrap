@@ -441,14 +441,12 @@ export async function saveMailbox() {
 }
 
 export async function loadAppearance() {
-  try {
-    const settings = await request("/v1/settings");
-    applyAppearance(settings);
-    const history = await request("/v1/mailbox-history");
-    rememberMailboxes(history.items || []);
-  } catch {
-    // Built-in names still work if this read fails.
-  }
+  const [settingsRes, historyRes] = await Promise.allSettled([
+    request("/v1/settings"),
+    request("/v1/mailbox-history"),
+  ]);
+  if (settingsRes.status === "fulfilled") applyAppearance(settingsRes.value);
+  if (historyRes.status === "fulfilled") rememberMailboxes(historyRes.value.items || []);
 }
 
 export function applyAppearance(settings) {

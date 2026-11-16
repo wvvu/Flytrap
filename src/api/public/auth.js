@@ -45,7 +45,6 @@ export async function signOut() {
 
 export function showLogin() {
   document.title = "登录";
-  state.holdBoot = false;
   if (appEl) appEl.classList.remove("is-booting");
   loginEl.hidden = false;
   loginEl.style.display = "flex";

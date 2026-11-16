@@ -32,7 +32,7 @@ export const state = {
   csrfToken: null,
   toastTimer: 0,
   currentPromptId: "classify-v1",
-  holdBoot: false,
+  skipFirstOpen: false,
   unreadInbox: 0,
   blockedSenders: [],
   dkimKeys: [],
