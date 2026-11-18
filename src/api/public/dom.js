@@ -25,7 +25,6 @@ export const streamSendHeader = document.querySelector("#stream-send-header");
 export const streamSpamHeader = document.querySelector("#stream-spam-header");
 export const streamTrashHeader = document.querySelector("#stream-trash-header");
 export const streamDlqHeader = document.querySelector("#stream-dlq-header");
-export const streamUsersHeader = document.querySelector("#stream-users-header");
 export const streamSettingsHeader = document.querySelector("#stream-settings-header");
 export const streamSubfilters = document.querySelector("#stream-subfilters");
 export const adminScopeSelect = document.querySelector("#admin-scope-select");
@@ -56,7 +55,6 @@ export const usersQueryInput = document.querySelector("#users-q");
 export const viewMail = document.querySelector("#view-mail");
 export const viewDlq = document.querySelector("#view-dlq");
 export const viewSend = document.querySelector("#view-send");
-export const viewUsers = document.querySelector("#view-users");
 export const viewSettings = document.querySelector("#view-settings");
 
 export const failureDetailEl = document.querySelector("#failure-detail");

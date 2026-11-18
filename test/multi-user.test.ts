@@ -81,6 +81,7 @@ test("multi-user accounts isolate exact, +subaddress, and wildcard mailboxes wit
       domain: "example.com",
     });
     assert.equal(dup.statusCode, 409);
+    assert.equal(dup.json().reason, "mailbox already allocated");
 
     // Create Bob with catch-all *@example.com (lower priority than alice@example.com) + bob@example.net
     const createBob = await admin.post(app, "/v1/users", {

@@ -48,6 +48,7 @@ export const state = {
   replyArmed: false,
   draftSaveTimer: 0,
   currentSettingsSection: "domains",
+  settingsReturnSection: "domains",
   selectedFailureKey: "",
   aiModels: [],
   aiKeyRows: [],

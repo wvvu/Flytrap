@@ -21,6 +21,9 @@ import {
   domainFilterSelect,
   emptyTrashBtn,
   filterSelect,
+  mailDetailEl,
+  mailEmptyEl,
+  mailLoadingEl,
   labelInput,
   listEl,
   loginForm,
@@ -160,7 +163,12 @@ navSendBtn?.addEventListener("click", () => void switchNav("send"));
 navSpamBtn?.addEventListener("click", () => void switchNav("spam"));
 navTrashBtn?.addEventListener("click", () => void switchNav("trash"));
 navUsersBtn?.addEventListener("click", () => void switchNav("users"));
-navSettingsBtn?.addEventListener("click", () => void switchNav("settings"));
+navSettingsBtn?.addEventListener("click", () => {
+  if (state.currentSettingsSection === "users") {
+    state.currentSettingsSection = state.settingsReturnSection || (state.isAdmin ? "domains" : "my-mailboxes");
+  }
+  void switchNav("settings");
+});
 navDlqBtn?.addEventListener("click", () => void switchNav("dlq"));
 
 // 列表头与过滤器事件
@@ -174,8 +182,18 @@ emptyTrashBtn?.addEventListener("click", () => void handleEmptyTrash());
 dlqRefreshBtn?.addEventListener("click", () => void loadDlqJobs());
 retryAllBtn?.addEventListener("click", () => void retryAllDead());
 
+function clearOpenLetter() {
+  state.selectedMailId = null;
+  state.readingSentId = null;
+  state.openDetail = null;
+  if (mailDetailEl) mailDetailEl.hidden = true;
+  if (mailLoadingEl) mailLoadingEl.hidden = true;
+  if (mailEmptyEl) mailEmptyEl.hidden = false;
+}
+
 adminScopeSelect?.addEventListener("change", () => {
   state.adminScope = adminScopeSelect.value || "mine";
+  clearOpenLetter();
   void refreshUnread();
   if (state.currentView === "trash") void reloadTrash();
   else void reloadMessages();
@@ -183,6 +201,7 @@ adminScopeSelect?.addEventListener("change", () => {
 
 domainFilterSelect?.addEventListener("change", () => {
   state.domainFilter = domainFilterSelect.value || "";
+  clearOpenLetter();
   if (state.currentView === "trash") void reloadTrash();
   else void reloadMessages();
 });
@@ -203,7 +222,6 @@ detailOtpBtn?.addEventListener("click", () => {
 backListBtn?.addEventListener("click", () => setMobilePane("list"));
 document.querySelector("#btn-back-dlq")?.addEventListener("click", () => setMobilePane("list"));
 document.querySelector("#btn-back-settings")?.addEventListener("click", () => setMobilePane("list"));
-document.querySelector("#btn-back-users")?.addEventListener("click", () => setMobilePane("list"));
 document.querySelector("#btn-back-send")?.addEventListener("click", () => setMobilePane("list"));
 
 // 成员管理页事件
@@ -315,7 +333,9 @@ document.querySelector("#btn-cc-toggle")?.addEventListener("click", () => {
   }
 });
 
-document.querySelector("#btn-dkim-generate")?.addEventListener("click", () => {
+document.querySelector("#dkim-domain")?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
   const input = document.querySelector("#dkim-domain");
   const domain = input ? input.value.trim().toLowerCase() : "";
   if (!domain) {
@@ -383,6 +403,7 @@ queryInput?.addEventListener("input", debounce(() => void reloadMessages(), 350)
 
 filterSelect?.addEventListener("change", () => {
   if (state.currentView !== "spam") return;
+  clearOpenLetter();
   syncListLabel();
   void reloadMessages();
 });
@@ -467,7 +488,7 @@ function activeSearchInput() {
   if (state.currentView === "trash") return trashQueryInput;
   if (state.currentView === "send") return document.querySelector("#send-q");
   if (state.currentView === "dlq") return document.querySelector("#dlq-q");
-  if (state.currentView === "users") return usersQueryInput;
+  if (state.currentView === "settings" && state.currentSettingsSection === "users") return usersQueryInput;
   return null;
 }
 
@@ -560,7 +581,7 @@ window.addEventListener("keydown", (e) => {
     else if (e.key === "r") void loadSendPage();
   } else if (state.currentView === "dlq" && e.key === "r") {
     void loadDlqJobs();
-  } else if (state.currentView === "users" && e.key === "r") {
+  } else if (state.currentView === "settings" && state.currentSettingsSection === "users" && e.key === "r") {
     void loadUsersPage();
   }
 });

@@ -28,20 +28,18 @@ import {
   streamSpamHeader,
   streamSubfilters,
   streamTrashHeader,
-  streamUsersHeader,
   themeIcon,
   viewDlq,
   viewMail,
   viewSend,
   viewSettings,
-  viewUsers,
 } from "./dom.js";
 import { request } from "./net.js";
 import { applyRoleUI, refreshUnread, setGlyph, setMobilePane, setViewTitle, showApp } from "./ui.js";
 import { refreshShownNames, reloadMessages, reloadTrash, renderSandboxHtml, selectMail, syncListLabel } from "./mail-view.js";
 import { loadDlqJobs, updateDlqBadge } from "./dlq-view.js";
 import { loadAppearance, loadSettingsPage, renderSettingsNav, showSettingsSection } from "./settings-view.js";
-import { loadUsersPage, syncAdminScopeOptions } from "./users-view.js";
+import { syncAdminScopeOptions } from "./users-view.js";
 import { loadSendPage, openComposer } from "./send-view.js";
 import { hashMailId } from "./util.js";
 
@@ -140,9 +138,14 @@ export function setPromoMode(on) {
 }
 
 export async function switchNav(view) {
-  if ((view === "users" || view === "dlq") && !state.isAdmin) {
-    view = "inbox";
+  if (view === "users") {
+    if (!state.isAdmin) view = "inbox";
+    else {
+      state.currentSettingsSection = "users";
+      view = "settings";
+    }
   }
+  if (view === "dlq" && !state.isAdmin) view = "inbox";
   const keepReply = state.replyArmed;
   state.replyArmed = false;
   if (state.inboxPromoOnly) {
@@ -155,7 +158,7 @@ export async function switchNav(view) {
 
   const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navUsersBtn, navSettingsBtn, navDlqBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
-  const viewPanels = [viewMail, viewDlq, viewSend, viewUsers, viewSettings];
+  const viewPanels = [viewMail, viewDlq, viewSend, viewSettings];
   viewPanels.forEach((p) => {
     if (p) p.hidden = true;
   });
@@ -165,7 +168,6 @@ export async function switchNav(view) {
   if (streamSpamHeader) streamSpamHeader.hidden = true;
   if (streamTrashHeader) streamTrashHeader.hidden = true;
   if (streamDlqHeader) streamDlqHeader.hidden = true;
-  if (streamUsersHeader) streamUsersHeader.hidden = true;
   if (streamSettingsHeader) streamSettingsHeader.hidden = true;
   if (dlqNoticeEl) dlqNoticeEl.hidden = view !== "dlq";
   noticeEl.hidden = view === "dlq";
@@ -213,22 +215,18 @@ export async function switchNav(view) {
     if (streamTrashHeader) streamTrashHeader.hidden = false;
     viewMail.hidden = false;
     await reloadTrash();
-  } else if (view === "users") {
-    navUsersBtn?.classList.add("active");
-    if (streamUsersHeader) streamUsersHeader.hidden = false;
-    if (viewUsers) viewUsers.hidden = false;
-    await loadUsersPage();
   } else if (view === "dlq") {
     navDlqBtn?.classList.add("active");
     if (streamDlqHeader) streamDlqHeader.hidden = false;
     if (viewDlq) viewDlq.hidden = false;
     await loadDlqJobs(state.currentDlqScope);
   } else if (view === "settings") {
-    navSettingsBtn?.classList.add("active");
+    const onUsers = state.isAdmin && state.currentSettingsSection === "users";
+    (onUsers ? navUsersBtn : navSettingsBtn)?.classList.add("active");
     if (streamSettingsHeader) streamSettingsHeader.hidden = false;
     if (viewSettings) viewSettings.hidden = false;
     renderSettingsNav();
-    showSettingsSection(state.currentSettingsSection, { keepListOnNarrow: true });
+    showSettingsSection(state.currentSettingsSection, { keepListOnNarrow: !onUsers });
     await loadSettingsPage();
   }
 }
@@ -248,8 +246,14 @@ export async function loadSessionContext() {
   state.dkimDomains = Array.isArray(sess.dkimDomains) ? sess.dkimDomains : [];
   state.hasMembers = Boolean(sess.hasMembers);
   state.appVersion = sess.version || "";
-  if (!state.isAdmin && state.currentSettingsSection === "domains") {
-    state.currentSettingsSection = "people";
+  if (
+    !state.isAdmin &&
+    (state.currentSettingsSection === "domains" ||
+      state.currentSettingsSection === "users" ||
+      state.currentSettingsSection === "classify" ||
+      state.currentSettingsSection === "status")
+  ) {
+    state.currentSettingsSection = "my-mailboxes";
   }
   applyRoleUI();
 

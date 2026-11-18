@@ -1,9 +1,30 @@
 // 成员与邮箱分配管理工作台（管理员专属）。
 import { state } from "./state.js";
-import { adminScopeSelect, listEl, noticeEl } from "./dom.js";
+import { adminScopeSelect } from "./dom.js";
 import { request } from "./net.js";
 import { askConfirm, copyText, explain, setMobilePane, toast } from "./ui.js";
 import { formatFullTime, generateRandomPassword } from "./util.js";
+
+const ALLOC_HINT =
+  "精确邮箱（含 +tag）、前缀通配、整域接管。前缀按字面起首，team 会匹配 teammate。整域接住没被更具体规则分走的地址，连历史信一起划走。";
+
+function trailingStar(localpart) {
+  return localpart.endsWith("*") && localpart !== "*";
+}
+
+function setFormError(el, message) {
+  if (!el) return;
+  el.hidden = !message;
+  el.textContent = message || "";
+}
+
+function userCards() {
+  return document.querySelectorAll("#users-cards-host .mail-item");
+}
+
+function usersSectionOpen() {
+  return state.currentView === "settings" && state.currentSettingsSection === "users";
+}
 
 export async function loadUsersPage() {
   if (!state.isAdmin) return;
@@ -13,6 +34,7 @@ export async function loadUsersPage() {
     state.usersList = Array.isArray(res.items) ? res.items : [];
     state.hasMembers = state.usersList.length > 0;
     syncAdminScopeOptions();
+    if (!usersSectionOpen()) return;
     renderUsersStream();
     if (!state.creatingUser && state.selectedUserId) {
       const found = state.usersList.find((u) => u.id === state.selectedUserId);
@@ -72,8 +94,11 @@ function populateDomainSelect(selectEl) {
 }
 
 export function renderUsersStream() {
-  if (state.currentView !== "users") return;
-  listEl.replaceChildren();
+  const host = document.querySelector("#users-cards-host");
+  const note = document.querySelector("#users-list-note");
+  if (!host) return;
+  if (state.currentView !== "settings" || state.currentSettingsSection !== "users") return;
+  host.replaceChildren();
   const q = state.usersQuery.trim().toLowerCase();
   const filtered = state.usersList.filter((u) => {
     if (!q) return true;
@@ -82,16 +107,63 @@ export function renderUsersStream() {
     return hay.includes(q);
   });
 
-  if (state.usersList.length === 0) {
-    noticeEl.textContent = "尚未创建独立成员账号，右侧可直接开通。";
-  } else if (filtered.length === 0) {
-    noticeEl.textContent = "没有匹配的成员";
-  } else {
-    noticeEl.textContent = "";
+  if (note) {
+    if (state.usersList.length === 0) {
+      note.hidden = false;
+      note.textContent = "尚未创建独立成员账号，下方可直接开通。";
+    } else if (filtered.length === 0) {
+      note.hidden = false;
+      note.textContent = "没有匹配的成员";
+    } else {
+      note.hidden = true;
+      note.textContent = "";
+    }
   }
 
   for (const user of filtered) {
-    listEl.append(createUserStreamCard(user));
+    host.append(createUserStreamCard(user));
+  }
+}
+
+export function renderMemberMailboxes() {
+  const host = document.querySelector("#member-allocations-host");
+  const quotaEl = document.querySelector("#member-quota-line");
+  if (!host) return;
+  const quota = state.quotaSendPerDay;
+  if (quotaEl) {
+    if (quota == null) quotaEl.textContent = "今日发信额度随账号设置。";
+    else if (quota <= 0) quotaEl.textContent = "今日发信额度是 0，这个账号只收信。";
+    else quotaEl.textContent = `今日已发 ${state.sentToday}/${quota}。额度按 UTC 日计算。`;
+  }
+  host.replaceChildren();
+  const boxes = Array.isArray(state.allocatedMailboxes) ? state.allocatedMailboxes : [];
+  if (boxes.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "还没有分到邮箱。";
+    host.append(empty);
+    return;
+  }
+  for (const box of boxes) {
+    const row = document.createElement("div");
+    row.className = "alloc-row";
+    const left = document.createElement("div");
+    left.className = "step-copy";
+    const addr = document.createElement("span");
+    addr.className = "alloc-addr";
+    addr.textContent = box.address || `${box.localpart}@${box.domain}`;
+    const meta = document.createElement("span");
+    meta.className = "muted";
+    const send = box.canSend !== false ? "可收发" : "仅收信";
+    let kind = `精确邮箱（含 ${box.localpart}+tag）`;
+    if (box.localpart === "*") kind = "整域接管。没被更具体规则接住的地址，连历史信一起划走";
+    else if (typeof box.localpart === "string" && box.localpart.endsWith("*")) {
+      kind = "前缀通配。字面起首，team 会匹配 teammate";
+    }
+    meta.textContent = `${kind} · ${send}`;
+    left.append(addr, meta);
+    row.append(left);
+    host.append(row);
   }
 }
 
@@ -151,7 +223,7 @@ export function openCreateUserCard(options = {}) {
   if (createCard) createCard.hidden = false;
   if (detailWrap) detailWrap.hidden = true;
   populateDomainSelect(document.querySelector("#uc-mb-domain"));
-  for (const el of listEl.querySelectorAll(".mail-item")) el.classList.remove("selected");
+  for (const el of userCards()) el.classList.remove("selected");
   if (!options.keepListOnNarrow) setMobilePane("detail");
 }
 
@@ -164,7 +236,7 @@ export function selectUser(userId, options = {}) {
   const detailWrap = document.querySelector("#user-detail-wrap");
   if (createCard) createCard.hidden = true;
   if (detailWrap) detailWrap.hidden = false;
-  for (const el of listEl.querySelectorAll(".mail-item")) {
+  for (const el of userCards()) {
     el.classList.toggle("selected", el.dataset.id === userId);
   }
   renderUserDetail(user);
@@ -187,13 +259,25 @@ export async function submitCreateUser() {
   const mbDomain = document.querySelector("#uc-mb-domain")?.value.trim().toLowerCase() || "";
   const notes = document.querySelector("#uc-notes")?.value.trim() || "";
 
+  const errEl = document.querySelector("#uc-form-error");
+  setFormError(errEl, "");
   if (!username || password.length < 8) {
-    toast("请填写账号且密码至少 8 位");
+    const message = "请填写账号且密码至少 8 位";
+    setFormError(errEl, message);
+    toast(message);
     return;
   }
   const quotaSendPerDay = Number.parseInt(quotaRaw, 10);
   if (Number.isNaN(quotaSendPerDay) || quotaSendPerDay < 0 || quotaSendPerDay > 10000) {
-    toast("每日发信上限需在 0 到 10000 之间");
+    const message = "每日发信上限需在 0 到 10000 之间";
+    setFormError(errEl, message);
+    toast(message);
+    return;
+  }
+  if (mbLocal && trailingStar(mbLocal)) {
+    const message = "前缀通配这一档还没接上，先填精确前缀，或填 *。";
+    setFormError(errEl, message);
+    toast(message);
     return;
   }
 
@@ -236,6 +320,7 @@ export async function submitCreateUser() {
     if (credText) credText.textContent = state.lastCreatedCredentials;
     if (credBox) credBox.hidden = false;
 
+    setFormError(document.querySelector("#uc-form-error"), "");
     const form = document.querySelector("#user-create-form");
     if (form) form.reset();
     const quotaEl = document.querySelector("#uc-quota");
@@ -244,7 +329,9 @@ export async function submitCreateUser() {
     toast("账号已创建");
     await refreshUsersDataOnly();
   } catch (err) {
-    toast("创建失败: " + explain(err));
+    const message = "创建失败: " + explain(err);
+    setFormError(document.querySelector("#uc-form-error"), message);
+    toast(message);
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -260,6 +347,7 @@ async function refreshUsersDataOnly() {
   state.usersList = Array.isArray(res.items) ? res.items : [];
   state.hasMembers = state.usersList.length > 0;
   syncAdminScopeOptions();
+  if (!usersSectionOpen()) return;
   renderUsersStream();
 }
 
@@ -271,6 +359,7 @@ export function renderUserDetail(user) {
   // 1. 基本资料与状态配额卡片
   const profileBlock = document.createElement("section");
   profileBlock.className = "block";
+  profileBlock.dataset.group = "users";
 
   const head = document.createElement("div");
   head.className = "block-head";
@@ -379,13 +468,13 @@ export function renderUserDetail(user) {
   // 2. 邮箱与整域分配卡片
   const boxBlock = document.createElement("section");
   boxBlock.className = "block";
+  boxBlock.dataset.group = "users";
   const boxHead = document.createElement("div");
   const boxTitle = document.createElement("h2");
   boxTitle.textContent = "已分配邮箱";
   const boxDesc = document.createElement("p");
   boxDesc.className = "muted";
-  boxDesc.textContent =
-    "分配具体前缀（如 alice）后自动兼容 alice+标签 子地址；填 * 代表将该域名下其余未单独分配的前缀全部划归该账号。";
+  boxDesc.textContent = ALLOC_HINT + " 填 * 做整域。";
   boxHead.append(boxTitle, boxDesc);
   boxBlock.append(boxHead);
 
@@ -405,7 +494,7 @@ export function renderUserDetail(user) {
   addBoxForm.className = "inline-row";
   const localInput = document.createElement("input");
   localInput.className = "field-narrow";
-  localInput.placeholder = "前缀或 *";
+  localInput.placeholder = "精确前缀或 *";
   localInput.maxLength = 64;
   const atSign = document.createElement("span");
   atSign.className = "muted";
@@ -420,11 +509,23 @@ export function renderUserDetail(user) {
   addBoxBtn.type = "button";
   addBoxBtn.className = "btn-fit";
   addBoxBtn.textContent = "分配";
+  const allocError = document.createElement("p");
+  allocError.className = "form-error";
+  allocError.hidden = true;
   addBoxBtn.addEventListener("click", async () => {
     const lp = localInput.value.trim().toLowerCase();
     const dm = domainSelect.value.trim().toLowerCase();
+    setFormError(allocError, "");
     if (!lp || !dm) {
-      toast("请填写邮箱前缀与域名");
+      const message = "请填写邮箱前缀与域名";
+      setFormError(allocError, message);
+      toast(message);
+      return;
+    }
+    if (trailingStar(lp)) {
+      const message = "前缀通配这一档还没接上，先填精确前缀，或填 *。";
+      setFormError(allocError, message);
+      toast(message);
       return;
     }
     addBoxBtn.disabled = true;
@@ -445,17 +546,20 @@ export function renderUserDetail(user) {
       const refreshed = state.usersList.find((u) => u.id === user.id);
       if (refreshed) renderUserDetail(refreshed);
     } catch (err) {
-      toast("分配失败: " + explain(err));
+      const message = "分配失败: " + explain(err);
+      setFormError(allocError, message);
+      toast(message);
     } finally {
       addBoxBtn.disabled = false;
     }
   });
   addBoxForm.append(localInput, atSign, domainSelect, aliasInput, addBoxBtn);
-  boxBlock.append(addBoxForm);
+  boxBlock.append(addBoxForm, allocError);
 
   // 3. 安全操作卡片（重置密码 + 删除账号）
   const secBlock = document.createElement("section");
   secBlock.className = "block";
+  secBlock.dataset.group = "users";
   const secHead = document.createElement("div");
   const secTitle = document.createElement("h2");
   secTitle.textContent = "安全与清理";

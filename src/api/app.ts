@@ -1667,7 +1667,8 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       return reply.code(201).send({ ok: true, user: presentPublicUser(created) });
     } catch (err) {
       if (err instanceof UserError) {
-        throw new HttpError(err.code === "conflict" ? 409 : 400);
+        if (err.code === "conflict") throw new HttpError(409, err.message);
+        throw new HttpError(400);
       }
       throw err;
     }
@@ -1805,7 +1806,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     } catch (err) {
       if (err instanceof UserError) {
         if (err.code === "not_found") throw new HttpError(404, "not_found");
-        if (err.code === "conflict") throw new HttpError(409);
+        if (err.code === "conflict") throw new HttpError(409, err.message);
         throw new HttpError(400);
       }
       throw err;

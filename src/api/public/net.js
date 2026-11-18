@@ -36,6 +36,7 @@ export async function request(url, options = {}) {
   if (!response.ok) {
     const error = new Error("request_failed");
     error.status = response.status;
+    if (data && typeof data.reason === "string") error.reason = data.reason;
     throw error;
   }
   return data || {};

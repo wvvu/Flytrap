@@ -32,6 +32,8 @@ export const STEP_NAMES = {
 export const STEP_ORDER = ["auth", "parse", "classify", "notify", "rebuild", "send"];
 
 export const SETTING_SECTIONS = [
+  { id: "users", label: "成员与权限", hint: "独立账号、邮箱分配、发信配额", adminOnly: true },
+  { id: "my-mailboxes", label: "专属邮箱", hint: "已分配邮箱规则与每日发信额度", memberOnly: true },
   { id: "domains", label: "域名与发信", hint: "收信、短名、签名", adminOnly: true },
   { id: "people", label: "地址与黑名单", hint: "备注、称呼、拦截", adminOnly: false },
   { id: "classify", label: "分拣与提醒", hint: "模型、提示词、推送", adminOnly: true },

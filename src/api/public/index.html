@@ -245,24 +245,10 @@
           <p id="dlq-summary" class="stream-subtitle">按邮件排列。停止的步骤可以重试或放过。</p>
         </div>
 
-        <!-- 成员与邮箱头部 -->
-        <div id="stream-users-header" class="stream-header" hidden>
-          <div class="stream-title-row">
-            <h2>成员</h2>
-            <div class="stream-actions">
-              <button type="button" id="btn-new-user" class="btn-sm">新建账号</button>
-              <button type="button" id="btn-users-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
-            </div>
-          </div>
-          <form id="users-search-form" class="search-box">
-            <input id="users-q" type="search" maxlength="128" placeholder="搜索账号、名称或邮箱" autocomplete="off">
-          </form>
-        </div>
-
         <!-- 设置头部 -->
         <div id="stream-settings-header" class="stream-header" hidden>
           <div class="stream-title-row">
-            <h2>设置</h2>
+            <h2 id="settings-stream-heading">设置</h2>
             <span id="settings-version" class="version-foot"></span>
           </div>
           <p id="settings-subtitle" class="stream-subtitle">列表的添加、移除和排序会直接保存。</p>
@@ -477,13 +463,40 @@
           </div>
         </section>
 
-        <!-- 成员与邮箱管理视图（管理员专属） -->
-        <section id="view-users" class="workspace-view" hidden>
-          <div class="page-scroll" id="users-workspace">
-            <button type="button" id="btn-back-users" class="btn-sm mobile-back">← 返回列表</button>
+        <!-- 设置视图 -->
+        <section id="view-settings" class="workspace-view" hidden>
+          <div class="page-scroll">
+            <button type="button" id="btn-back-settings" class="btn-sm mobile-back">← 返回列表</button>
 
-            <!-- 新建账号卡片 -->
-            <section class="block" id="user-create-card">
+            <section class="block" id="set-users" data-group="users" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>成员与权限</h2>
+                  <p class="muted">精确邮箱（含 +tag）、前缀通配、整域接管。前缀按字面起首，team 会匹配 teammate。整域接住没被更具体规则分走的地址，连历史信一起划走。</p>
+                </div>
+                <div class="page-tools">
+                  <button type="button" id="btn-new-user" class="btn-sm">新建账号</button>
+                  <button type="button" id="btn-users-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
+                </div>
+              </div>
+              <form id="users-search-form" class="search-box">
+                <input id="users-q" type="search" maxlength="128" placeholder="搜索账号、名称或邮箱" autocomplete="off">
+              </form>
+              <p id="users-list-note" class="muted" hidden></p>
+              <div id="users-cards-host" class="users-cards-host"></div>
+            </section>
+
+            <section class="block" id="set-my-mailboxes" data-group="my-mailboxes" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>专属邮箱与发信额度</h2>
+                  <p class="muted" id="member-quota-line">只显示分到这个账号的邮箱和今日发信额度。</p>
+                </div>
+              </div>
+              <div id="member-allocations-host"></div>
+            </section>
+
+            <section class="block" id="user-create-card" data-group="users" hidden>
               <div class="block-head">
                 <div>
                   <h2>开通独立账号</h2>
@@ -524,16 +537,17 @@
                 <label class="name-row">
                   <span class="name-key">首配邮箱</span>
                   <div class="inline-row">
-                    <input id="uc-mb-local" class="field-narrow" maxlength="64" autocomplete="off" placeholder="前缀或 *">
+                    <input id="uc-mb-local" class="field-narrow" maxlength="64" autocomplete="off" placeholder="精确前缀或 *">
                     <span class="muted">@</span>
                     <select id="uc-mb-domain" class="field-select-fit"></select>
-                    <span class="muted">填 * 代表整域划拨，可留空稍后分配</span>
                   </div>
                 </label>
+                <p class="muted">精确邮箱（含 +tag）、前缀通配、整域接管。前缀按字面起首，team 会匹配 teammate。整域接住没被更具体规则分走的地址，连历史信一起划走。填 * 做整域，可留空稍后分配。</p>
                 <label class="name-row">
                   <span class="name-key">备注</span>
                   <input id="uc-notes" maxlength="500" autocomplete="off" placeholder="管理备注，可空">
                 </label>
+                <p id="uc-form-error" class="form-error" role="alert" hidden></p>
                 <div class="inline-row">
                   <button type="submit" id="btn-uc-submit" class="btn-fit">创建账号</button>
                 </div>
@@ -547,15 +561,7 @@
               </div>
             </section>
 
-            <!-- 选中成员详情管理卡片 -->
-            <div id="user-detail-wrap" class="user-detail-stack" hidden></div>
-          </div>
-        </section>
-
-        <!-- 设置视图 -->
-        <section id="view-settings" class="workspace-view" hidden>
-          <div class="page-scroll">
-            <button type="button" id="btn-back-settings" class="btn-sm mobile-back">← 返回列表</button>
+            <div id="user-detail-wrap" class="user-detail-stack" data-group="users" hidden></div>
 
             <section class="block" id="set-names" data-group="account" hidden>
               <div class="block-head">
@@ -653,8 +659,8 @@
                   <option value="rsa">RSA 2048</option>
                   <option value="ed25519">Ed25519</option>
                 </select>
-                <button type="button" id="btn-dkim-generate" class="btn-fit">生成密钥</button>
               </div>
+              <p class="muted">上面的域名按回车也会生成密钥。已经在收信的域名，用每张卡片上的「生成密钥」。</p>
             </section>
 
             <section class="block" id="set-mailboxes" data-group="people" hidden>

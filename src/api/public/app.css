@@ -1944,6 +1944,18 @@ input.field-narrow {
   color: var(--text-main);
 }
 
+.users-cards-host {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.form-error {
+  color: var(--tone-danger);
+  margin: 8px 0 0;
+}
+
 /* 概况统计与趋势 */
 .stats-cards-grid {
   display: grid;

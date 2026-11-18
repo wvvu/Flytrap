@@ -1,13 +1,18 @@
-// 设置中心：支持管理员 5 大分组与普通成员个人分组，集成密钥在线测活与 DKIM 管理。
+// 设置中心：管理员六区、成员从专属邮箱看起，密钥测活与 DKIM 留在这一页。
 import { LABELS, LABEL_NAMES, SETTING_SECTIONS } from "./constants.js";
 import { state } from "./state.js";
-import { appEl, detailVerdictSelect, filterSelect, listEl } from "./dom.js";
+import { appEl, detailVerdictSelect, filterSelect, listEl, navSettingsBtn, navUsersBtn } from "./dom.js";
 import { request } from "./net.js";
 import { askConfirm, copyText, explain, setMobilePane, setViewTitle, toast } from "./ui.js";
 import { cssEscape, normalizeAddress } from "./util.js";
+import { loadUsersPage, renderMemberMailboxes } from "./users-view.js";
 
 export function visibleSettingSections() {
-  return SETTING_SECTIONS.filter((sec) => state.isAdmin || !sec.adminOnly);
+  return SETTING_SECTIONS.filter((sec) => {
+    if (sec.adminOnly && !state.isAdmin) return false;
+    if (sec.memberOnly && state.isAdmin) return false;
+    return true;
+  });
 }
 
 export async function loadSettingsPage() {
@@ -111,16 +116,41 @@ export function renderSettingsNav() {
   }
 }
 
+function paintSettingsRail() {
+  if (state.currentView !== "settings") return;
+  const onUsers = state.isAdmin && state.currentSettingsSection === "users";
+  navUsersBtn?.classList.toggle("active", onUsers);
+  navSettingsBtn?.classList.toggle("active", !onUsers);
+  setViewTitle(onUsers ? "users" : "settings");
+  const heading = document.querySelector("#settings-stream-heading");
+  const subtitle = document.querySelector("#settings-subtitle");
+  if (heading) heading.textContent = onUsers ? "成员" : "设置";
+  if (subtitle) {
+    subtitle.textContent = onUsers
+      ? "开通账号，分配邮箱。"
+      : "列表的添加、移除和排序会直接保存。";
+  }
+}
+
 export function showSettingsSection(id, options = {}) {
   const allowed = visibleSettingSections().map((s) => s.id);
   const nextId = allowed.includes(id) ? id : (allowed[0] || "account");
   state.currentSettingsSection = nextId;
+  if (nextId !== "users") state.settingsReturnSection = nextId;
   for (const block of document.querySelectorAll("#view-settings .block")) {
+    if (block.id === "user-create-card" || block.closest("#user-detail-wrap")) continue;
     block.hidden = block.dataset.group !== nextId;
+  }
+  const createCard = document.querySelector("#user-create-card");
+  const detailWrap = document.querySelector("#user-detail-wrap");
+  if (nextId !== "users") {
+    if (createCard) createCard.hidden = true;
+    if (detailWrap) detailWrap.hidden = true;
   }
   for (const button of listEl.querySelectorAll(".mail-item")) {
     button.classList.toggle("selected", button.dataset.section === nextId);
   }
+  paintSettingsRail();
   if (!options.keepListOnNarrow) setMobilePane("detail");
   if (state.isAdmin && nextId === "status") {
     void loadLogs();
@@ -129,6 +159,8 @@ export function showSettingsSection(id, options = {}) {
   if (state.isAdmin && nextId === "domains") void loadDkimSection();
   if (nextId === "people") void loadMailboxesView();
   if (nextId === "account") renderProfileFields();
+  if (nextId === "my-mailboxes") renderMemberMailboxes();
+  if (nextId === "users") void loadUsersPage();
 }
 
 export function describeAi(ai) {

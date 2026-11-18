@@ -166,10 +166,17 @@ export function askConfirm(message) {
   });
 }
 
+const CONFLICT_TEXT = {
+  "mailbox already allocated": "这个地址已经分给别人",
+  "username already exists": "这个账号已经有了",
+  "username or mailbox already exists": "账号或邮箱已被占用",
+  "username is reserved": "这个账号名留给了环境变量里的管理员",
+};
+
 export function explain(err) {
   if (err && err.status === 401) return "账号或口令不正确";
   if (err && err.status === 403) return "当前账号无权执行此操作";
-  if (err && err.status === 409) return "账号或邮箱已被占用";
+  if (err && err.status === 409) return CONFLICT_TEXT[err.reason] || "账号或邮箱已被占用";
   if (err && err.status === 429) return "请求过于频繁或已达今日发信上限";
   return "操作失败，请重试";
 }
