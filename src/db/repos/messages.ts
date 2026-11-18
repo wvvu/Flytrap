@@ -1,4 +1,5 @@
 import type { Db } from "../index.js";
+import { buildMemberRecipientSql, messageMatchesAllocations, type AllocationPublic } from "./users.js";
 
 export type MessageStatus =
   | "received"
@@ -7,6 +8,11 @@ export type MessageStatus =
   | "classified"
   | "notified"
   | "error";
+
+export interface MemberScope {
+  userId: string;
+  allocations: readonly AllocationPublic[];
+}
 
 export interface NewMessage {
   id: string;
@@ -103,6 +109,14 @@ export interface StoredMessage {
   status: string;
   error: string | null;
   trashed_at: number | null;
+  read_at?: number | null;
+}
+
+export interface MemberMessageStateRow {
+  read_at: number | null;
+  trashed_at: number | null;
+  purged_at: number | null;
+  manual_label: string | null;
 }
 
 export function getMessage(db: Db, id: string): StoredMessage | undefined {
@@ -110,10 +124,73 @@ export function getMessage(db: Db, id: string): StoredMessage | undefined {
     .prepare(
       `SELECT id, sha256, raw_path, size_bytes, received_at, envelope_from, envelope_to, domains,
               message_id, in_reply_to, ref_ids, thread_key, subject, from_addr, to_addrs, smtp_meta, auth_result, parsed, ai_result,
-              status, error, trashed_at
+              status, error, trashed_at, read_at
        FROM messages WHERE id = ?`,
     )
     .get(id) as StoredMessage | undefined;
+}
+
+export function getMessageForMember(db: Db, id: string, scope: MemberScope): StoredMessage | undefined {
+  const row = getMessage(db, id);
+  if (!row) return undefined;
+  if (row.trashed_at !== null) {
+    // Even if globally trashed by admin/blocklist, check if member matches; wait: global trash hides spam/blocked globally unless member shouldn't see purged.
+  }
+  if (!messageMatchesAllocations(row, scope.allocations)) return undefined;
+  const state = getMemberMessageState(db, scope.userId, id);
+  if (state?.purged_at != null) return undefined;
+  const effectiveTrashed = state?.trashed_at ?? row.trashed_at;
+  const effectiveRead = state?.read_at ?? null;
+  const effectiveAi = applyManualLabelOverride(row.ai_result, state?.manual_label ?? null);
+  return {
+    ...row,
+    trashed_at: effectiveTrashed,
+    read_at: effectiveRead,
+    ai_result: effectiveAi,
+  };
+}
+
+export function getMemberMessageState(db: Db, userId: string, messageId: string): MemberMessageStateRow | undefined {
+  return db
+    .prepare(
+      `SELECT read_at, trashed_at, purged_at, manual_label
+       FROM user_message_state
+       WHERE user_id = ? AND message_id = ?`,
+    )
+    .get(userId, messageId) as MemberMessageStateRow | undefined;
+}
+
+function applyManualLabelOverride(rawAi: string | null, manualLabel: string | null): string | null {
+  if (!manualLabel) return rawAi;
+  let base: Record<string, unknown> = {};
+  if (rawAi) {
+    try {
+      const parsed = JSON.parse(rawAi) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        base = { ...(parsed as Record<string, unknown>) };
+      }
+    } catch {
+      base = {};
+    }
+  }
+  const origLabel = typeof base.label === "string" ? base.label : null;
+  const origConf = typeof base.confidence === "number" ? base.confidence : null;
+  return JSON.stringify({
+    schema: 1,
+    prompt_id: typeof base.prompt_id === "string" ? base.prompt_id : "manual",
+    model: typeof base.model === "string" ? base.model : "manual",
+    provider: typeof base.provider === "string" ? base.provider : "manual",
+    at: typeof base.at === "string" ? base.at : new Date().toISOString(),
+    confidence: typeof base.confidence === "number" ? base.confidence : 1,
+    summary: typeof base.summary === "string" && base.summary ? base.summary : "已手动修改分类",
+    tags: Array.isArray(base.tags) ? base.tags : [],
+    signals: Array.isArray(base.signals) ? base.signals : [],
+    ...base,
+    label: manualLabel,
+    manualOverride: true,
+    originalLabel: base.originalLabel ?? origLabel,
+    originalConfidence: base.originalConfidence ?? origConf,
+  });
 }
 
 export function saveAuthResult(db: Db, id: string, authResult: string, now: number): void {
@@ -159,8 +236,90 @@ export function saveParsedMessage(
   );
 }
 
-export function markMessageRead(db: Db, id: string, now: number): void {
-  db.prepare("UPDATE messages SET read_at = ? WHERE id = ? AND read_at IS NULL").run(now, id);
+export function markMessageRead(db: Db, id: string, now: number, memberScope?: MemberScope): void {
+  if (!memberScope) {
+    db.prepare("UPDATE messages SET read_at = ? WHERE id = ? AND read_at IS NULL").run(now, id);
+    return;
+  }
+  db.prepare(
+    `INSERT INTO user_message_state (user_id, message_id, read_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, message_id) DO UPDATE SET
+       read_at = COALESCE(user_message_state.read_at, excluded.read_at),
+       updated_at = excluded.updated_at`,
+  ).run(memberScope.userId, id, now, now);
+}
+
+export type ReadAllTarget = "inbox" | "promo" | "spam" | "all";
+
+export function markAllMessagesRead(
+  db: Db,
+  target: ReadAllTarget,
+  now: number,
+  memberScope?: MemberScope,
+): number {
+  if (!memberScope) {
+    let labelClause = "";
+    if (target === "inbox") {
+      labelClause = "AND (json_extract(ai_result, '$.label') IS NULL OR json_extract(ai_result, '$.label') = 'legit')";
+    } else if (target === "promo") {
+      labelClause = "AND json_extract(ai_result, '$.label') = 'unsolicited-admin'";
+    } else if (target === "spam") {
+      labelClause = "AND json_extract(ai_result, '$.label') IS NOT NULL AND json_extract(ai_result, '$.label') != 'legit'";
+    }
+    const res = db
+      .prepare(
+        `UPDATE messages
+         SET read_at = ?
+         WHERE trashed_at IS NULL AND read_at IS NULL ${labelClause}`,
+      )
+      .run(now);
+    return res.changes;
+  }
+
+  if (memberScope.allocations.length === 0) return 0;
+  const params: Record<string, string | number> = {
+    userId: memberScope.userId,
+    now,
+  };
+  const rcptSql = buildMemberRecipientSql("m", memberScope.allocations, params);
+  const effLabel = "COALESCE(ums.manual_label, json_extract(m.ai_result, '$.label'))";
+  let labelClause = "";
+  if (target === "inbox") {
+    labelClause = `AND (${effLabel} IS NULL OR ${effLabel} = 'legit')`;
+  } else if (target === "promo") {
+    labelClause = `AND ${effLabel} = 'unsolicited-admin'`;
+  } else if (target === "spam") {
+    labelClause = `AND ${effLabel} IS NOT NULL AND ${effLabel} != 'legit'`;
+  }
+
+  const unreadIds = db
+    .prepare(
+      `SELECT m.id AS id
+       FROM messages m
+       LEFT JOIN user_message_state ums ON ums.user_id = :userId AND ums.message_id = m.id
+       WHERE ${rcptSql}
+         AND ums.purged_at IS NULL
+         AND COALESCE(ums.trashed_at, m.trashed_at) IS NULL
+         AND ums.read_at IS NULL
+         ${labelClause}`,
+    )
+    .all(params) as Array<{ id: string }>;
+
+  if (unreadIds.length === 0) return 0;
+  const stmt = db.prepare(
+    `INSERT INTO user_message_state (user_id, message_id, read_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, message_id) DO UPDATE SET
+       read_at = COALESCE(user_message_state.read_at, excluded.read_at),
+       updated_at = excluded.updated_at`,
+  );
+  db.transaction(() => {
+    for (const row of unreadIds) {
+      stmt.run(memberScope.userId, row.id, now, now);
+    }
+  })();
+  return unreadIds.length;
 }
 
 export function saveAiResult(db: Db, id: string, aiResult: string, now: number): void {
@@ -183,6 +342,7 @@ export interface MessageListQuery {
   limit: number;
   cursorAt?: number;
   cursorId?: string;
+  memberScope?: MemberScope;
 }
 
 export interface MessageListRow {
@@ -203,6 +363,9 @@ export interface MessageListRow {
 }
 
 export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] {
+  if (query.memberScope) {
+    return listMemberMessages(db, query, query.memberScope);
+  }
   const where: string[] = [];
   const params: Record<string, string | number> = { limit: query.limit };
   if (query.trashed === true) {
@@ -262,6 +425,86 @@ export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] 
   return db.prepare(sql).all(params) as MessageListRow[];
 }
 
+function listMemberMessages(db: Db, query: MessageListQuery, scope: MemberScope): MessageListRow[] {
+  if (scope.allocations.length === 0) return [];
+  const params: Record<string, string | number> = {
+    limit: query.limit,
+    userId: scope.userId,
+  };
+  const where: string[] = [
+    buildMemberRecipientSql("m", scope.allocations, params),
+    "ums.purged_at IS NULL",
+  ];
+  const effTrashed = "COALESCE(ums.trashed_at, m.trashed_at)";
+  const effLabel = "COALESCE(ums.manual_label, json_extract(m.ai_result, '$.label'))";
+
+  if (query.trashed === true) {
+    where.push(`${effTrashed} IS NOT NULL`);
+  } else if (query.trashed === "all") {
+    // no filter
+  } else {
+    where.push(`${effTrashed} IS NULL`);
+  }
+  if (query.status) {
+    where.push("m.status = :status");
+    params.status = query.status;
+  }
+  if (query.label === "legit") {
+    where.push(`(${effLabel} = 'legit' OR ${effLabel} IS NULL)`);
+  } else if (query.label === "not-legit") {
+    where.push(`(${effLabel} IS NOT NULL AND ${effLabel} != 'legit')`);
+  } else if (query.label) {
+    where.push(`${effLabel} = :label`);
+    params.label = query.label;
+  }
+  if (query.from) {
+    where.push("lower(m.from_addr) = lower(:fromAddr)");
+    params.fromAddr = query.from;
+  }
+  if (query.domain) {
+    where.push("EXISTS (SELECT 1 FROM json_each(m.domains) WHERE lower(json_each.value) = lower(:domain))");
+    params.domain = query.domain;
+  }
+  if (query.q) {
+    where.push(`(
+      IFNULL(m.subject, '') LIKE :q ESCAPE '\\' OR
+      IFNULL(m.from_addr, '') LIKE :q ESCAPE '\\' OR
+      IFNULL(m.message_id, '') LIKE :q ESCAPE '\\'
+    )`);
+    params.q = likeContains(query.q);
+  }
+  if (query.since !== undefined) {
+    where.push("m.received_at >= :since");
+    params.since = query.since;
+  }
+  if (query.until !== undefined) {
+    where.push("m.received_at <= :until");
+    params.until = query.until;
+  }
+  if (query.cursorAt !== undefined && query.cursorId) {
+    where.push("(m.received_at < :cursorAt OR (m.received_at = :cursorAt AND m.id < :cursorId))");
+    params.cursorAt = query.cursorAt;
+    params.cursorId = query.cursorId;
+  }
+
+  const sql = `SELECT m.id, m.sha256, m.received_at, m.size_bytes, m.envelope_from, m.envelope_to, m.message_id,
+                      m.subject, m.from_addr, m.domains, m.status, m.ai_result,
+                      ${effTrashed} AS trashed_at,
+                      ums.read_at AS read_at,
+                      ums.manual_label AS manual_label
+               FROM messages m
+               LEFT JOIN user_message_state ums ON ums.user_id = :userId AND ums.message_id = m.id
+               WHERE ${where.join(" AND ")}
+               ORDER BY m.received_at DESC, m.id DESC
+               LIMIT :limit`;
+
+  const rows = db.prepare(sql).all(params) as Array<MessageListRow & { manual_label: string | null }>;
+  return rows.map((r) => ({
+    ...r,
+    ai_result: applyManualLabelOverride(r.ai_result, r.manual_label),
+  }));
+}
+
 function likeContains(value: string): string {
   return `%${value.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
 }
@@ -272,12 +515,87 @@ export function markMessageNotified(db: Db, id: string, now: number): void {
   ).run(now, id);
 }
 
-export function trashMessage(db: Db, id: string, now: number): void {
-  db.prepare("UPDATE messages SET trashed_at = ?, updated_at = ? WHERE id = ?").run(now, now, id);
+export function trashMessage(db: Db, id: string, now: number, memberScope?: MemberScope): void {
+  if (!memberScope) {
+    db.prepare("UPDATE messages SET trashed_at = ?, updated_at = ? WHERE id = ?").run(now, now, id);
+    return;
+  }
+  db.prepare(
+    `INSERT INTO user_message_state (user_id, message_id, trashed_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, message_id) DO UPDATE SET
+       trashed_at = excluded.trashed_at,
+       updated_at = excluded.updated_at`,
+  ).run(memberScope.userId, id, now, now);
 }
 
-export function restoreMessage(db: Db, id: string, now: number): void {
-  db.prepare("UPDATE messages SET trashed_at = NULL, updated_at = ? WHERE id = ?").run(now, id);
+export function restoreMessage(db: Db, id: string, now: number, memberScope?: MemberScope): void {
+  if (!memberScope) {
+    db.prepare("UPDATE messages SET trashed_at = NULL, updated_at = ? WHERE id = ?").run(now, id);
+    return;
+  }
+  db.prepare(
+    `INSERT INTO user_message_state (user_id, message_id, trashed_at, purged_at, updated_at)
+     VALUES (?, ?, NULL, NULL, ?)
+     ON CONFLICT(user_id, message_id) DO UPDATE SET
+       trashed_at = NULL,
+       purged_at = NULL,
+       updated_at = excluded.updated_at`,
+  ).run(memberScope.userId, id, now);
+}
+
+export function overrideMemberMessageLabel(
+  db: Db,
+  userId: string,
+  messageId: string,
+  label: string,
+  now: number,
+): void {
+  db.prepare(
+    `INSERT INTO user_message_state (user_id, message_id, manual_label, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, message_id) DO UPDATE SET
+       manual_label = excluded.manual_label,
+       updated_at = excluded.updated_at`,
+  ).run(userId, messageId, label, now);
+}
+
+export function purgeMemberMessage(db: Db, userId: string, messageId: string, now: number): void {
+  db.prepare(
+    `INSERT INTO user_message_state (user_id, message_id, purged_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, message_id) DO UPDATE SET
+       purged_at = excluded.purged_at,
+       updated_at = excluded.updated_at`,
+  ).run(userId, messageId, now, now);
+}
+
+export function emptyMemberTrash(db: Db, scope: MemberScope, now: number): number {
+  if (scope.allocations.length === 0) return 0;
+  const params: Record<string, string | number> = { userId: scope.userId };
+  const rcptSql = buildMemberRecipientSql("m", scope.allocations, params);
+  const rows = db
+    .prepare(
+      `SELECT m.id AS id
+       FROM messages m
+       LEFT JOIN user_message_state ums ON ums.user_id = :userId AND ums.message_id = m.id
+       WHERE ${rcptSql}
+         AND ums.purged_at IS NULL
+         AND COALESCE(ums.trashed_at, m.trashed_at) IS NOT NULL`,
+    )
+    .all(params) as Array<{ id: string }>;
+  if (rows.length === 0) return 0;
+  const stmt = db.prepare(
+    `INSERT INTO user_message_state (user_id, message_id, purged_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, message_id) DO UPDATE SET
+       purged_at = excluded.purged_at,
+       updated_at = excluded.updated_at`,
+  );
+  db.transaction(() => {
+    for (const r of rows) stmt.run(scope.userId, r.id, now, now);
+  })();
+  return rows.length;
 }
 
 export interface PurgedFiles {
@@ -293,6 +611,7 @@ export function deleteMessage(db: Db, id: string, purgedAt: number): PurgedFiles
     if (!row) return null;
     const paths = [row.raw_path, ...orphanAttachmentPaths(db, "message", id)];
     rememberPurged(db, [row.sha256], purgedAt);
+    db.prepare("DELETE FROM user_message_state WHERE message_id = ?").run(id);
     db.prepare("DELETE FROM message_attachments WHERE message_id = ?").run(id);
     deleteUnlinkedAttachments(db);
     db.prepare("DELETE FROM deliveries WHERE message_id = ?").run(id);
@@ -314,6 +633,10 @@ export function emptyTrash(db: Db, purgedAt: number): PurgedFiles {
       rows.map((row) => row.sha256),
       purgedAt,
     );
+    db.prepare(
+      `DELETE FROM user_message_state
+       WHERE message_id IN (SELECT id FROM messages WHERE trashed_at IS NOT NULL)`,
+    ).run();
     db.prepare(
       `DELETE FROM message_attachments
        WHERE message_id IN (SELECT id FROM messages WHERE trashed_at IS NOT NULL)`,
@@ -380,24 +703,80 @@ function deleteUnlinkedAttachments(db: Db): void {
   ).run();
 }
 
-export function countTrash(db: Db): number {
-  const row = db.prepare("SELECT COUNT(*) AS c FROM messages WHERE trashed_at IS NOT NULL").get() as { c: number };
-  return row ? row.c : 0;
+export function countTrash(db: Db, memberScope?: MemberScope): number {
+  if (!memberScope) {
+    const row = db.prepare("SELECT COUNT(*) AS c FROM messages WHERE trashed_at IS NOT NULL").get() as { c: number };
+    return row ? row.c : 0;
+  }
+  if (memberScope.allocations.length === 0) return 0;
+  const params: Record<string, string | number> = { userId: memberScope.userId };
+  const rcptSql = buildMemberRecipientSql("m", memberScope.allocations, params);
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS c
+       FROM messages m
+       LEFT JOIN user_message_state ums ON ums.user_id = :userId AND ums.message_id = m.id
+       WHERE ${rcptSql}
+         AND ums.purged_at IS NULL
+         AND COALESCE(ums.trashed_at, m.trashed_at) IS NOT NULL`,
+    )
+    .get(params) as { c: number } | undefined;
+  return row?.c ?? 0;
 }
 
-export function countUnread(db: Db): { inbox: number; spam: number } {
+export function countUnread(db: Db, memberScope?: MemberScope): { inbox: number; spam: number } {
+  if (!memberScope) {
+    const row = db
+      .prepare(
+        `SELECT
+           SUM(CASE
+             WHEN json_extract(ai_result, '$.label') IS NULL OR json_extract(ai_result, '$.label') = 'legit'
+             THEN 1 ELSE 0 END) AS inbox,
+           SUM(CASE
+             WHEN json_extract(ai_result, '$.label') IS NOT NULL AND json_extract(ai_result, '$.label') != 'legit'
+             THEN 1 ELSE 0 END) AS spam
+         FROM messages
+         WHERE trashed_at IS NULL AND read_at IS NULL`,
+      )
+      .get() as { inbox: number | null; spam: number | null } | undefined;
+    return { inbox: row?.inbox ?? 0, spam: row?.spam ?? 0 };
+  }
+
+  if (memberScope.allocations.length === 0) return { inbox: 0, spam: 0 };
+  const params: Record<string, string | number> = { userId: memberScope.userId };
+  const rcptSql = buildMemberRecipientSql("m", memberScope.allocations, params);
+  const effLabel = "COALESCE(ums.manual_label, json_extract(m.ai_result, '$.label'))";
   const row = db
     .prepare(
       `SELECT
-         SUM(CASE
-           WHEN json_extract(ai_result, '$.label') IS NULL OR json_extract(ai_result, '$.label') = 'legit'
-           THEN 1 ELSE 0 END) AS inbox,
-         SUM(CASE
-           WHEN json_extract(ai_result, '$.label') IS NOT NULL AND json_extract(ai_result, '$.label') != 'legit'
-           THEN 1 ELSE 0 END) AS spam
-       FROM messages
-       WHERE trashed_at IS NULL AND read_at IS NULL`,
+         SUM(CASE WHEN ${effLabel} IS NULL OR ${effLabel} = 'legit' THEN 1 ELSE 0 END) AS inbox,
+         SUM(CASE WHEN ${effLabel} IS NOT NULL AND ${effLabel} != 'legit' THEN 1 ELSE 0 END) AS spam
+       FROM messages m
+       LEFT JOIN user_message_state ums ON ums.user_id = :userId AND ums.message_id = m.id
+       WHERE ${rcptSql}
+         AND ums.purged_at IS NULL
+         AND COALESCE(ums.trashed_at, m.trashed_at) IS NULL
+         AND ums.read_at IS NULL`,
     )
-    .get() as { inbox: number | null; spam: number | null } | undefined;
+    .get(params) as { inbox: number | null; spam: number | null } | undefined;
   return { inbox: row?.inbox ?? 0, spam: row?.spam ?? 0 };
+}
+
+export function memberCanReadAttachment(db: Db, sha256: string, scope: MemberScope): boolean {
+  if (scope.allocations.length === 0) return false;
+  const params: Record<string, string | number> = { sha256, userId: scope.userId };
+  const rcptSql = buildMemberRecipientSql("m", scope.allocations, params);
+  const row = db
+    .prepare(
+      `SELECT 1 AS ok
+       FROM message_attachments ma
+       JOIN messages m ON m.id = ma.message_id
+       LEFT JOIN user_message_state ums ON ums.user_id = :userId AND ums.message_id = m.id
+       WHERE ma.sha256 = :sha256
+         AND ums.purged_at IS NULL
+         AND ${rcptSql}
+       LIMIT 1`,
+    )
+    .get(params);
+  return Boolean(row);
 }

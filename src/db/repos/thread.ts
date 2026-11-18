@@ -1,5 +1,8 @@
 import type { Db } from "../index.js";
 import { threadKeyOf } from "../../mail/thread.js";
+import type { MemberScope } from "./messages.js";
+import { getMemberMessageState } from "./messages.js";
+import { messageMatchesAllocations } from "./users.js";
 
 export interface ThreadLetter {
   kind: "in" | "sent";
@@ -17,16 +20,16 @@ const MAX_HOPS = 6;
 const MAX_LETTERS = 30;
 const MAX_IDS = 40;
 
-/** Letters that answer each other, inbound and sent together. */
-export function listThread(db: Db, anchorId: string): ThreadLetter[] | null {
-  const anchor = messageLetter(db, anchorId);
+/** Letters that answer each other, inbound and sent together, respecting member isolation when scoped. */
+export function listThread(db: Db, anchorId: string, memberScope?: MemberScope): ThreadLetter[] | null {
+  const anchor = messageLetter(db, anchorId, memberScope);
   if (!anchor) return null;
   const rows = new Map<string, ThreadLetter>();
   rows.set(keyOf(anchor), anchor);
   let ids = seedIds(anchor);
   for (let hop = 0; hop < MAX_HOPS && ids.length > 0 && rows.size < MAX_LETTERS; hop++) {
     let grew = false;
-    for (const row of findByIds(db, ids)) {
+    for (const row of findByIds(db, ids, memberScope)) {
       if (rows.has(keyOf(row))) continue;
       rows.set(keyOf(row), row);
       grew = true;
@@ -55,13 +58,13 @@ function seedIds(row: ThreadLetter): string[] {
   return [...new Set(ids.filter((id): id is string => Boolean(id)))];
 }
 
-function findByIds(db: Db, ids: readonly string[]): ThreadLetter[] {
+function findByIds(db: Db, ids: readonly string[], memberScope?: MemberScope): ThreadLetter[] {
   if (ids.length === 0) return [];
   const ph = ids.map(() => "?").join(",");
   const params = [...ids, ...ids, ...ids, ...ids];
   const inbound = db
     .prepare(
-      `SELECT id, message_id, in_reply_to, ref_ids, thread_key, subject, from_addr, received_at AS at
+      `SELECT id, message_id, in_reply_to, ref_ids, thread_key, subject, from_addr, envelope_to, to_addrs, received_at AS at
        FROM messages
        WHERE message_id IN (${ph}) OR in_reply_to IN (${ph}) OR thread_key IN (${ph})
           OR id IN (
@@ -70,21 +73,44 @@ function findByIds(db: Db, ids: readonly string[]): ThreadLetter[] {
           )`,
     )
     .all(...params) as InRow[];
-  const sent = db
-    .prepare(
-      `SELECT id, message_id, in_reply_to, ref_ids, thread_key, subject, from_addr, created_at AS at
-       FROM outbox
-       WHERE message_id IN (${ph}) OR in_reply_to IN (${ph}) OR thread_key IN (${ph})
-          OR id IN (
-            SELECT o.id FROM outbox o, json_each(o.ref_ids) j
-            WHERE o.ref_ids IS NOT NULL AND j.value IN (${ph})
-          )`,
-    )
-    .all(...params) as InRow[];
-  return [...inbound.map((row) => toLetter(row, "in")), ...sent.map((row) => toLetter(row, "sent"))];
+
+  const filteredInbound = memberScope
+    ? inbound.filter((row) => {
+        if (!messageMatchesAllocations(row, memberScope.allocations)) return false;
+        const state = getMemberMessageState(db, memberScope.userId, row.id);
+        return state?.purged_at == null;
+      })
+    : inbound;
+
+  const sent = memberScope
+    ? (db
+        .prepare(
+          `SELECT id, message_id, in_reply_to, ref_ids, thread_key, subject, from_addr, created_at AS at
+           FROM outbox
+           WHERE user_id = ?
+             AND (message_id IN (${ph}) OR in_reply_to IN (${ph}) OR thread_key IN (${ph})
+               OR id IN (
+                 SELECT o.id FROM outbox o, json_each(o.ref_ids) j
+                 WHERE o.ref_ids IS NOT NULL AND j.value IN (${ph})
+               ))`,
+        )
+        .all(memberScope.userId, ...params) as SentRow[])
+    : (db
+        .prepare(
+          `SELECT id, message_id, in_reply_to, ref_ids, thread_key, subject, from_addr, created_at AS at
+           FROM outbox
+           WHERE message_id IN (${ph}) OR in_reply_to IN (${ph}) OR thread_key IN (${ph})
+              OR id IN (
+                SELECT o.id FROM outbox o, json_each(o.ref_ids) j
+                WHERE o.ref_ids IS NOT NULL AND j.value IN (${ph})
+              )`,
+        )
+        .all(...params) as SentRow[]);
+
+  return [...filteredInbound.map((row) => toLetter(row, "in")), ...sent.map((row) => toLetter(row, "sent"))];
 }
 
-interface InRow {
+interface SentRow {
   id: string;
   message_id: string | null;
   in_reply_to: string | null;
@@ -95,7 +121,12 @@ interface InRow {
   at: number;
 }
 
-function toLetter(row: InRow, kind: "in" | "sent"): ThreadLetter {
+interface InRow extends SentRow {
+  envelope_to: string;
+  to_addrs: string | null;
+}
+
+function toLetter(row: SentRow, kind: "in" | "sent"): ThreadLetter {
   const refs = parseRefs(row.ref_ids);
   return {
     kind,
@@ -110,14 +141,20 @@ function toLetter(row: InRow, kind: "in" | "sent"): ThreadLetter {
   };
 }
 
-function messageLetter(db: Db, id: string): ThreadLetter | null {
+function messageLetter(db: Db, id: string, memberScope?: MemberScope): ThreadLetter | null {
   const row = db
     .prepare(
-      `SELECT id, message_id, in_reply_to, ref_ids, thread_key, subject, from_addr, received_at AS at
+      `SELECT id, message_id, in_reply_to, ref_ids, thread_key, subject, from_addr, envelope_to, to_addrs, received_at AS at
        FROM messages WHERE id = ?`,
     )
     .get(id) as InRow | undefined;
-  return row ? toLetter(row, "in") : null;
+  if (!row) return null;
+  if (memberScope) {
+    if (!messageMatchesAllocations(row, memberScope.allocations)) return null;
+    const state = getMemberMessageState(db, memberScope.userId, row.id);
+    if (state?.purged_at != null) return null;
+  }
+  return toLetter(row, "in");
 }
 
 function parseRefs(raw: string | null): string[] {

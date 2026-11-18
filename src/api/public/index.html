@@ -3,9 +3,11 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#090a0d">
     <title>登录</title>
     <script src="/boot.js"></script>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><g fill='none' stroke='%23f5f5f5' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='5' width='18' height='14' rx='2'/><path d='m3 7 9 6 9-6'/></g></svg>">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><g fill='none' stroke='%23f1f5f9' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='5' width='18' height='14' rx='2'/><path d='m3 7 9 6 9-6'/></g></svg>">
     <link rel="stylesheet" href="/app.css">
     <link rel="modulepreload" href="/app.js">
     <link rel="modulepreload" href="/constants.js">
@@ -17,6 +19,7 @@
     <link rel="modulepreload" href="/nav.js">
     <link rel="modulepreload" href="/shell.js">
     <link rel="modulepreload" href="/auth.js">
+    <link rel="modulepreload" href="/users-view.js">
     <link rel="modulepreload" href="/mail-view.js">
     <link rel="modulepreload" href="/dlq-view.js">
     <link rel="modulepreload" href="/settings-view.js">
@@ -25,11 +28,12 @@
   <body>
     <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
-        <symbol id="i-mail" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></g></symbol>
+        <symbol id="i-mail" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 7.5 9 6 9-6"/></g></symbol>
         <symbol id="i-inbox" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3H10L8 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></g></symbol>
         <symbol id="i-send" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></g></symbol>
-        <symbol id="i-spam" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16l-2 12H6z"/><path d="M9 11h6"/></g></symbol>
+        <symbol id="i-spam" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9.5 12h5"/></g></symbol>
         <symbol id="i-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></g></symbol>
+        <symbol id="i-users" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></g></symbol>
         <symbol id="i-alert" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></g></symbol>
         <symbol id="i-sliders" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></g></symbol>
         <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></g></symbol>
@@ -37,30 +41,37 @@
         <symbol id="i-logout" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></g></symbol>
         <symbol id="i-refresh" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></symbol>
         <symbol id="i-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></g></symbol>
-        <symbol id="i-spark" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.6 5.2L19 10l-5.4 1.8L12 17l-1.6-5.2L5 10l5.4-1.8z"/></g></symbol>
-        <symbol id="i-note" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/></g></symbol>
-        <symbol id="i-chart" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 16v-5M12 16V8M16 16v-3"/></g></symbol>
-        <symbol id="i-server" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/></g></symbol>
+        <symbol id="i-check-all" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/></g></symbol>
+        <symbol id="i-kbd" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M8 15h8"/></g></symbol>
+        <symbol id="i-key" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></g></symbol>
       </defs>
     </svg>
+
     <!-- 登录视图 -->
     <div id="login" class="login-wrapper" hidden>
       <form id="login-form" class="login-panel">
-        <h1 class="login-title">登录</h1>
+        <div class="login-brand-mark" aria-hidden="true">
+          <svg class="ico" viewBox="0 0 24 24"><use href="#i-mail"></use></svg>
+        </div>
+        <h1 class="login-title">工作台登录</h1>
+        <p class="login-subtitle">输入账号或已绑定的邮箱地址进入专属信箱</p>
         <div class="form-group">
-          <label for="username">邮箱</label>
-          <input id="username" name="username" autocomplete="username" maxlength="128" required>
+          <label for="username">账号 / 邮箱</label>
+          <input id="username" name="username" autocomplete="username" maxlength="128" placeholder="admin 或 user@domain" required>
         </div>
         <div class="form-group">
           <label for="password">密码</label>
           <input id="password" name="password" type="password" autocomplete="current-password" maxlength="512" required>
         </div>
         <button type="submit" id="btn-login" class="btn-primary">继续</button>
-        <button type="button" id="btn-forgot" class="login-forgot">忘记密码</button>
+        <div class="login-foot-row">
+          <button type="button" id="btn-forgot" class="login-forgot">忘记密码</button>
+        </div>
         <p id="login-error" class="error-text" role="alert"></p>
       </form>
     </div>
 
+    <!-- 找回密码弹窗 -->
     <div id="reset-modal" class="modal" hidden>
       <div class="modal-card reset-card" role="dialog" aria-modal="true" aria-labelledby="reset-title">
         <div class="reset-head">
@@ -68,8 +79,8 @@
           <button type="button" id="btn-reset-close" class="reset-close" aria-label="关闭">×</button>
         </div>
         <div id="reset-code-step" class="reset-step">
-          <h3>请查看电子邮件</h3>
-          <p class="reset-note">如果存在匹配的账号，验证码会发到该邮箱。请输入验证码以重置密码。</p>
+          <h3>查收邮件验证码</h3>
+          <p class="reset-note">若存在匹配的账号或专属邮箱，6 位验证码已发送至该信箱。</p>
           <div id="reset-digits" class="reset-digits">
             <input inputmode="numeric" maxlength="1" autocomplete="one-time-code" aria-label="验证码第 1 位">
             <input inputmode="numeric" maxlength="1" autocomplete="off" aria-label="验证码第 2 位">
@@ -81,37 +92,39 @@
           <button type="button" id="btn-reset-continue" class="btn-primary">继续</button>
           <div class="reset-actions">
             <button type="button" id="btn-reset-resend" disabled>重新发送验证码</button>
-            <button type="button" id="btn-reset-other">使用不同的电子邮件地址</button>
+            <button type="button" id="btn-reset-other">更换邮箱地址</button>
           </div>
         </div>
         <div id="reset-password-step" class="reset-step" hidden>
           <h3>设置新密码</h3>
-          <p class="reset-note">至少 8 位。</p>
+          <p class="reset-note">密码长度至少 8 位。</p>
           <div class="reset-fields">
             <input id="reset-next" type="password" placeholder="新密码" maxlength="200" autocomplete="new-password">
-            <input id="reset-again" type="password" placeholder="再输一次" maxlength="200" autocomplete="new-password">
+            <input id="reset-again" type="password" placeholder="再次确认新密码" maxlength="200" autocomplete="new-password">
           </div>
-          <button type="button" id="btn-reset-save" class="btn-primary">继续</button>
+          <button type="button" id="btn-reset-save" class="btn-primary">确认更新</button>
         </div>
         <p id="reset-error" class="error-text" role="alert"></p>
       </div>
     </div>
 
-    <!-- 已经登录的主工作区 (三列架构) -->
+    <!-- 主工作台 (三栏精密架构) -->
     <div id="app" class="app-shell" data-pane="list" hidden>
-      <!-- 第一列: 全局主功能轨 (Icon / Global Rail) -->
+      <!-- 第一栏：全局导航轨 -->
       <nav class="rail" aria-label="全局导航">
         <div class="rail-top">
           <div class="logo-mark" id="rail-mark" title="邮箱"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></div>
           <button type="button" class="rail-btn active" id="nav-inbox" title="收件箱">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-inbox"></use></svg></span>
             <span class="label">收件箱</span>
+            <span class="badge badge-calm" id="badge-inbox" hidden>0</span>
           </button>
           <button type="button" class="rail-btn" id="nav-spam" title="已拦截">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spam"></use></svg></span>
             <span class="label">已拦截</span>
+            <span class="badge badge-muted" id="badge-spam" hidden>0</span>
           </button>
-          <button type="button" class="rail-btn" id="nav-send" title="发信">
+          <button type="button" class="rail-btn" id="nav-send" title="发信 (C)">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-send"></use></svg></span>
             <span class="label">发信</span>
           </button>
@@ -119,37 +132,52 @@
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trash"></use></svg></span>
             <span class="label">垃圾桶</span>
           </button>
+          <button type="button" class="rail-btn" id="nav-users" title="成员与邮箱分配">
+            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-users"></use></svg></span>
+            <span class="label">成员</span>
+          </button>
         </div>
+
         <div class="rail-bottom">
-          <button type="button" class="rail-btn-sm" id="nav-settings" title="设置">
-            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"></use></svg></span>
-          </button>
-          <button type="button" class="rail-btn-sm" id="btn-theme" title="切换深浅色">
-            <span class="icon" id="theme-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sun"></use></svg></span>
-          </button>
-          <button type="button" class="rail-btn-sm" id="nav-dlq" title="处理失败">
+          <button type="button" class="rail-btn-sm" id="nav-dlq" title="失败任务队列">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"></use></svg></span>
             <span class="badge badge-alert" id="badge-dlq" hidden>0</span>
           </button>
-          <button type="button" class="rail-btn-sm" id="logout" title="退出">
+          <button type="button" class="rail-btn-sm" id="nav-settings" title="设置">
+            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"></use></svg></span>
+          </button>
+          <button type="button" class="rail-btn-sm" id="btn-shortcuts" title="键盘快捷键 (?)">
+            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-kbd"></use></svg></span>
+          </button>
+          <button type="button" class="rail-btn-sm" id="btn-theme" title="切换深浅色主题">
+            <span class="icon" id="theme-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sun"></use></svg></span>
+          </button>
+          <div class="rail-divider" aria-hidden="true"></div>
+          <button type="button" class="account-avatar-btn" id="account-pill" title="当前登录身份">A</button>
+          <button type="button" class="rail-btn-sm" id="logout" title="退出登录">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-logout"></use></svg></span>
           </button>
         </div>
       </nav>
 
-      <!-- 第二列: 分流与列表检索 (Contextual Stream) -->
+      <!-- 第二栏：上下文邮件流 / 二级导航 -->
       <aside class="stream">
-        <!-- 收件箱模式的顶部过滤栏 -->
         <div id="stream-inbox-header" class="stream-header">
           <div class="stream-title-row">
             <h2 id="stream-title">收件箱</h2>
             <div class="stream-actions">
+              <button type="button" id="btn-mark-all-read" class="pill pill-quiet" title="全部标为已读 (U)" hidden>全标已读</button>
               <button type="button" id="btn-promo" class="pill pill-promo" title="只看推广" aria-pressed="false">推广</button>
               <button type="button" id="btn-refresh" class="btn-icon" title="刷新 (R)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
           </div>
+          <div class="stream-filter-row">
+            <select id="domain-filter" class="stream-domain-select" title="按收信域名过滤" hidden>
+              <option value="">全部域名</option>
+            </select>
+          </div>
           <form id="filters" class="search-box">
-            <input id="q" type="search" maxlength="200" placeholder="搜索主题或发件人">
+            <input id="q" type="search" maxlength="200" placeholder="搜索主题、发件人或 Message-ID ( / )">
             <input id="label" type="hidden" value="legit">
             <input id="status" type="hidden" value="">
           </form>
@@ -159,12 +187,12 @@
           <div class="stream-title-row">
             <h2 id="stream-send-title">已发信</h2>
             <div class="stream-actions">
-              <button type="button" id="btn-compose" class="btn-sm">写信</button>
+              <button type="button" id="btn-compose" class="btn-sm btn-accent-outline">写信</button>
               <button type="button" id="btn-send-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
           </div>
           <form id="send-filters" class="search-box">
-            <input id="send-q" type="search" maxlength="200" placeholder="搜索已发信" autocomplete="off">
+            <input id="send-q" type="search" maxlength="200" placeholder="搜索已发邮件 ( / )" autocomplete="off">
           </form>
         </div>
 
@@ -172,13 +200,14 @@
           <div class="stream-title-row">
             <h2 id="stream-spam-title">已拦截</h2>
             <div class="stream-actions">
+              <button type="button" id="btn-spam-read-all" class="pill pill-quiet" title="全部标为已读 (U)" hidden>全标已读</button>
               <button type="button" id="btn-spam-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
           </div>
           <div class="stream-filter-bar">
-            <select id="filter-select" class="stream-filter-select" title="已拦截里再分。选全部才会看到正常。">
-              <option value="not-legit" selected>非正常</option>
-              <option value="">全部</option>
+            <select id="filter-select" class="stream-filter-select" title="按拦截类别筛选">
+              <option value="not-legit" selected>全部非正常</option>
+              <option value="">全部分类</option>
               <option value="spam" title="spam">垃圾</option>
               <option value="phish" title="phish">钓鱼</option>
               <option value="malware" title="malware">恶意</option>
@@ -188,17 +217,16 @@
           </div>
         </div>
 
-        <!-- 垃圾桶模式的顶部操作栏 -->
         <div id="stream-trash-header" class="stream-header" hidden>
           <div class="stream-title-row">
             <h2>垃圾桶</h2>
             <div class="stream-actions">
-              <button type="button" id="btn-empty-trash" class="btn-sm btn-danger-ghost" title="清空垃圾桶">清空垃圾桶</button>
+              <button type="button" id="btn-empty-trash" class="btn-sm btn-quiet-danger" title="清空垃圾桶">清空垃圾桶</button>
               <button type="button" id="btn-trash-refresh" class="btn-icon" title="刷新"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
           </div>
           <form id="trash-filters" class="search-box">
-            <input id="trash-q" type="search" maxlength="200" placeholder="搜索垃圾桶">
+            <input id="trash-q" type="search" maxlength="200" placeholder="搜索垃圾桶 ( / )">
           </form>
         </div>
 
@@ -211,61 +239,71 @@
             </div>
           </div>
           <form id="dlq-search" class="search-box">
-            <input id="dlq-q" type="search" maxlength="200" placeholder="搜索主题、地址或错误" autocomplete="off">
+            <input id="dlq-q" type="search" maxlength="200" placeholder="搜索主题、地址或错误 ( / )" autocomplete="off">
           </form>
           <div class="pills-scroll" id="dlq-pills">
             <button type="button" class="pill active" data-dlq-status="open">要处理</button>
             <button type="button" class="pill" data-dlq-status="stopped">已放弃</button>
-            <button type="button" class="pill" data-dlq-status="retrying">还会再试</button>
+            <button type="button" class="pill" data-dlq-status="retrying">等待重试</button>
             <button type="button" class="pill" data-dlq-status="dismissed">已放过</button>
           </div>
-          <p id="dlq-summary" class="stream-subtitle">按邮件排列。停止的步骤可以重试或放过。</p>
+          <p id="dlq-summary" class="stream-subtitle">按邮件归组展示，停止的步骤可重试或忽略。</p>
         </div>
 
         <div id="stream-settings-header" class="stream-header" hidden>
           <div class="stream-title-row">
-            <h2>设置</h2>
+            <h2>控制台与设置</h2>
           </div>
-          <p class="stream-subtitle">列表的添加、移除和排序会直接保存。</p>
+          <p class="stream-subtitle">选择配置分区，列表增删与排序即时落库。</p>
         </div>
 
         <p id="notice" class="stream-notice" role="status"></p>
         <p id="dlq-notice" class="stream-notice" role="status" hidden></p>
 
-        <!-- 列表容器 -->
         <div id="list" class="item-list"></div>
       </aside>
 
-      <!-- 第三列: 详情与研判主舞台 (Inspector & Workspace) -->
+      <!-- 第三栏：阅读、写信与管理主舞台 -->
       <main class="workspace">
-        <!-- 邮件详情舞台 -->
+        <!-- 邮件阅读舞台 -->
         <section id="view-mail" class="workspace-view">
           <div id="mail-empty" class="empty-state">
             <span class="empty-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></span>
-            <h3>选一封信</h3>
-            <p id="mail-empty-copy">这里是收件箱，包含尚未分类的来信。其余在已拦截。</p>
+            <h3>选择一封邮件开始阅读</h3>
+            <p id="mail-empty-copy">收件箱展示正常与待分拣来信，其余分类位于已拦截。</p>
           </div>
 
           <div id="mail-loading" class="empty-state" hidden>
             <span class="empty-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-clock"></use></svg></span>
-            <h3>正在打开</h3>
+            <h3>正在读取信件</h3>
           </div>
 
           <article id="mail-detail" class="detail-card" hidden>
-            <!-- 邮件头信息 -->
             <header class="detail-header">
               <div class="detail-title-line">
                 <button type="button" id="btn-back-list" class="btn-sm mobile-back">← 返回列表</button>
                 <h1 id="detail-subject">(无主题)</h1>
               </div>
+
               <div class="meta-grid">
-                <div class="meta-item"><span class="meta-label">发件人：</span><span id="detail-from" class="meta-val"></span></div>
-                <div class="meta-item"><span class="meta-label">收件人：</span><span id="detail-to" class="meta-val"></span></div>
-                <div class="meta-item"><span class="meta-label">时间：</span><span id="detail-time" class="meta-val"></span></div>
+                <div class="meta-item">
+                  <span class="meta-label">发件：</span>
+                  <button type="button" id="detail-from" class="meta-val meta-copy-btn"></button>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">收件：</span>
+                  <button type="button" id="detail-to" class="meta-val meta-copy-btn"></button>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">时间：</span>
+                  <span id="detail-time" class="meta-val"></span>
+                  <span class="meta-sep">·</span>
+                  <span id="detail-size" class="meta-dim"></span>
+                </div>
                 <div class="meta-item meta-item-verdict">
                   <span class="meta-label">分类：</span>
                   <div class="verdict-control-group">
-                    <select id="detail-verdict-select" class="verdict-select" title="改分类">
+                    <select id="detail-verdict-select" class="verdict-select" title="调整邮件分类">
                       <option value="legit" title="legit">正常</option>
                       <option value="unsolicited-admin" title="unsolicited-admin">推广</option>
                       <option value="spam" title="spam">垃圾</option>
@@ -277,37 +315,46 @@
                   </div>
                 </div>
               </div>
+
+              <div id="header-auth-row" class="header-auth-row"></div>
             </header>
 
             <section id="thread-box" class="thread-box" hidden>
-              <h2 class="thread-title">来回</h2>
+              <h2 class="thread-title">对话往来</h2>
               <div id="thread-list" class="thread-list"></div>
             </section>
 
-            <!-- 详情 Tab 切换栏与平齐操作区 -->
             <div class="tab-bar">
               <div class="tab-group">
                 <button type="button" class="tab-btn active" data-tab="ai">阅读</button>
                 <button type="button" class="tab-btn" data-tab="text">纯文本</button>
-                <button type="button" class="tab-btn" data-tab="raw">信头</button>
+                <button type="button" class="tab-btn" data-tab="raw">信头与认证</button>
               </div>
               <div class="tab-actions">
-                <button type="button" id="btn-reply" class="btn-sm" title="按这封回一封" hidden>回复</button>
-                <button type="button" id="btn-reclassify" class="btn-sm" title="按当前提示词再分一次">重分类</button>
-                <a id="btn-download-eml" class="btn-sm btn-link" target="_blank" download title="下载原始 EML">下载</a>
-                <button type="button" id="btn-block-mail" class="btn-sm btn-danger-ghost" title="以后这个地址来的信直接进垃圾桶" hidden>加入黑名单</button>
-                <button type="button" id="btn-trash-mail" class="btn-sm btn-danger-ghost" title="移入垃圾桶">移入垃圾桶</button>
+                <button type="button" id="btn-reply" class="btn-sm btn-accent-outline" title="回复此邮件" hidden>回复</button>
+                <button type="button" id="btn-reclassify" class="btn-sm" title="按当前提示词重新分拣">重分类</button>
+                <a id="btn-download-eml" class="btn-sm btn-link" target="_blank" download title="下载原始 EML">原件</a>
+                <button type="button" id="btn-block-mail" class="btn-sm btn-quiet-danger" title="将发件人加入黑名单" hidden>加入黑名单</button>
+                <button type="button" id="btn-trash-mail" class="btn-sm btn-quiet-danger" title="移入垃圾桶">移入垃圾桶</button>
                 <button type="button" id="btn-restore-mail" class="btn-sm" title="从垃圾桶恢复" hidden>恢复</button>
                 <button type="button" id="btn-delete-mail" class="btn-sm btn-danger" title="永久删除" hidden>彻底删除</button>
               </div>
             </div>
 
-            <!-- Tab 1: AI 研判视图 (集成单页沙箱正文与特征流) -->
             <div id="panel-ai" class="tab-panel active">
+              <!-- 智能数字验证码快捷提取条 -->
+              <div id="otp-bar" class="otp-banner" hidden>
+                <div class="otp-left">
+                  <span class="otp-caption">检出验证码</span>
+                  <code id="otp-code-text" class="otp-code">000000</code>
+                </div>
+                <button type="button" id="btn-copy-otp" class="btn-fit">复制验证码</button>
+              </div>
+
               <div class="summary-card">
-                <div class="summary-header" hidden>
-                  <span class="summary-label">摘要</span>
-                  <div class="confidence-chip" title="模型置信度" hidden>
+                <div class="summary-header">
+                  <span class="summary-label">智能摘要</span>
+                  <div class="confidence-chip" title="模型判定置信度" hidden>
                     <span class="chip-label">置信</span>
                     <div class="chip-bar"><div id="verdict-bar" class="chip-fill"></div></div>
                     <span id="verdict-percent" class="chip-percent">0%</span>
@@ -317,12 +364,11 @@
                 <div id="detail-tags" class="tag-row" hidden></div>
               </div>
 
-              <!-- 原文视觉呈现 (安全沙箱) 直接平铺于正文中 -->
               <section class="inlined-preview-section">
                 <div class="section-subhead">
-                  <span class="subhead-title">正文</span>
+                  <span class="subhead-title">正文安全沙箱</span>
                   <div class="preview-actions">
-                    <p class="preview-guard" id="preview-guard">共 0 处外链资源未加载</p>
+                    <p class="preview-guard" id="preview-guard">已拦截 0 处外链资源</p>
                     <button type="button" id="btn-load-images" class="btn-sec-action">显示图片</button>
                   </div>
                 </div>
@@ -331,9 +377,14 @@
                 </div>
               </section>
 
+              <div class="ai-section" id="section-attachments" hidden>
+                <h4>附件清单 (<span id="attachment-count">0</span>)</h4>
+                <div id="attachments-list" class="attachments-grid"></div>
+              </div>
+
               <details class="ai-section collapsible-section" id="section-signals">
                 <summary class="collapsible-summary">
-                  <span class="collapsible-title">依据</span>
+                  <span class="collapsible-title">判定依据</span>
                   <span class="badge" id="signals-count">0</span>
                 </summary>
                 <div id="signals-list" class="signals-grid"></div>
@@ -341,213 +392,228 @@
 
               <details class="ai-section collapsible-section" id="section-urls">
                 <summary class="collapsible-summary">
-                  <span class="collapsible-title">链接</span>
+                  <span class="collapsible-title">提取链接</span>
                   <span class="badge" id="url-count">0</span>
                 </summary>
                 <div id="urls-list" class="urls-grid"></div>
               </details>
-
-              <div class="ai-section" id="section-attachments">
-                <h4>附件 (<span id="attachment-count">0</span>)</h4>
-                <div id="attachments-list" class="attachments-grid"></div>
-              </div>
             </div>
 
-            <!-- Tab 3: 纯文本正文视图 -->
             <div id="panel-text" class="tab-panel">
               <pre id="plain-text-body" class="code-block"></pre>
             </div>
 
-            <!-- Tab 4: RFC822 原文视图 -->
             <div id="panel-raw" class="tab-panel">
               <div class="auth-box">
-                <h4>身份检查</h4>
+                <h4>发件源身份核验</h4>
                 <div id="auth-chips" class="auth-chips-row"></div>
               </div>
-              <h4>信头</h4>
-              <p class="stream-subtitle">只有信头，没有正文。整封原件用「下载」。</p>
+              <h4>RFC822 原始信头</h4>
+              <p class="stream-subtitle">仅展示信头字段，完整邮件字节流请点上方「原件」下载。</p>
               <pre id="raw-headers" class="code-block"></pre>
             </div>
           </article>
         </section>
 
+        <!-- 失败队列舞台 -->
         <section id="view-dlq" class="workspace-view" hidden>
-          <button type="button" id="btn-back-dlq" class="btn-sm mobile-back">返回</button>
+          <button type="button" id="btn-back-dlq" class="btn-sm mobile-back">← 返回列表</button>
           <div id="dlq-empty" class="empty-state">
             <div class="empty-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"></use></svg></div>
-            <h3>处理失败</h3>
-            <p>从左侧选择一条记录。</p>
+            <h3>异步任务恢复</h3>
+            <p>从左侧选择一封有待处理步骤的信件。</p>
           </div>
           <div id="failure-detail" class="page-scroll" hidden></div>
         </section>
 
+        <!-- 写信与发信舞台 -->
         <section id="view-send" class="workspace-view" hidden>
           <div class="page-scroll">
             <button type="button" id="btn-back-send" class="btn-sm mobile-back">← 返回列表</button>
             <section class="block">
               <div class="block-head">
                 <div>
-                  <h2>写信</h2>
-                  <p class="muted">先存原文，再排队发出。收信域名上若有密钥就签 DKIM，没有密钥也发。</p>
+                  <h2>撰写邮件</h2>
+                  <p class="muted" id="send-quota-hint">先落盘原件再异步直投收件域 MX，配置了 DKIM 的域名会自动签名。</p>
+                </div>
+                <div class="draft-bar">
+                  <span id="draft-status" class="draft-status"></span>
+                  <button type="button" id="btn-discard-draft" class="btn-sm btn-quiet-danger" hidden>清空草稿</button>
                 </div>
               </div>
               <form id="send-form" class="send-form">
                 <label class="name-row">
-                  <span class="name-key">发件</span>
-                  <input id="send-from" list="send-from-list" maxlength="254" autocomplete="off" required>
+                  <span class="name-key">发件地址</span>
+                  <input id="send-from" list="send-from-list" maxlength="254" autocomplete="off" placeholder="sender@domain" required>
                 </label>
                 <datalist id="send-from-list"></datalist>
-                <p id="send-domain-note" class="send-note" hidden>这个域名还没加入收信域名。仍然可以发出。</p>
+                <div id="send-from-quick" class="quick-addr-row" hidden></div>
+                <p id="send-domain-note" class="send-note" hidden></p>
+
                 <label class="name-row">
-                  <span class="name-key">收件</span>
-                  <input id="send-to" maxlength="2000" autocomplete="off" required placeholder="多个地址用逗号分开">
+                  <span class="name-key">收件地址</span>
+                  <input id="send-to" maxlength="2000" autocomplete="off" required placeholder="多个收件人用逗号或分号分隔">
                 </label>
                 <div class="inline-row">
-                  <button type="button" id="btn-cc-toggle" class="btn-sm">抄送 / 密送</button>
+                  <button type="button" id="btn-cc-toggle" class="btn-sm">展开抄送 / 密送</button>
                 </div>
                 <label class="name-row" id="send-cc-row" hidden>
-                  <span class="name-key">抄送</span>
-                  <input id="send-cc" maxlength="2000" autocomplete="off" placeholder="多个地址用逗号分开">
+                  <span class="name-key">抄送 (Cc)</span>
+                  <input id="send-cc" maxlength="2000" autocomplete="off" placeholder="多个地址用逗号分隔">
                 </label>
                 <label class="name-row" id="send-bcc-row" hidden>
-                  <span class="name-key">密送</span>
-                  <input id="send-bcc" maxlength="2000" autocomplete="off" placeholder="多个地址用逗号分开">
+                  <span class="name-key">密送 (Bcc)</span>
+                  <input id="send-bcc" maxlength="2000" autocomplete="off" placeholder="仅在 SMTP 信封投递，不写入信头">
                 </label>
                 <label class="name-row">
-                  <span class="name-key">主题</span>
-                  <input id="send-subject" maxlength="200" autocomplete="off">
+                  <span class="name-key">邮件主题</span>
+                  <input id="send-subject" maxlength="200" autocomplete="off" placeholder="主题">
                 </label>
-                <textarea id="send-text" rows="14" class="code-editor" maxlength="100000" placeholder="正文"></textarea>
+                <textarea id="send-text" rows="14" class="code-editor" maxlength="100000" placeholder="输入纯文本正文…"></textarea>
                 <div class="inline-row">
-                  <button type="submit" id="btn-send" class="btn-fit">发出</button>
+                  <button type="submit" id="btn-send" class="btn-fit">排入投递队列</button>
                 </div>
               </form>
             </section>
           </div>
         </section>
 
+        <!-- 设置与管理舞台 -->
         <section id="view-settings" class="workspace-view" hidden>
           <div class="page-scroll">
-            <button type="button" id="btn-back-settings" class="btn-sm mobile-back">返回</button>
-            <section class="block" id="set-names" data-group="account" hidden>
-              <div class="block-head">
-                <div>
-                  <h2>界面</h2>
-                  <p class="muted">只改显示名。分类代号不变，模型与提醒仍按代号判断。</p>
-                </div>
-                <button type="button" id="btn-save-names" class="btn-fit" disabled>保存</button>
-              </div>
-              <label class="name-row">
-                <span class="name-key">面板</span>
-                <input id="panel-title" maxlength="40" autocomplete="off" placeholder="邮箱">
-              </label>
-              <h3 class="field-title">分类</h3>
-              <div id="label-names" class="name-grid"></div>
-            </section>
+            <button type="button" id="btn-back-settings" class="btn-sm mobile-back">← 返回分区</button>
+            <datalist id="alloc-domains-datalist"></datalist>
 
-            <section class="block" id="set-model" data-group="classify" hidden>
+            <!-- 成员视角：专属邮箱与配额 -->
+            <section class="block" id="set-my-mailboxes" data-group="my-mailboxes" hidden>
               <div class="block-head">
                 <div>
-                  <h2>模型</h2>
-                  <p class="muted">按列表顺序使用。密钥只显示末 4 位，保存后不能再查看全文。</p>
+                  <h2>专属邮箱与发信额度</h2>
+                  <p class="muted" id="member-quota-line">仅展示分配至当前账号名下的邮件与发信记录。</p>
                 </div>
               </div>
-              <div class="model-switch">
-                <label class="chk"><input id="ai-enabled" type="checkbox" checked> 启用分拣</label>
-                <label class="thinking-pair">
-                  <span class="muted">思考</span>
-                  <select id="ai-thinking">
-                    <option value="off">关</option>
-                    <option value="low" selected>低</option>
-                    <option value="medium">中</option>
-                    <option value="high">高</option>
-                  </select>
-                </label>
-              </div>
-              <p class="muted">关掉之后不再调用模型，已经收下的信仍在。思考等级只给 Gemini 用。开关、添加、移除和排序会直接保存。</p>
-              <h3 class="field-title">型号</h3>
-              <div id="model-list" class="name-list"></div>
-              <div class="inline-row">
-                <input id="model-add" placeholder="模型名称" maxlength="80" autocomplete="off">
-                <button type="button" id="btn-add-model" class="btn-fit">添加</button>
-              </div>
-              <h3 class="field-title">密钥</h3>
-              <div id="key-list" class="name-list"></div>
-              <div class="inline-row">
-                <input id="key-add" type="password" placeholder="新密钥" maxlength="512" autocomplete="off">
-                <button type="button" id="btn-add-key" class="btn-fit">添加</button>
-              </div>
+              <div id="member-allocations-host" class="member-alloc-list"></div>
             </section>
 
-            <section class="block" id="set-prompt" data-group="classify" hidden>
+            <!-- 管理员视角：多用户与邮箱规则分配 -->
+            <section class="block" id="set-users-kpi" data-group="users" data-admin-only="1" hidden>
               <div class="block-head">
                 <div>
-                  <h2>分拣</h2>
-                  <p class="muted" id="ai-status-line">模型</p>
+                  <h2>多用户与权限总览</h2>
+                  <p class="muted">为信任伙伴开立独立账号、分配专属邮箱（支持 +tag 子地址、前缀通配与整域接管），收发状态与黑名单彼此完全隔离。</p>
                 </div>
-                <button type="button" id="btn-save-prompt" class="btn-fit" disabled>保存</button>
               </div>
-              <textarea id="prompt-editor" rows="14" class="code-editor" spellcheck="false"></textarea>
-              <p class="muted">保存后，新邮件按这份提示词分类。已经分过的，打开邮件后再点「重分类」。</p>
+              <div id="users-kpi-strip" class="kpi-strip"></div>
             </section>
 
-            <section class="block" id="set-notify" data-group="classify" hidden>
+            <section class="block" id="set-users-create" data-group="users" data-admin-only="1" hidden>
               <div class="block-head">
                 <div>
-                  <h2>提醒</h2>
-                  <p class="muted">只有勾上的分类才推送。普通信留在收件箱。</p>
+                  <h2>开立新账号</h2>
+                  <p class="muted">创建成功后会自动将登录地址、账号与初始口令复制到剪贴板，方便直接发给对方。</p>
                 </div>
-                <button type="button" id="btn-save-notify" class="btn-fit" disabled>保存</button>
               </div>
-              <div class="chk-row" id="notify-labels"></div>
-              <div class="inline-row">
-                <span class="muted">置信至少</span>
-                <input id="notify-confidence" class="field-narrow" inputmode="decimal" autocomplete="off">
-                <span class="muted" id="notify-channels"></span>
-              </div>
+              <form id="create-user-form" class="user-create-form">
+                <div class="user-form-grid">
+                  <label class="drawer-field">
+                    <span class="drawer-label">登录名（字母数字或邮箱）</span>
+                    <input id="new-user-username" maxlength="128" autocomplete="off" placeholder="例如 alice 或 alice@example.com" required>
+                  </label>
+                  <label class="drawer-field">
+                    <span class="drawer-label">显示称呼（选填）</span>
+                    <input id="new-user-display" maxlength="40" autocomplete="off" placeholder="例如 Alice">
+                  </label>
+                  <label class="drawer-field">
+                    <span class="drawer-label">账号角色</span>
+                    <select id="new-user-role">
+                      <option value="member" selected>普通成员（严格按邮箱规则隔离）</option>
+                      <option value="admin">协同管理员（全局权限）</option>
+                    </select>
+                  </label>
+                  <label class="drawer-field">
+                    <span class="drawer-label">24 小时发信配额（0 为禁发）</span>
+                    <input id="new-user-limit" inputmode="numeric" value="50" autocomplete="off">
+                  </label>
+                </div>
+
+                <div class="inline-row">
+                  <input id="new-user-password" type="text" maxlength="200" autocomplete="off" placeholder="初始密码（至少 8 位）" required>
+                  <button type="button" id="btn-gen-user-pwd" class="btn-fit ghost">随机生成强口令</button>
+                </div>
+
+                <div class="user-form-grid">
+                  <label class="drawer-field">
+                    <span class="drawer-label">初始邮箱规则（支持 alice@domain、team-*@domain、*@domain）</span>
+                    <input id="new-user-alloc" maxlength="500" autocomplete="off" placeholder="多个规则用逗号分隔，亦可创建后再添加">
+                  </label>
+                  <label class="drawer-field">
+                    <span class="drawer-label">后台备注（选填）</span>
+                    <input id="new-user-notes" maxlength="300" autocomplete="off" placeholder="仅管理员可见">
+                  </label>
+                </div>
+
+                <div class="inline-row">
+                  <button type="submit" id="btn-create-user" class="btn-fit">创建账号并复制凭据</button>
+                </div>
+              </form>
             </section>
 
-            <section class="block" id="set-domains" data-group="domains">
+            <section class="block" id="set-users-list" data-group="users" data-admin-only="1" hidden>
               <div class="block-head">
                 <div>
-                  <h2>域名与发信</h2>
-                  <p class="muted">这些域名上的任何前缀都会收下。短名出现在收件地址后面。密钥写进 DNS 后，发出的信才会签名。没有记录时照常发信。</p>
+                  <h2>账号与邮箱分配管控</h2>
+                  <p class="muted">随时增删成员邮箱规则、调整配额、重置口令或一键停用账号。</p>
+                </div>
+              </div>
+              <div class="search-box">
+                <input id="users-q" type="search" maxlength="120" autocomplete="off" placeholder="筛选账号名、备注或已分配邮箱 ( / )">
+              </div>
+              <div id="users-cards-list" class="users-cards-list"></div>
+            </section>
+
+            <!-- 域名与 DKIM -->
+            <section class="block" id="set-domains" data-group="domains" data-admin-only="1">
+              <div class="block-head">
+                <div>
+                  <h2>收信域名与 DKIM 签名</h2>
+                  <p class="muted">已启用域名下的任意前缀均会收下（Catch-all）。配置 DKIM 并写入 DNS TXT 后，外发邮件自动签名。</p>
                 </div>
               </div>
               <div id="domain-cards" class="domain-cards"></div>
               <div class="inline-row">
-                <input id="domain-add" placeholder="添加收信域名" autocomplete="off">
-                <button type="button" id="btn-add-domain" class="btn-fit">添加</button>
+                <input id="domain-add" placeholder="添加收信域名，如 mail.example.com" autocomplete="off">
+                <button type="button" id="btn-add-domain" class="btn-fit">添加域名</button>
               </div>
               <div class="inline-row">
-                <input id="dkim-domain" placeholder="只生成密钥的域名" autocomplete="off" maxlength="253">
-                <select id="dkim-alg" title="算法">
+                <input id="dkim-domain" placeholder="为指定域名生成 DKIM 密钥" autocomplete="off" maxlength="253">
+                <select id="dkim-alg" title="签名算法">
                   <option value="rsa">RSA 2048</option>
                   <option value="ed25519">Ed25519</option>
                 </select>
-                <button type="button" id="btn-dkim-generate" class="btn-fit">生成密钥</button>
+                <button type="button" id="btn-dkim-generate" class="btn-fit ghost">生成密钥</button>
               </div>
             </section>
 
+            <!-- 地址与黑名单 -->
             <section class="block" id="set-mailboxes" data-group="people" hidden>
               <div class="block-head">
                 <div>
-                  <h2>地址</h2>
-                  <p class="muted">为收件地址填写名称和备注。没有备注并不表示该地址未知。</p>
+                  <h2>收发地址名称与备注</h2>
+                  <p class="muted">设置的名称将作为外发邮件 From 显示名及收件地址别名展示。</p>
                 </div>
               </div>
               <form id="mailbox-form" class="inline-row">
-                <input id="mb-domain" placeholder="域名" required autocomplete="off">
+                <input id="mb-domain" list="alloc-domains-datalist" placeholder="域名" required autocomplete="off">
                 <input id="mb-localpart" class="field-narrow" placeholder="前缀" required autocomplete="off">
-                <input id="mb-name" placeholder="名称，可空" maxlength="40" autocomplete="off">
-                <input id="mb-notes" placeholder="备注，可空" autocomplete="off">
+                <input id="mb-name" placeholder="显示名称（选填）" maxlength="40" autocomplete="off">
+                <input id="mb-notes" placeholder="备注（选填）" autocomplete="off">
                 <button type="submit" class="btn-fit">保存</button>
               </form>
               <table id="mailboxes-table" class="data-table">
                 <thead>
                   <tr>
-                    <th>地址</th>
-                    <th>名字</th>
+                    <th>邮箱地址</th>
+                    <th>显示名</th>
                     <th>备注</th>
                     <th></th>
                   </tr>
@@ -559,14 +625,14 @@
             <section class="block" id="set-senders" data-group="people" hidden>
               <div class="block-head">
                 <div>
-                  <h2>发件人称呼</h2>
-                  <p class="muted">列表里的发件地址使用这里的名称。添加、修改和移除会直接保存。</p>
+                  <h2>外部发件人称呼</h2>
+                  <p class="muted">为常见来信地址附加易读称呼，变更后即时保存。</p>
                 </div>
               </div>
               <div id="sender-names" class="name-list"></div>
               <div class="inline-row">
                 <input id="sender-address" placeholder="发件地址" autocomplete="off" maxlength="254">
-                <input id="sender-name" placeholder="名称" maxlength="40" autocomplete="off">
+                <input id="sender-name" placeholder="显示称呼" maxlength="40" autocomplete="off">
                 <button type="button" id="btn-add-sender" class="btn-fit">添加</button>
               </div>
             </section>
@@ -574,67 +640,192 @@
             <section class="block" id="set-block" data-group="people" hidden>
               <div class="block-head">
                 <div>
-                  <h2>黑名单</h2>
-                  <p class="muted">这些发件地址来的新信直接进垃圾桶，不分类，也不提醒。原文仍保留。</p>
+                  <h2>发件人黑名单</h2>
+                  <p class="muted">命中黑名单的新来信将直接静默归入垃圾桶，不消耗模型额度也不触发通知。</p>
                 </div>
               </div>
               <div id="block-list" class="domain-list"></div>
-              <p id="block-empty" class="muted">还没有地址。</p>
+              <p id="block-empty" class="muted">当前黑名单为空。</p>
               <div class="inline-row">
-                <input id="block-add" placeholder="发件地址" autocomplete="off" maxlength="254">
-                <button type="button" id="btn-add-block" class="btn-fit">添加</button>
+                <input id="block-add" placeholder="输入需拦截的发件邮箱地址" autocomplete="off" maxlength="254">
+                <button type="button" id="btn-add-block" class="btn-fit">加入黑名单</button>
               </div>
             </section>
 
-            <section class="block" id="set-machine" data-group="status" hidden>
-              <h2>概况</h2>
+            <!-- 分拣与提醒 -->
+            <section class="block" id="set-model" data-group="classify" data-admin-only="1" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>模型池与密钥探活</h2>
+                  <p class="muted">按顺序轮询与故障转移。密钥仅展示末 4 位，点击「试」可在服务端直接探测密钥连通性与延迟。</p>
+                </div>
+              </div>
+              <div class="model-switch">
+                <label class="chk"><input id="ai-enabled" type="checkbox" checked> 启用智能分拣</label>
+                <label class="thinking-pair">
+                  <span class="muted">思考深度</span>
+                  <select id="ai-thinking">
+                    <option value="off">关</option>
+                    <option value="low" selected>低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                  </select>
+                </label>
+              </div>
+              <p class="muted">关闭分拣后新信件直接保留在收件箱，不调用外部模型。思考等级适用于 Gemini 系列模型。</p>
+              <h3 class="field-title">模型优先级队列</h3>
+              <div id="model-list" class="name-list"></div>
+              <div class="inline-row">
+                <input id="model-add" placeholder="输入模型代号，如 gemini-2.5-flash" maxlength="80" autocomplete="off">
+                <button type="button" id="btn-add-model" class="btn-fit">添加</button>
+              </div>
+              <h3 class="field-title">API 密钥池</h3>
+              <div id="key-list" class="name-list"></div>
+              <div class="inline-row">
+                <input id="key-add" type="password" placeholder="粘贴新 API 密钥" maxlength="512" autocomplete="off">
+                <button type="button" id="btn-add-key" class="btn-fit">添加</button>
+              </div>
+            </section>
+
+            <section class="block" id="set-prompt" data-group="classify" data-admin-only="1" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>分拣系统提示词</h2>
+                  <p class="muted" id="ai-status-line">模型状态</p>
+                </div>
+                <button type="button" id="btn-save-prompt" class="btn-fit" disabled>保存</button>
+              </div>
+              <textarea id="prompt-editor" rows="14" class="code-editor" spellcheck="false"></textarea>
+              <p class="muted">保存后立即作用于新入站邮件；历史邮件可在阅读页点击「重分类」重新评估。</p>
+            </section>
+
+            <section class="block" id="set-notify" data-group="classify" data-admin-only="1" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>外部推送策略</h2>
+                  <p class="muted">仅勾选类别且达到最低置信度时触发 Telegram / Webhook 推送。</p>
+                </div>
+                <button type="button" id="btn-save-notify" class="btn-fit" disabled>保存</button>
+              </div>
+              <div class="chk-row" id="notify-labels"></div>
+              <div class="inline-row">
+                <span class="muted">最低置信阈值</span>
+                <input id="notify-confidence" class="field-narrow" inputmode="decimal" autocomplete="off">
+                <span class="muted" id="notify-channels"></span>
+              </div>
+            </section>
+
+            <!-- 状态、审计与日志 -->
+            <section class="block" id="set-machine" data-group="status" data-admin-only="1" hidden>
+              <h2>运行概况与流量</h2>
               <p class="muted" id="machine-line">在线</p>
               <div id="stat-cards" class="stats-cards-grid"></div>
-              <h3 class="field-title">近 14 天</h3>
+              <h3 class="field-title">近 14 天收信趋势</h3>
               <div id="stat-trend" class="trend"></div>
             </section>
 
-            <section class="block" id="set-jobs" data-group="status" hidden>
+            <section class="block" id="set-jobs" data-group="status" data-admin-only="1" hidden>
               <div class="block-head">
                 <div>
-                  <h2>失败几次才停</h2>
-                  <p class="muted">只影响之后新进入队列的任务。已经在队列里的任务仍使用原来的次数。</p>
+                  <h2>队列重试上限</h2>
+                  <p class="muted">控制新入队异步任务的最大自动重试次数。</p>
                 </div>
                 <button type="button" id="btn-save-attempts" class="btn-fit" disabled>保存</button>
               </div>
               <div class="inline-row">
                 <input id="job-max-attempts" class="field-narrow" inputmode="numeric" autocomplete="off">
-                <span class="muted">次之后不再自动试</span>
+                <span class="muted">次失败后转入人工待处理队列</span>
               </div>
             </section>
 
-            <section class="block" id="set-logs" data-group="status" hidden>
+            <section class="block" id="set-audit" data-group="status" data-admin-only="1" hidden>
               <div class="block-head">
                 <div>
-                  <h2>日志</h2>
-                  <p class="muted">最近的运行记录，只留在这次进程里。</p>
+                  <h2>安全审计记录</h2>
+                  <p class="muted">追踪登录、账号授权、发信投递与关键配置变更。</p>
                 </div>
-                <button type="button" id="btn-refresh-logs" class="btn-fit">刷新</button>
+                <button type="button" id="btn-refresh-audit" class="btn-fit ghost">刷新</button>
+              </div>
+              <div class="table-scroll">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>操作账号</th>
+                      <th>动作</th>
+                      <th>目标与详情</th>
+                    </tr>
+                  </thead>
+                  <tbody id="audit-tbody"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="block" id="set-logs" data-group="status" data-admin-only="1" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>进程实时日志</h2>
+                  <p class="muted">保留当前进程最近 200 条脱敏结构化日志。</p>
+                </div>
+                <button type="button" id="btn-refresh-logs" class="btn-fit ghost">刷新</button>
               </div>
               <pre id="log-view" class="log-view"></pre>
+            </section>
+
+            <!-- 界面与账号密码 -->
+            <section class="block" id="set-names" data-group="account" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>工作台外观命名</h2>
+                  <p class="muted">自定义浏览器标签标题与分类显示文案。</p>
+                </div>
+                <button type="button" id="btn-save-names" class="btn-fit" disabled>保存</button>
+              </div>
+              <label class="name-row">
+                <span class="name-key">面板标题</span>
+                <input id="panel-title" maxlength="40" autocomplete="off" placeholder="邮箱">
+              </label>
+              <div id="label-names-wrap">
+                <h3 class="field-title" style="margin-bottom:10px">分类显示名</h3>
+                <div id="label-names" class="name-grid"></div>
+              </div>
             </section>
 
             <section class="block" id="set-account" data-group="account" hidden>
               <div class="block-head">
                 <div>
-                  <h2>账号</h2>
-                  <p class="muted">改掉登录密码。至少 8 位。忘记密码时，验证码发到登录邮箱。</p>
+                  <h2>修改登录密码</h2>
+                  <p class="muted">新密码至少 8 位，保存后立即生效。</p>
                 </div>
-                <button type="button" id="btn-save-password" class="btn-fit">保存</button>
+                <button type="button" id="btn-save-password" class="btn-fit">更新密码</button>
               </div>
               <div class="inline-row">
                 <input id="password-current" type="password" placeholder="当前密码" autocomplete="current-password">
-                <input id="password-next" type="password" placeholder="新密码" maxlength="200" autocomplete="new-password">
+                <input id="password-next" type="password" placeholder="新密码（至少 8 位）" maxlength="200" autocomplete="new-password">
               </div>
             </section>
           </div>
         </section>
       </main>
+    </div>
+
+    <!-- 键盘快捷键速查弹窗 -->
+    <div id="shortcuts-modal" class="modal" hidden>
+      <div class="modal-card shortcuts-card" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+        <div class="reset-head">
+          <h2 id="shortcuts-title">键盘快捷键</h2>
+          <button type="button" id="btn-shortcuts-close" class="reset-close" aria-label="关闭">×</button>
+        </div>
+        <div class="shortcuts-grid">
+          <div class="kbd-row"><kbd>/</kbd><span>聚焦当前列表搜索框</span></div>
+          <div class="kbd-row"><kbd>Esc</kbd><span>清空搜索词或关闭弹窗</span></div>
+          <div class="kbd-row"><kbd>C</kbd><span>打开写信草稿工作台</span></div>
+          <div class="kbd-row"><kbd>J</kbd> / <kbd>K</kbd><span>上下切换相邻邮件</span></div>
+          <div class="kbd-row"><kbd>U</kbd><span>当前列表未读邮件一键标为已读</span></div>
+          <div class="kbd-row"><kbd>R</kbd><span>刷新当前视图数据</span></div>
+          <div class="kbd-row"><kbd>?</kbd><span>打开或关闭快捷键面板</span></div>
+        </div>
+      </div>
     </div>
 
     <div id="toast" class="toast" hidden role="status"></div>

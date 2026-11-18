@@ -51,6 +51,10 @@ test("the panel is static and the mail API stays behind the session", async () =
     assert.match(page.body, /\/app\.js/);
     assert.match(page.body, /\/app\.css/);
 
+    const manifest = await app.inject({ method: "GET", url: "/manifest.webmanifest" });
+    assert.equal(manifest.statusCode, 200);
+    assert.match(manifest.headers["content-type"] ?? "", /manifest\+json/);
+
     const script = await app.inject({ method: "GET", url: "/app.js" });
     assert.equal(script.statusCode, 200);
     assert.match(script.headers["content-type"] ?? "", /javascript/);
@@ -59,8 +63,8 @@ test("the panel is static and the mail API stays behind the session", async () =
     // safety baselines below apply to all of them, not just the entry.
     const panelModules = [
       "constants.js", "state.js", "dom.js", "util.js", "net.js", "ui.js",
-      "nav.js", "shell.js", "auth.js", "mail-view.js", "dlq-view.js",
-      "settings-view.js", "send-view.js",
+      "nav.js", "shell.js", "auth.js", "users-view.js", "mail-view.js",
+      "dlq-view.js", "settings-view.js", "send-view.js",
     ];
     let panelJs = script.body;
     for (const mod of panelModules) {

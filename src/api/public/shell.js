@@ -1,9 +1,47 @@
-// 应用外壳：主题、栏目切换、推广模式、视图标题与空列表文案，
-// 外加登录后引导（revealApp：它编排各视图，本就属于外壳层）。
+// 工作台外壳编排：会话加载、角色导航裁剪、深浅主题、栏目切换与首屏引导。
 import { setRevealApp, setSwitchNav } from "./nav.js";
 import { state } from "./state.js";
-import { appEl, dlqNoticeEl, filtersForm, listEl, mailDetailEl, mailEmptyCopy, mailEmptyEl, mailLoadingEl, navDlqBtn, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, streamDlqHeader, streamInboxHeader, streamSendHeader, streamSettingsHeader, streamSpamHeader, streamTrashHeader, themeIcon, viewDlq, viewMail, viewSend, viewSettings } from "./dom.js";
-import { refreshUnread, setGlyph, setMobilePane, setViewTitle, showApp } from "./ui.js";
+import {
+  appEl,
+  dlqNoticeEl,
+  domainFilterSelect,
+  filtersForm,
+  listEl,
+  mailDetailEl,
+  mailEmptyCopy,
+  mailEmptyEl,
+  mailLoadingEl,
+  navDlqBtn,
+  navInboxBtn,
+  navSendBtn,
+  navSettingsBtn,
+  navSpamBtn,
+  navTrashBtn,
+  navUsersBtn,
+  noticeEl,
+  promoBtn,
+  streamDlqHeader,
+  streamInboxHeader,
+  streamSendHeader,
+  streamSettingsHeader,
+  streamSpamHeader,
+  streamTrashHeader,
+  themeIcon,
+  viewDlq,
+  viewMail,
+  viewSend,
+  viewSettings,
+} from "./dom.js";
+import { request } from "./net.js";
+import {
+  refreshUnread,
+  renderAccountIdentity,
+  renderDomainFilterOptions,
+  setGlyph,
+  setMobilePane,
+  setViewTitle,
+  showApp,
+} from "./ui.js";
 import { refreshShownNames, reloadMessages, reloadTrash, renderSandboxHtml, selectMail, syncListLabel } from "./mail-view.js";
 import { loadDlqJobs, updateDlqBadge } from "./dlq-view.js";
 import { loadAppearance, loadSettingsPage, renderSettingsNav, showSettingsSection } from "./settings-view.js";
@@ -27,7 +65,7 @@ export function toggleTheme() {
   document.documentElement.setAttribute("data-theme", next);
   localStorage.setItem("mail_theme", next);
   setGlyph(themeIcon, next === "dark" ? "sun" : "moon");
-  if (state.currentMailHtml) {
+  if (state.currentMailHtml || state.currentMailPlain) {
     renderSandboxHtml(state.currentMailHtml);
   }
 }
@@ -40,10 +78,10 @@ export function placeMailSearch(view) {
 
 export function setEmptyCopy(view) {
   if (!mailEmptyCopy) return;
-  if (view === "spam") mailEmptyCopy.textContent = "这里是已拦截。选全部才会看到正常来信。";
-  else if (view === "trash") mailEmptyCopy.textContent = "这里是垃圾桶。";
-  else if (view === "inbox" && state.inboxPromoOnly) mailEmptyCopy.textContent = "这里是推广。没有推广信。";
-  else mailEmptyCopy.textContent = "这里是收件箱，包含尚未分类的来信。其余在已拦截。";
+  if (view === "spam") mailEmptyCopy.textContent = "已拦截邮件区。切换上方筛选可按分类单独查看。";
+  else if (view === "trash") mailEmptyCopy.textContent = "垃圾桶区域。此处邮件可恢复或彻底移除。";
+  else if (view === "inbox" && state.inboxPromoOnly) mailEmptyCopy.textContent = "当前没有推广类来信。";
+  else mailEmptyCopy.textContent = "收件箱展示正常与待分拣来信，其余分类位于已拦截。";
 }
 
 export function paintPromoBtn() {
@@ -61,22 +99,48 @@ export function setPromoMode(on) {
   void reloadMessages();
 }
 
+export function applySessionRoleChrome() {
+  const isAdmin = Boolean(state.session.isAdmin);
+  if (navUsersBtn) navUsersBtn.hidden = !isAdmin;
+  if (navDlqBtn) navDlqBtn.hidden = !isAdmin;
+  if (!isAdmin) {
+    const badge = document.querySelector("#badge-dlq");
+    if (badge) badge.hidden = true;
+  }
+  renderAccountIdentity();
+  renderDomainFilterOptions();
+}
+
 export async function switchNav(view) {
+  if ((view === "dlq" || view === "users") && !state.session.isAdmin) {
+    view = "inbox";
+  }
   const keepReply = state.replyArmed;
   state.replyArmed = false;
-  // 切走别的栏目、或从左栏再点一次收件箱，推广模式都回到正常，避免状态藏着。
+
   if (state.inboxPromoOnly) {
     state.inboxPromoOnly = false;
     paintPromoBtn();
   }
   if (view === "send" && !keepReply && state.replyContext) clearReplyDraft();
-  state.currentView = view;
+
+  const targetSettingsUsers = view === "users";
+  state.currentView = targetSettingsUsers ? "settings" : view;
+  if (targetSettingsUsers) {
+    state.currentSettingsSection = "users";
+  } else if (view === "settings" && state.session.isAdmin && state.currentSettingsSection === "users") {
+    state.currentSettingsSection = "domains";
+  }
+
   setViewTitle(view);
   if (appEl) delete appEl.dataset.layout;
-  const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navSettingsBtn, navDlqBtn];
+
+  const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navUsersBtn, navSettingsBtn, navDlqBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
   const viewPanels = [viewMail, viewDlq, viewSend, viewSettings];
-  viewPanels.forEach((p) => { if (p) p.hidden = true; });
+  viewPanels.forEach((p) => {
+    if (p) p.hidden = true;
+  });
 
   streamInboxHeader.hidden = true;
   if (streamSendHeader) streamSendHeader.hidden = true;
@@ -90,6 +154,7 @@ export async function switchNav(view) {
   listEl.replaceChildren();
   state.cursor = null;
   state.loadingMore = false;
+
   if (view === "inbox" || view === "spam" || view === "trash") {
     state.selectedMailId = null;
     state.readingSentId = null;
@@ -98,8 +163,12 @@ export async function switchNav(view) {
     if (mailLoadingEl) mailLoadingEl.hidden = true;
     if (mailEmptyEl) mailEmptyEl.hidden = false;
   }
-  setMobilePane("list");
+
+  setMobilePane(targetSettingsUsers ? "detail" : "list");
   placeMailSearch(view);
+  if (domainFilterSelect) {
+    renderDomainFilterOptions();
+  }
   setEmptyCopy(view);
 
   if (view === "inbox") {
@@ -129,22 +198,30 @@ export async function switchNav(view) {
     if (streamDlqHeader) streamDlqHeader.hidden = false;
     if (viewDlq) viewDlq.hidden = false;
     await loadDlqJobs(state.currentDlqScope);
-  } else if (view === "settings") {
-    navSettingsBtn?.classList.add("active");
+  } else if (view === "settings" || targetSettingsUsers) {
+    if (targetSettingsUsers) navUsersBtn?.classList.add("active");
+    else navSettingsBtn?.classList.add("active");
     if (streamSettingsHeader) streamSettingsHeader.hidden = false;
     if (viewSettings) viewSettings.hidden = false;
     renderSettingsNav();
-    showSettingsSection(state.currentSettingsSection, { keepListOnNarrow: true });
+    showSettingsSection(state.currentSettingsSection, { keepListOnNarrow: !targetSettingsUsers });
     await loadSettingsPage();
   }
 }
 
 export async function revealApp() {
+  const sessionData = await request("/v1/session");
+  state.session = {
+    ...state.session,
+    ...sessionData,
+  };
+  state.selectedDomainFilter = "";
+  state.currentSettingsSection = state.session.isAdmin ? "domains" : "my-mailboxes";
+  applySessionRoleChrome();
+
   const deepId = hashMailId();
-  // 深链只开目标那封。先开收件箱第一封会把启动再拖一次正文解析。
   state.skipFirstOpen = Boolean(deepId);
   const appearance = loadAppearance();
-  // 先占住布局再藏起来，列表高度才量得准。列表画完就揭开，不等第一封正文。
   showApp();
   if (appEl) appEl.classList.add("is-booting");
   let listed;
@@ -157,7 +234,7 @@ export async function revealApp() {
   if (deepId) void selectMail(deepId);
   if (appEl) appEl.classList.remove("is-booting");
   void appearance.then(() => refreshShownNames());
-  void updateDlqBadge();
+  if (state.session.isAdmin) void updateDlqBadge();
   void refreshUnread();
 }
 

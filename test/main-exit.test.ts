@@ -44,10 +44,15 @@ function run(overrides: Record<string, string>) {
     TMP: process.env.TMP,
     PATHEXT: process.env.PATHEXT,
     COMSPEC: process.env.COMSPEC,
+    NODE_OPTIONS: process.env.NODE_OPTIONS,
   };
   Object.assign(env, overrides);
-  return spawnSync(process.execPath, ["--import", "tsx", "src/main.ts", "--check"], {
-    cwd: appRoot(),
+  const root = appRoot();
+  const args = fs.existsSync(path.join(root, "src", "main.js"))
+    ? ["src/main.js", "--check"]
+    : ["--import", "tsx", "src/main.ts", "--check"];
+  return spawnSync(process.execPath, args, {
+    cwd: root,
     env,
     encoding: "utf8",
     timeout: 20_000,

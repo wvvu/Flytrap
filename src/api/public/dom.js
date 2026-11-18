@@ -1,4 +1,4 @@
-// DOM 元素引用：模块脚本是 deferred，执行时 DOM 已解析，可直接 query。
+// DOM 元素静态引用表：模块脚本延迟执行，解析完成即可安全查询。
 export const appEl = document.querySelector("#app");
 export const loginEl = document.querySelector("#login");
 export const loginForm = document.querySelector("#login-form");
@@ -6,13 +6,22 @@ export const loginError = document.querySelector("#login-error");
 export const logoutBtn = document.querySelector("#logout");
 export const themeBtn = document.querySelector("#btn-theme");
 export const themeIcon = document.querySelector("#theme-icon");
+export const shortcutsBtn = document.querySelector("#btn-shortcuts");
+export const shortcutsModal = document.querySelector("#shortcuts-modal");
+export const shortcutsCloseBtn = document.querySelector("#btn-shortcuts-close");
+export const accountPill = document.querySelector("#account-pill");
+
 export const navInboxBtn = document.querySelector("#nav-inbox");
 export const navSendBtn = document.querySelector("#nav-send");
 export const navSpamBtn = document.querySelector("#nav-spam");
 export const navTrashBtn = document.querySelector("#nav-trash");
+export const navUsersBtn = document.querySelector("#nav-users");
 export const navSettingsBtn = document.querySelector("#nav-settings");
 export const navDlqBtn = document.querySelector("#nav-dlq");
+export const badgeInbox = document.querySelector("#badge-inbox");
+export const badgeSpam = document.querySelector("#badge-spam");
 export const badgeDlq = document.querySelector("#badge-dlq");
+
 export const streamTitle = document.querySelector("#stream-title");
 export const streamInboxHeader = document.querySelector("#stream-inbox-header");
 export const streamSendHeader = document.querySelector("#stream-send-header");
@@ -21,6 +30,7 @@ export const streamTrashHeader = document.querySelector("#stream-trash-header");
 export const streamDlqHeader = document.querySelector("#stream-dlq-header");
 export const streamSettingsHeader = document.querySelector("#stream-settings-header");
 export const filtersForm = document.querySelector("#filters");
+export const domainFilterSelect = document.querySelector("#domain-filter");
 export const mailEmptyCopy = document.querySelector("#mail-empty-copy");
 export const trashQueryInput = document.querySelector("#trash-q");
 export const trashRefreshBtn = document.querySelector("#btn-trash-refresh");
@@ -31,10 +41,13 @@ export const queryInput = document.querySelector("#q");
 export const labelInput = document.querySelector("#label");
 export const filterSelect = document.querySelector("#filter-select");
 export const refreshBtn = document.querySelector("#btn-refresh");
+export const markAllReadBtn = document.querySelector("#btn-mark-all-read");
+export const spamReadAllBtn = document.querySelector("#btn-spam-read-all");
 export const promoBtn = document.querySelector("#btn-promo");
 export const spamRefreshBtn = document.querySelector("#btn-spam-refresh");
 export const dlqRefreshBtn = document.querySelector("#btn-dlq-refresh");
 export const retryAllBtn = document.querySelector("#btn-retry-all");
+
 export const viewMail = document.querySelector("#view-mail");
 export const viewDlq = document.querySelector("#view-dlq");
 export const viewSend = document.querySelector("#view-send");
@@ -51,15 +64,21 @@ export const confirmModal = document.querySelector("#confirm-modal");
 export const confirmText = document.querySelector("#confirm-text");
 export const confirmOk = document.querySelector("#confirm-ok");
 export const confirmCancel = document.querySelector("#confirm-cancel");
+
 export const detailSubject = document.querySelector("#detail-subject");
 export const detailFrom = document.querySelector("#detail-from");
 export const detailTo = document.querySelector("#detail-to");
 export const detailTime = document.querySelector("#detail-time");
+export const detailSize = document.querySelector("#detail-size");
 export const detailVerdictSelect = document.querySelector("#detail-verdict-select");
 export const detailModelVerdict = document.querySelector("#detail-model-verdict");
 export const detailSummary = document.querySelector("#detail-summary");
+export const otpBar = document.querySelector("#otp-bar");
+export const otpCodeText = document.querySelector("#otp-code-text");
+export const otpCopyBtn = document.querySelector("#btn-copy-otp");
 export const verdictBar = document.querySelector("#verdict-bar");
 export const verdictPercent = document.querySelector("#verdict-percent");
+export const headerAuthRow = document.querySelector("#header-auth-row");
 export const sectionSignals = document.querySelector("#section-signals");
 export const signalsCountEl = document.querySelector("#signals-count");
 export const signalsList = document.querySelector("#signals-list");
@@ -83,6 +102,7 @@ export const btnDeleteMail = document.querySelector("#btn-delete-mail");
 export const btnReclassify = document.querySelector("#btn-reclassify");
 export const btnDownloadEml = document.querySelector("#btn-download-eml");
 export const btnLoadImages = document.querySelector("#btn-load-images");
+
 export const resetModal = document.querySelector("#reset-modal");
 export const resetCodeStep = document.querySelector("#reset-code-step");
 export const resetPasswordStep = document.querySelector("#reset-password-step");

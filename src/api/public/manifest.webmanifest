@@ -1,0 +1,17 @@
+{
+  "name": "邮箱工作台",
+  "short_name": "邮箱",
+  "description": "自托管多域名收发与智能分拣邮件工作台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090a0d",
+  "theme_color": "#090a0d",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'><rect width='128' height='128' rx='28' fill='%230c0e12'/><rect x='22' y='34' width='84' height='60' rx='10' fill='none' stroke='%23f1f5f9' stroke-width='8' stroke-linejoin='round'/><path d='m24 42 40 28 40-28' fill='none' stroke='%2360a5fa' stroke-width='8' stroke-linecap='round' stroke-linejoin='round'/></svg>",
+      "sizes": "128x128",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

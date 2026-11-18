@@ -12,6 +12,7 @@ import { signMessage } from "./dkim.js";
 import { normalizeMessageId, threadKeyOf } from "./thread.js";
 
 export interface SubmitInput {
+  userId?: string | null;
   from: string;
   fromName?: string;
   to: readonly string[];
@@ -60,7 +61,7 @@ function cleanReply(input: SubmitInput): { inReplyTo: string | null; refs: strin
 
 /**
  * Write the letter first, then queue a send. A From domain outside the
- * accept list is kept and reported; it is not refused.
+ * accept list is kept and reported; it is not refused for admin/owner callers.
  */
 export async function submitOutbox(deps: SubmitDeps, input: SubmitInput): Promise<SubmitResult> {
   const from = normalizeAddress(input.from);
@@ -111,6 +112,7 @@ export async function submitOutbox(deps: SubmitDeps, input: SubmitInput): Promis
   deps.db.transaction(() => {
     insertOutbox(deps.db, {
       id,
+      userId: input.userId ?? null,
       sha256: stored.sha256,
       rawPath: stored.relativePath,
       sizeBytes: stored.sizeBytes,

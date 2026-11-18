@@ -1,4 +1,4 @@
-// 网络层：request / fetchCsrf，只读写 state.csrfToken。
+// 网络请求封装：自动附带与刷新 CSRF 令牌，解析结构化错误原因。
 import { state } from "./state.js";
 
 export async function request(url, options = {}) {
@@ -20,9 +20,12 @@ export async function request(url, options = {}) {
   };
   let response = await send(false);
   if (response.status === 403 && method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
-    await response.text().catch(() => "");
-    state.csrfToken = null;
-    response = await send(true);
+    const peek = await response.clone().json().catch(() => null);
+    if (!peek || !peek.reason) {
+      await response.text().catch(() => "");
+      state.csrfToken = null;
+      response = await send(true);
+    }
   }
   const raw = await response.text();
   let data = null;
@@ -34,8 +37,9 @@ export async function request(url, options = {}) {
     }
   }
   if (!response.ok) {
-    const error = new Error("request_failed");
+    const error = new Error((data && data.reason) || (data && data.error) || "request_failed");
     error.status = response.status;
+    error.reason = data && typeof data.reason === "string" ? data.reason : "";
     throw error;
   }
   return data || {};

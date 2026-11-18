@@ -4,6 +4,7 @@ export type OutboxStatus = "queued" | "sent" | "error";
 
 export interface OutboxRow {
   id: string;
+  user_id: string | null;
   sha256: string;
   raw_path: string;
   size_bytes: number;
@@ -26,6 +27,7 @@ export interface OutboxRow {
 
 export interface NewOutbox {
   id: string;
+  userId?: string | null;
   sha256: string;
   rawPath: string;
   sizeBytes: number;
@@ -44,12 +46,13 @@ export interface NewOutbox {
 export function insertOutbox(db: Db, input: NewOutbox): void {
   db.prepare(
     `INSERT INTO outbox (
-      id, sha256, raw_path, size_bytes, from_addr, to_addrs, subject, domain_known,
+      id, user_id, sha256, raw_path, size_bytes, from_addr, to_addrs, subject, domain_known,
       dkim_selector, status, accepted, created_at, updated_at,
       message_id, in_reply_to, ref_ids, thread_key
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '[]', ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '[]', ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.id,
+    input.userId ?? null,
     input.sha256,
     input.rawPath,
     input.sizeBytes,
@@ -67,11 +70,21 @@ export function insertOutbox(db: Db, input: NewOutbox): void {
   );
 }
 
-export function getOutbox(db: Db, id: string): OutboxRow | undefined {
+export function getOutbox(db: Db, id: string, userIdFilter?: string): OutboxRow | undefined {
+  if (userIdFilter !== undefined) {
+    return db
+      .prepare("SELECT * FROM outbox WHERE id = ? AND user_id = ?")
+      .get(id, userIdFilter) as OutboxRow | undefined;
+  }
   return db.prepare("SELECT * FROM outbox WHERE id = ?").get(id) as OutboxRow | undefined;
 }
 
-export function listOutbox(db: Db, limit: number): OutboxRow[] {
+export function listOutbox(db: Db, limit: number, userIdFilter?: string): OutboxRow[] {
+  if (userIdFilter !== undefined) {
+    return db
+      .prepare("SELECT * FROM outbox WHERE user_id = ? ORDER BY created_at DESC LIMIT ?")
+      .all(userIdFilter, limit) as OutboxRow[];
+  }
   return db
     .prepare("SELECT * FROM outbox ORDER BY created_at DESC LIMIT ?")
     .all(limit) as OutboxRow[];

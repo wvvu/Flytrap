@@ -124,8 +124,13 @@ test("main --rebuild exits after the sha256 set matches raw", async () => {
     seeded.close();
     removeDb(dir);
 
-    const result = spawnSync(process.execPath, ["--import", "tsx", "src/main.ts", "--rebuild"], {
-      cwd: appRoot(),
+    const root = appRoot();
+    const args = fs.existsSync(path.join(root, "src", "main.js"))
+      ? ["src/main.js", "--rebuild"]
+      : ["--import", "tsx", "src/main.ts", "--rebuild"];
+
+    const result = spawnSync(process.execPath, args, {
+      cwd: root,
       env: {
         PATH: process.env.PATH,
         SYSTEMROOT: process.env.SYSTEMROOT,
@@ -133,6 +138,7 @@ test("main --rebuild exits after the sha256 set matches raw", async () => {
         TMP: process.env.TMP,
         PATHEXT: process.env.PATHEXT,
         COMSPEC: process.env.COMSPEC,
+        NODE_OPTIONS: process.env.NODE_OPTIONS,
         NODE_ENV: "test",
         ROLES: "smtp",
         MAIL_DATA_DIR: dir,
