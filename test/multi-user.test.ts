@@ -996,6 +996,62 @@ test("audit list filters by actor and action, and redacts secrets", async () => 
   }
 });
 
+test("allocating a mailbox checks the domain against the current accept list", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-domain-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 18, 21, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    const created = await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "other.test" },
+    });
+    assert.equal(created.statusCode, 400);
+    assert.equal(created.json().reason, "domain is not accepted");
+    assert.equal((await owner.get(app, "/v1/users")).json().items.length, 0);
+
+    const ok = await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com" },
+    });
+    assert.equal(ok.statusCode, 201);
+    const aliceId = ok.json().user.id as string;
+    const extra = await owner.post(app, `/v1/users/${aliceId}/mailboxes`, {
+      localpart: "ops",
+      domain: "other.test",
+    });
+    assert.equal(extra.statusCode, 400);
+    assert.equal(extra.json().reason, "domain is not accepted");
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 async function deliver(db: Db, dir: string, rcptTo: string[], content: string, receivedAtMs: number) {
   return acceptMessage(
     { db, dataDir: dir, codec: gzipCodec() },

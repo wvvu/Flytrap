@@ -180,6 +180,7 @@ const CONFLICT_TEXT = {
 export function explain(err) {
   if (err && err.status === 401) return "账号或口令不正确";
   if (err && err.status === 403) return "当前账号无权执行此操作";
+  if (err && err.status === 400 && err.reason === "domain is not accepted") return "这个域名不在收信列表里";
   if (err && err.status === 409) return CONFLICT_TEXT[err.reason] || "账号或邮箱已被占用";
   if (err && err.status === 429) return "请求过于频繁或已达今日发信上限";
   return "操作失败，请重试";

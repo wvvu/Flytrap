@@ -1679,6 +1679,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       throw new HttpError(403, "only_owner_can_grant_admin");
     }
     const at = now();
+    if (body.data.initialMailbox) requireAcceptDomain(db, config, body.data.initialMailbox.domain);
     try {
       const created = createUser(
         db,
@@ -1820,6 +1821,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     rejectAdminTarget(request, target, true);
     const body = allocateMailboxBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
+    requireAcceptDomain(db, config, body.data.domain);
     const at = now();
     try {
       const box = allocateMailbox(
@@ -1928,6 +1930,13 @@ export async function startApi(options: ApiOptions): Promise<RunningApi> {
 function requireAdmin(request: FastifyRequest): void {
   if (request.session.role !== "admin") {
     throw new HttpError(403, "forbidden");
+  }
+}
+
+function requireAcceptDomain(db: Db, config: Config, domain: string): void {
+  const known = readAcceptDomains(db, config.acceptDomains);
+  if (!known.includes(domain.trim().toLowerCase())) {
+    throw new HttpError(400, "domain is not accepted");
   }
 }
 

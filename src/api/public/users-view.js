@@ -281,6 +281,12 @@ export async function submitCreateUser() {
     quotaSendPerDay,
     notes: notes || null,
   };
+  if (mbDomain && !state.settingsDomains.includes(mbDomain)) {
+    const message = "这个域名不在收信列表里";
+    setFormError(errEl, message);
+    toast(message);
+    return;
+  }
   if (mbLocal && mbDomain) {
     payload.initialMailbox = {
       localpart: mbLocal,
@@ -509,6 +515,12 @@ export function renderUserDetail(user) {
     setFormError(allocError, "");
     if (!lp || !dm) {
       const message = "请填写邮箱前缀与域名";
+      setFormError(allocError, message);
+      toast(message);
+      return;
+    }
+    if (!state.settingsDomains.includes(dm)) {
+      const message = "这个域名不在收信列表里";
       setFormError(allocError, message);
       toast(message);
       return;
