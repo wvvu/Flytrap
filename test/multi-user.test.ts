@@ -920,6 +920,82 @@ test("a shared letter keeps stars, labels, trash, and soft-delete on the person 
   }
 });
 
+test("audit list filters by actor and action, and redacts secrets", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-audit-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 18, 20, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+  const alice = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    const created = await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com" },
+    });
+    assert.equal(created.statusCode, 201);
+    await alice.login(app, "alice", "alice-password-123");
+
+    const denied = await alice.get(app, "/v1/audit");
+    assert.equal(denied.statusCode, 403);
+
+    const aliceLogin = (await owner.get(app, "/v1/audit?actor=alice&action=login")).json().items as Array<{
+      actor: string;
+      action: string;
+    }>;
+    assert.equal(aliceLogin.length, 1);
+    assert.equal(aliceLogin[0]?.actor, "alice");
+    assert.equal(aliceLogin[0]?.action, "login");
+
+    const createdByAdmin = (await owner.get(app, "/v1/audit?actor=admin&action=user_create")).json().items as Array<{
+      action: string;
+    }>;
+    assert.equal(createdByAdmin.length, 1);
+    assert.equal(createdByAdmin[0]?.action, "user_create");
+
+    const secretLine = "posted ?key=sk-abcdefghijklmnopqrstuvwxyz AIzaSyDUMMYKEY123456";
+    db.prepare("INSERT INTO audit_log (id, at, actor, action, target, detail) VALUES (?, ?, ?, ?, ?, ?)").run(
+      "audit_secret",
+      ++clock,
+      "admin",
+      "settings_ai",
+      null,
+      secretLine,
+    );
+    const leaked = (await owner.get(app, "/v1/audit?actor=admin&action=settings_ai")).json().items as Array<{
+      detail: string | null;
+    }>;
+    assert.equal(leaked.length, 1);
+    assert.match(leaked[0]?.detail ?? "", /\[redacted\]/);
+    assert.equal((leaked[0]?.detail ?? "").includes("sk-abcdefghijklmnopqrstuvwxyz"), false);
+    assert.equal((leaked[0]?.detail ?? "").includes("AIzaSyDUMMYKEY123456"), false);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 async function deliver(db: Db, dir: string, rcptTo: string[], content: string, receivedAtMs: number) {
   return acceptMessage(
     { db, dataDir: dir, codec: gzipCodec() },

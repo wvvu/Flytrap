@@ -1821,6 +1821,23 @@ input.field-narrow {
   font-weight: 600;
 }
 
+.audit-table-wrap {
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.compact-table th,
+.compact-table td {
+  padding: 8px 12px;
+  font-size: 12.5px;
+}
+
+.mono-cell {
+  font-family: var(--font-mono);
+}
+
 .domain-list,
 .domain-cards,
 .user-detail-stack {

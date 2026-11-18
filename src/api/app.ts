@@ -18,7 +18,7 @@ import type { Codec } from "../compress.js";
 import { ConfigError, type Config } from "../config.js";
 import type { Db } from "../db/index.js";
 import { canViewerReadAttachment, findAttachment, listMessageAttachments } from "../db/repos/attachments.js";
-import { writeAudit } from "../db/repos/audit.js";
+import { listAuditLogs, writeAudit } from "../db/repos/audit.js";
 import { deleteDkimKey, listDkimPublic, saveDkimKey } from "../db/repos/dkim-keys.js";
 import {
   countJobsByStatus,
@@ -1294,6 +1294,29 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   app.get("/v1/logs", async (request) => {
     requireAdmin(request);
     return { lines: recentLogs().map(redactLogLine) };
+  });
+
+  app.get("/v1/audit", async (request) => {
+    requireAdmin(request);
+    const query = request.query as Record<string, unknown>;
+    const actor = optionalString(query.actor);
+    const action = optionalString(query.action);
+    const limitRaw = optionalString(query.limit);
+    let limit = 80;
+    if (limitRaw !== undefined) {
+      if (!/^\d+$/.test(limitRaw)) throw new HttpError(400);
+      limit = Number(limitRaw);
+    }
+    return {
+      items: listAuditLogs(db, { limit, actor, action }).map((row) => ({
+        id: row.id,
+        at: iso(row.at),
+        actor: row.actor,
+        action: row.action,
+        target: row.target,
+        detail: row.detail ? redactLogLine(row.detail) : null,
+      })),
+    };
   });
 
   app.put("/v1/settings/notify", async (request, reply) => {

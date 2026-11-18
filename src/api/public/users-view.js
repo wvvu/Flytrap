@@ -1,9 +1,10 @@
 // 成员与邮箱分配管理工作台（管理员专属）。
+import { AUDIT_ACTION_NAMES } from "./constants.js";
 import { state } from "./state.js";
 import { adminScopeSelect } from "./dom.js";
 import { request } from "./net.js";
 import { askConfirm, copyText, explain, setMobilePane, toast } from "./ui.js";
-import { formatFullTime, generateRandomPassword } from "./util.js";
+import { formatFullTime, formatShortTime, generateRandomPassword } from "./util.js";
 
 const ALLOC_HINT =
   "精确邮箱（含 +tag）、前缀通配、整域接管。前缀按字面起首，team 会匹配 teammate。整域接住没被更具体规则分走的地址，连历史信一起划走。";
@@ -601,7 +602,107 @@ export function renderUserDetail(user) {
   delRow.append(delBtn);
 
   secBlock.append(secHead, passRow, delRow);
-  wrap.append(profileBlock, boxBlock, secBlock);
+
+  const auditBlock = document.createElement("section");
+  auditBlock.className = "block";
+  auditBlock.dataset.group = "users";
+  const auditHead = document.createElement("div");
+  auditHead.className = "block-head";
+  const auditText = document.createElement("div");
+  const auditTitle = document.createElement("h2");
+  auditTitle.textContent = "操作记录";
+  const auditDesc = document.createElement("p");
+  auditDesc.className = "muted";
+  auditDesc.textContent = "这个账号做过的登录、发信和设置变更。";
+  auditText.append(auditTitle, auditDesc);
+  const actionSelect = document.createElement("select");
+  actionSelect.className = "field-select-fit";
+  actionSelect.title = "按动作筛选";
+  const allOpt = document.createElement("option");
+  allOpt.value = "";
+  allOpt.textContent = "全部动作";
+  actionSelect.append(allOpt);
+  for (const [action, label] of Object.entries(AUDIT_ACTION_NAMES)) {
+    const opt = document.createElement("option");
+    opt.value = action;
+    opt.textContent = label;
+    actionSelect.append(opt);
+  }
+  auditHead.append(auditText, actionSelect);
+  const wrapTable = document.createElement("div");
+  wrapTable.className = "audit-table-wrap";
+  const table = document.createElement("table");
+  table.className = "data-table compact-table";
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["时间", "操作账号", "动作", "目标 / 详情"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.append(th);
+  }
+  thead.append(headRow);
+  const tbody = document.createElement("tbody");
+  table.append(thead, tbody);
+  wrapTable.append(table);
+  auditBlock.append(auditHead, wrapTable);
+  actionSelect.addEventListener("change", () => {
+    void loadMemberAudit(user.username, actionSelect.value, tbody);
+  });
+
+  wrap.append(profileBlock, boxBlock, secBlock, auditBlock);
+  void loadMemberAudit(user.username, "", tbody);
+}
+
+function renderAuditTable(tbody, items) {
+  tbody.replaceChildren();
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 4;
+    td.className = "muted";
+    td.textContent = "暂无审计记录";
+    tr.append(td);
+    tbody.append(tr);
+    return;
+  }
+  for (const row of list) {
+    const tr = document.createElement("tr");
+    const tdAt = document.createElement("td");
+    tdAt.className = "mono-cell";
+    tdAt.textContent = formatShortTime(row.at);
+    tdAt.title = formatFullTime(row.at);
+
+    const tdActor = document.createElement("td");
+    tdActor.textContent = row.actor || "—";
+
+    const tdAct = document.createElement("td");
+    tdAct.textContent = AUDIT_ACTION_NAMES[row.action] || row.action;
+
+    const tdTarget = document.createElement("td");
+    tdTarget.className = "muted mono-cell";
+    const detailClean = row.detail ? String(row.detail).replace(/^"|"$/g, "") : "";
+    tdTarget.textContent = [row.target, detailClean].filter(Boolean).join(" · ") || "—";
+
+    tr.append(tdAt, tdActor, tdAct, tdTarget);
+    tbody.append(tr);
+  }
+}
+
+async function loadMemberAudit(username, action, tbody) {
+  if (state.sessionRole !== "admin") return;
+  try {
+    const params = new URLSearchParams();
+    params.set("actor", username);
+    params.set("limit", "60");
+    if (action) params.set("action", action);
+    const res = await request("/v1/audit?" + params.toString());
+    if (!tbody.isConnected) return;
+    renderAuditTable(tbody, res.items);
+  } catch (err) {
+    if (!tbody.isConnected) return;
+    toast("刷新审计记录失败: " + explain(err));
+  }
 }
 
 function createAllocationRow(user, box) {
