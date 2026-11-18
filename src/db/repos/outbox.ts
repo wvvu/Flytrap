@@ -1,4 +1,6 @@
 import type { Db } from "../index.js";
+import type { ViewerContext } from "./messages.js";
+import { OWNER_USER_ID } from "./users.js";
 
 export type OutboxStatus = "queued" | "sent" | "error";
 
@@ -22,6 +24,7 @@ export interface OutboxRow {
   in_reply_to: string | null;
   ref_ids: string | null;
   thread_key: string | null;
+  user_id: string | null;
 }
 
 export interface NewOutbox {
@@ -39,6 +42,7 @@ export interface NewOutbox {
   inReplyTo?: string | null;
   refIds?: string | null;
   threadKey?: string | null;
+  userId?: string | null;
 }
 
 export function insertOutbox(db: Db, input: NewOutbox): void {
@@ -46,8 +50,8 @@ export function insertOutbox(db: Db, input: NewOutbox): void {
     `INSERT INTO outbox (
       id, sha256, raw_path, size_bytes, from_addr, to_addrs, subject, domain_known,
       dkim_selector, status, accepted, created_at, updated_at,
-      message_id, in_reply_to, ref_ids, thread_key
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '[]', ?, ?, ?, ?, ?, ?)`,
+      message_id, in_reply_to, ref_ids, thread_key, user_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '[]', ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.id,
     input.sha256,
@@ -64,6 +68,7 @@ export function insertOutbox(db: Db, input: NewOutbox): void {
     input.inReplyTo ?? null,
     input.refIds ?? null,
     input.threadKey ?? null,
+    input.userId ?? null,
   );
 }
 
@@ -71,10 +76,58 @@ export function getOutbox(db: Db, id: string): OutboxRow | undefined {
   return db.prepare("SELECT * FROM outbox WHERE id = ?").get(id) as OutboxRow | undefined;
 }
 
-export function listOutbox(db: Db, limit: number): OutboxRow[] {
+export function canViewerAccessOutbox(row: OutboxRow, viewer?: ViewerContext): boolean {
+  if (!viewer) return true;
+  if (viewer.role === "admin") {
+    const scope = viewer.scope ?? "mine";
+    if (scope === "all") return true;
+    if (scope.startsWith("user:")) {
+      const targetId = scope.slice("user:".length).trim();
+      return row.user_id === targetId;
+    }
+    if (viewer.userId === OWNER_USER_ID) {
+      return row.user_id === null || row.user_id === OWNER_USER_ID;
+    }
+    return row.user_id === viewer.userId;
+  }
+  return row.user_id === viewer.userId;
+}
+
+export function listOutbox(db: Db, limit: number, viewer?: ViewerContext): OutboxRow[] {
+  if (!viewer) {
+    return db
+      .prepare("SELECT * FROM outbox ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(limit) as OutboxRow[];
+  }
+  if (viewer.role === "admin") {
+    const scope = viewer.scope ?? "mine";
+    if (scope === "all") {
+      return db
+        .prepare("SELECT * FROM outbox ORDER BY created_at DESC, rowid DESC LIMIT ?")
+        .all(limit) as OutboxRow[];
+    }
+    if (scope.startsWith("user:")) {
+      const targetId = scope.slice("user:".length).trim();
+      return db
+        .prepare("SELECT * FROM outbox WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+        .all(targetId, limit) as OutboxRow[];
+    }
+    if (viewer.userId === OWNER_USER_ID) {
+      return db
+        .prepare("SELECT * FROM outbox WHERE user_id IS NULL OR user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+        .all(OWNER_USER_ID, limit) as OutboxRow[];
+    }
+  }
   return db
-    .prepare("SELECT * FROM outbox ORDER BY created_at DESC LIMIT ?")
-    .all(limit) as OutboxRow[];
+    .prepare("SELECT * FROM outbox WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+    .all(viewer.userId, limit) as OutboxRow[];
+}
+
+export function countUserOutboxSince(db: Db, userId: string, sinceMs: number): number {
+  const row = db
+    .prepare("SELECT COUNT(*) AS c FROM outbox WHERE user_id = ? AND created_at >= ?")
+    .get(userId, sinceMs) as { c: number } | undefined;
+  return row?.c ?? 0;
 }
 
 export function listOutboxByIds(db: Db, ids: readonly string[]): OutboxRow[] {

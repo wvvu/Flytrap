@@ -21,6 +21,7 @@ export interface SubmitInput {
   text?: string;
   inReplyTo?: string;
   references?: readonly string[];
+  userId?: string | null;
 }
 
 export interface SubmitResult {
@@ -124,6 +125,7 @@ export async function submitOutbox(deps: SubmitDeps, input: SubmitInput): Promis
       inReplyTo: reply.inReplyTo,
       refIds: reply.refs.length > 0 ? JSON.stringify(reply.refs) : null,
       threadKey: threadKeyOf(messageId, reply.inReplyTo, reply.refs),
+      userId: input.userId ?? null,
     });
     enqueueJob(deps.db, {
       id: ulid(),

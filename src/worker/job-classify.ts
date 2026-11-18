@@ -6,6 +6,7 @@ import { listMessageAttachments } from "../db/repos/attachments.js";
 import { enqueueJob, hasOpenJob, type JobRow } from "../db/repos/jobs.js";
 import { findMailboxHistory } from "../db/repos/mailbox-history.js";
 import { getMessage, saveAiResult } from "../db/repos/messages.js";
+import { findAllocatedMailboxNote } from "../db/repos/users.js";
 import type { Db } from "../db/index.js";
 import type { AppLog } from "../log.js";
 import { authResultSchema } from "../mail/auth.js";
@@ -39,17 +40,28 @@ export async function runClassifyJob(deps: ClassifyJobDeps, job: JobRow): Promis
   const missingHistory: ClassifyFacts["missingHistory"] = [];
   for (const recipient of recipients) {
     const row = findMailboxHistory(deps.db, recipient.domain, recipient.localpart);
-    if (!row) {
-      missingHistory.push(recipient);
+    if (row) {
+      history.push({
+        domain: row.domain,
+        localpart: row.localpart,
+        firstSeen: row.first_seen,
+        lastSeen: row.last_seen,
+        notes: row.notes,
+      });
       continue;
     }
-    history.push({
-      domain: row.domain,
-      localpart: row.localpart,
-      firstSeen: row.first_seen,
-      lastSeen: row.last_seen,
-      notes: row.notes,
-    });
+    const alloc = findAllocatedMailboxNote(deps.db, recipient.domain, recipient.localpart);
+    if (alloc) {
+      history.push({
+        domain: recipient.domain,
+        localpart: recipient.localpart,
+        firstSeen: alloc.created_at,
+        lastSeen: null,
+        notes: alloc.notes,
+      });
+      continue;
+    }
+    missingHistory.push(recipient);
   }
   const facts: ClassifyFacts = {
     spf: auth?.spf ?? "none",
@@ -115,8 +127,6 @@ export function applyDeterministicGuardrails(facts: ClassifyFacts, ai: AiResult)
     signals: [...ai.signals],
   };
 
-  // Auth failure is a fact the reader can see on the message. It is not a verdict.
-  // Forwarded mail and mailing lists fail SPF or DMARC all the time.
   const haystack = `${facts.subject}\n${facts.text}`.toLowerCase();
   const injected = INJECTION_HINTS.some((hint) => haystack.includes(hint));
   if (!injected) return result;
@@ -136,7 +146,6 @@ export function applyDeterministicGuardrails(facts: ClassifyFacts, ai: AiResult)
   result.summary = `正文试图指挥分类器，已改记为钓鱼。${result.summary}`.slice(0, 2000);
   return result;
 }
-
 
 function headerFrom(from: { name: string; address: string } | null, fallback: string | null): string {
   if (!from) return fallback ?? "";

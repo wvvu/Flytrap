@@ -1,4 +1,4 @@
-// 设置页：各分区渲染与即时保存，外加 DKIM 与日志。
+// 设置中心：支持管理员 5 大分组与普通成员个人分组，集成密钥在线测活与 DKIM 管理。
 import { LABELS, LABEL_NAMES, SETTING_SECTIONS } from "./constants.js";
 import { state } from "./state.js";
 import { appEl, detailVerdictSelect, filterSelect, listEl } from "./dom.js";
@@ -6,12 +6,36 @@ import { request } from "./net.js";
 import { askConfirm, copyText, explain, setMobilePane, setViewTitle, toast } from "./ui.js";
 import { cssEscape, normalizeAddress } from "./util.js";
 
+export function visibleSettingSections() {
+  return SETTING_SECTIONS.filter((sec) => state.isAdmin || !sec.adminOnly);
+}
+
 export async function loadSettingsPage() {
   try {
     const settings = await request("/v1/settings");
     applyAppearance(settings);
     state.settingsDomains = Array.isArray(settings.acceptDomains) ? settings.acceptDomains.slice() : [];
     renderNameEditors(settings);
+    renderBlockList(settings.blockedSenders || []);
+    renderProfileFields();
+
+    const verEl = document.querySelector("#settings-version");
+    if (verEl && settings.version) {
+      state.appVersion = settings.version;
+      verEl.textContent = `v${settings.version}`;
+    }
+
+    await loadMailboxesView();
+
+    if (!state.isAdmin) {
+      const lead = document.querySelector("#mailboxes-lead");
+      if (lead) lead.textContent = "管理名下已分配邮箱的发件显示名称与个人备注。";
+      return;
+    }
+
+    const lead = document.querySelector("#mailboxes-lead");
+    if (lead) lead.textContent = "为收件地址填写发件显示名称和备注。没有备注并不表示该地址未知。";
+
     renderNotify(settings);
     renderDomains(settings.acceptDomains || []);
     const attempts = document.querySelector("#job-max-attempts");
@@ -34,56 +58,77 @@ export async function loadSettingsPage() {
       state.promptBaseline = editor.value;
       syncPromptSave();
     }
-    await loadMailboxesView();
     await loadMachineLine();
     const enabled = document.querySelector("#ai-enabled");
     if (enabled) enabled.checked = settings.aiEnabled !== false;
     const thinking = document.querySelector("#ai-thinking");
     if (thinking) thinking.value = settings.aiThinking || "low";
     renderAiEditors(settings.aiPool || {});
-    renderBlockList(settings.blockedSenders || []);
     await loadDkimSection();
   } catch (err) {
     toast(explain(err));
   }
 }
 
+export function renderProfileFields() {
+  const nameInput = document.querySelector("#profile-display-name");
+  const emailInput = document.querySelector("#profile-recovery-email");
+  const accountLine = document.querySelector("#profile-account-line");
+  if (nameInput) nameInput.value = state.displayName || "";
+  if (emailInput) emailInput.value = state.recoveryEmail || "";
+  if (accountLine) {
+    const roleText = state.isAdmin ? "管理员" : "成员";
+    const quotaText =
+      !state.isAdmin && state.quotaSendPerDay != null
+        ? ` · 今日发信 ${state.sentToday}/${state.quotaSendPerDay}`
+        : "";
+    accountLine.textContent = `当前账号：${state.sessionUser || "-"}（${roleText}${quotaText}）`;
+  }
+}
+
 export function renderSettingsNav() {
   if (state.currentView !== "settings") return;
+  const sections = visibleSettingSections();
+  if (!sections.some((s) => s.id === state.currentSettingsSection)) {
+    state.currentSettingsSection = sections[0]?.id || "account";
+  }
   listEl.replaceChildren();
-  for (const [id, label, hint] of SETTING_SECTIONS) {
+  for (const sec of sections) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "mail-item";
-    button.dataset.section = id;
-    if (id === state.currentSettingsSection) button.classList.add("selected");
+    button.dataset.section = sec.id;
+    if (sec.id === state.currentSettingsSection) button.classList.add("selected");
     const title = document.createElement("span");
     title.className = "item-from";
-    title.textContent = label;
+    title.textContent = sec.label;
     const sub = document.createElement("span");
     sub.className = "item-subject";
-    sub.textContent = hint;
+    sub.textContent = sec.hint;
     button.append(title, sub);
-    button.addEventListener("click", () => showSettingsSection(id));
+    button.addEventListener("click", () => showSettingsSection(sec.id));
     listEl.append(button);
   }
 }
 
 export function showSettingsSection(id, options = {}) {
-  state.currentSettingsSection = id;
+  const allowed = visibleSettingSections().map((s) => s.id);
+  const nextId = allowed.includes(id) ? id : (allowed[0] || "account");
+  state.currentSettingsSection = nextId;
   for (const block of document.querySelectorAll("#view-settings .block")) {
-    block.hidden = block.dataset.group !== id;
+    block.hidden = block.dataset.group !== nextId;
   }
   for (const button of listEl.querySelectorAll(".mail-item")) {
-    button.classList.toggle("selected", button.dataset.section === id);
+    button.classList.toggle("selected", button.dataset.section === nextId);
   }
   if (!options.keepListOnNarrow) setMobilePane("detail");
-  if (id === "status") {
+  if (state.isAdmin && nextId === "status") {
     void loadLogs();
     void loadMachineLine();
   }
-  if (id === "domains") void loadDkimSection();
-  if (id === "people") void loadMailboxesView();
+  if (state.isAdmin && nextId === "domains") void loadDkimSection();
+  if (nextId === "people") void loadMailboxesView();
+  if (nextId === "account") renderProfileFields();
 }
 
 export function describeAi(ai) {
@@ -319,6 +364,7 @@ export async function loadMailboxesView() {
 }
 
 export async function loadMachineLine() {
+  if (!state.isAdmin) return;
   try {
     const health = await request("/healthz");
     const stats = await request("/v1/stats");
@@ -380,10 +426,9 @@ export function renderTrend(days) {
     bar.className = "trend-bar";
     const total = day.total || 0;
     bar.style.height = Math.max(2, Math.round((total / max) * 100)) + "%";
-    const labelNameOf = (key) => labelName(key);
     const parts = Object.entries(day.labels || {})
       .filter(([, n]) => n > 0)
-      .map(([key, n]) => `${labelNameOf(key)} ${n}`);
+      .map(([key, n]) => `${labelName(key)} ${n}`);
     bar.title = `${day.day} 共 ${total} 封` + (parts.length ? " · " + parts.join("，") : "");
     const caption = document.createElement("span");
     caption.className = "trend-label";
@@ -417,7 +462,7 @@ export function fillMailboxForm(item) {
   if (localpart) localpart.value = item.localpart || "";
   if (name) name.value = item.displayName || "";
   if (notes) notes.value = item.notes || "";
-  domain?.focus();
+  name?.focus();
 }
 
 export async function saveMailbox() {
@@ -497,7 +542,7 @@ export function renderNameEditors(settings) {
   state.savedSenders = Array.isArray(settings.senderNames)
     ? settings.senderNames.map((item) => ({ address: item.address, name: item.name }))
     : [];
-  renderDomainCards();
+  if (state.isAdmin) renderDomainCards();
   renderSenderRows(state.savedSenders);
   state.namesBaseline = JSON.stringify(collectNames());
   syncNamesSave();
@@ -605,9 +650,9 @@ export function collectNames(options = {}) {
   });
   const typedTitle = document.querySelector("#panel-title")?.value.trim() || "";
   return {
-    panelTitle: typedTitle || (options.fallbackTitle ? (state.panelTitle || "邮箱") : ""),
+    panelTitle: typedTitle || (options.fallbackTitle ? state.panelTitle || "邮箱" : ""),
     labelNames: labelNamesOut,
-    domainNames: collectDomainNames(),
+    domainNames: state.isAdmin ? collectDomainNames() : {},
     senderNames: collectSenderList(),
   };
 }
@@ -651,7 +696,7 @@ export async function commitNamesNow(message) {
     state.savedSenders = backupSenders;
     state.domainShortNames = backupShort;
     renderSenderRows(state.savedSenders);
-    renderDomainCards({ discardPending: true });
+    if (state.isAdmin) renderDomainCards({ discardPending: true });
     toast("保存失败: " + explain(err));
   }
 }
@@ -689,26 +734,28 @@ export async function saveNameSettings() {
     toast("面板名称不能为空");
     return;
   }
-  state.namesJob = state.namesJob.then(async () => {
-    if (!collectNames().panelTitle) {
-      toast("面板名称不能为空");
-      return;
-    }
-    try {
-      const saved = await request("/v1/settings/names", { method: "PUT", body: collectNames() });
-      applyNamesSaved(saved);
-      renderNameEditors({
-        panelTitle: saved.panelTitle,
-        labelNames: saved.labelNames,
-        domainNames: saved.domainNames,
-        senderNames: saved.senderNames,
-        acceptDomains: state.settingsDomains,
-      });
-      toast("名称已保存");
-    } catch (err) {
-      toast("保存名称失败: " + explain(err));
-    }
-  }).catch(() => {});
+  state.namesJob = state.namesJob
+    .then(async () => {
+      if (!collectNames().panelTitle) {
+        toast("面板名称不能为空");
+        return;
+      }
+      try {
+        const saved = await request("/v1/settings/names", { method: "PUT", body: collectNames() });
+        applyNamesSaved(saved);
+        renderNameEditors({
+          panelTitle: saved.panelTitle,
+          labelNames: saved.labelNames,
+          domainNames: saved.domainNames,
+          senderNames: saved.senderNames,
+          acceptDomains: state.settingsDomains,
+        });
+        toast("名称已保存");
+      } catch (err) {
+        toast("保存名称失败: " + explain(err));
+      }
+    })
+    .catch(() => {});
 }
 
 export function renderAiEditors(pool) {
@@ -796,7 +843,7 @@ export async function applyAndSaveAi(apply, message) {
     const enabledNow = document.querySelector("#ai-enabled");
     if (aiLine) aiLine.textContent = enabledNow && !enabledNow.checked ? "分拣已关" : describeAi(status);
   } catch {
-    // The pool is already stored. The status line refreshes the next time settings open.
+    // 状态栏下次打开自动刷新
   }
 }
 
@@ -805,7 +852,7 @@ export function paintAiEditors() {
   const keys = document.querySelector("#key-list");
   if (models) {
     models.replaceChildren();
-    state.aiModels.forEach((model, index) => models.append(orderRow(model, index, state.aiModels.length, "model")));
+    state.aiModels.forEach((model, index) => models.append(orderRow(model, index, state.aiModels.length, "model", null)));
   }
   if (keys) {
     keys.replaceChildren();
@@ -815,7 +862,9 @@ export function paintAiEditors() {
       empty.textContent = "没有密钥。";
       keys.append(empty);
     }
-    state.aiKeyRows.forEach((row, index) => keys.append(orderRow(maskKey(row.tail), index, state.aiKeyRows.length, "key")));
+    state.aiKeyRows.forEach((row, index) =>
+      keys.append(orderRow(maskKey(row.tail), index, state.aiKeyRows.length, "key", row)),
+    );
   }
 }
 
@@ -823,7 +872,7 @@ export function maskKey(tail) {
   return tail ? `····${tail}` : "已保存";
 }
 
-export function orderRow(label, index, total, kind) {
+export function orderRow(label, index, total, kind, keyRow) {
   const row = document.createElement("div");
   row.className = "name-row order-row";
   const text = document.createElement("input");
@@ -831,6 +880,28 @@ export function orderRow(label, index, total, kind) {
   text.readOnly = true;
   const actions = document.createElement("div");
   actions.className = "step-actions";
+
+  if (kind === "key" && keyRow && keyRow.id) {
+    const badge = document.createElement("span");
+    badge.className = "probe-badge";
+    const prev = state.keyProbeResults.get(keyRow.id);
+    if (prev) {
+      badge.classList.add(prev.ok ? "ok" : "err");
+      badge.textContent = prev.ok ? `可用 · ${prev.latencyMs}ms` : `失败`;
+      if (prev.error) badge.title = prev.error;
+    } else {
+      badge.hidden = true;
+    }
+
+    const probeBtn = document.createElement("button");
+    probeBtn.type = "button";
+    probeBtn.className = "btn-fit ghost";
+    probeBtn.textContent = "试";
+    probeBtn.title = "在服务端向模型接口发送一次极短探针测试";
+    probeBtn.addEventListener("click", () => void testSavedAiKey(keyRow.id, probeBtn, badge));
+    actions.append(badge, probeBtn);
+  }
+
   const up = document.createElement("button");
   up.type = "button";
   up.className = "btn-fit ghost";
@@ -851,6 +922,38 @@ export function orderRow(label, index, total, kind) {
   actions.append(up, down, remove);
   row.append(text, actions);
   return row;
+}
+
+export async function testSavedAiKey(keyId, button, badge) {
+  button.disabled = true;
+  button.textContent = "测…";
+  badge.hidden = false;
+  badge.className = "probe-badge";
+  badge.textContent = "连接中";
+  try {
+    const body = { id: keyId };
+    if (state.aiModels[0]) body.model = state.aiModels[0];
+    const res = await request("/v1/settings/ai/test-key", { method: "POST", body });
+    state.keyProbeResults.set(keyId, res);
+    if (res.ok) {
+      badge.className = "probe-badge ok";
+      badge.textContent = `可用 · ${res.latencyMs}ms`;
+      badge.title = `${res.model} (${res.latencyMs}ms)`;
+      toast(`密钥可用 · ${res.model} (${res.latencyMs}ms)`);
+    } else {
+      badge.className = "probe-badge err";
+      badge.textContent = res.error ? res.error.slice(0, 28) : "连接失败";
+      badge.title = res.error || "连接失败";
+      toast("密钥测试未通过: " + (res.error || "连接失败"));
+    }
+  } catch (err) {
+    badge.className = "probe-badge err";
+    badge.textContent = "请求异常";
+    toast("测试失败: " + explain(err));
+  } finally {
+    button.disabled = false;
+    button.textContent = "试";
+  }
 }
 
 export function moveAiRow(kind, index, delta) {
@@ -916,9 +1019,11 @@ export function addKeyRow() {
 }
 
 export async function loadDkimSection() {
+  if (!state.isAdmin) return;
   try {
     const keys = await request("/v1/dkim");
     state.dkimKeys = Array.isArray(keys.items) ? keys.items : [];
+    state.dkimDomains = [...new Set(state.dkimKeys.map((k) => k.domain))];
     renderDkim(state.dkimKeys);
   } catch (err) {
     toast("读取发信设置失败: " + explain(err));
@@ -951,7 +1056,7 @@ export function renderDomainCards(options = {}) {
     return;
   }
   for (const domain of ordered) {
-    const typed = pending.has(domain) ? pending.get(domain) : (state.domainShortNames[domain] || "");
+    const typed = pending.has(domain) ? pending.get(domain) : state.domainShortNames[domain] || "";
     const matches = state.dkimKeys.filter((key) => key.domain === domain);
     host.append(domainCard(domain, typed, matches));
   }
@@ -1093,7 +1198,7 @@ export async function removeDkim(domain, selector) {
 
 export async function loadLogs() {
   const view = document.querySelector("#log-view");
-  if (!view) return;
+  if (!view || !state.isAdmin) return;
   try {
     const res = await request("/v1/logs");
     const lines = Array.isArray(res.lines) ? res.lines : [];

@@ -1,4 +1,4 @@
-// 纯工具函数：转义、格式化、地址解析、回复推导，不碰 DOM 状态以外的东西。
+// 纯工具函数：地址规范化、时间字节格式化、验证码识别、密码生成。
 import { state } from "./state.js";
 
 export function hashMailId() {
@@ -39,7 +39,7 @@ export function capReplyRefs(ids) {
 
 export function quoteLetter(detail) {
   const when = formatFullTime(detail.receivedAt) || "";
-  const who = replyAddress(detail) || "对方";
+  const who = replyAddress(detail) || "发件方";
   const source = String((detail.parsed && detail.parsed.text) || "").replace(/\r\n/g, "\n").slice(0, 8000);
   const lines = source.split("\n").map((line) => "> " + line);
   return "\n\n" + when + "，" + who + " 写道：\n" + lines.join("\n");
@@ -124,4 +124,60 @@ export function debounce(fn, ms) {
     clearTimeout(timer);
     timer = setTimeout(() => fn.apply(this, args), ms);
   };
+}
+
+const OTP_HINT_RE = /验证码|校验码|安全码|确认码|动态码|登录码|verification|passcode|security\s*code|login\s*code|one-time|\botp\b/i;
+const OTP_DIRECT_RE = /(?:验证码|校验码|安全码|确认码|动态码|code|otp|passcode)[^\dA-Za-z]{0,14}(\d{4,8})\b/i;
+
+/** 从主题与纯文本正文中识别 4~8 位数字验证码，排除普通年份与链接干扰。 */
+export function extractOtpCode(subject, plainText) {
+  const combined = `${subject || ""}\n${String(plainText || "").slice(0, 1600)}`;
+  if (!OTP_HINT_RE.test(combined)) return "";
+  const cleaned = combined.replace(/https?:\/\/\S+/gi, " ");
+  const direct = OTP_DIRECT_RE.exec(cleaned);
+  if (direct && direct[1]) return direct[1];
+  const candidates = cleaned.match(/\b\d{6}\b/g) || [];
+  for (const code of candidates) {
+    const num = Number(code);
+    if (num >= 199000 && num <= 209912) continue;
+    return code;
+  }
+  return "";
+}
+
+/** 生成易读无歧义的 14 位随机初始密码。 */
+export function generateRandomPassword(length = 14) {
+  const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*";
+  const bytes = new Uint32Array(length);
+  if (window.crypto && window.crypto.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < length; i += 1) bytes[i] = Math.floor(Math.random() * 100000);
+  }
+  let out = "";
+  for (let i = 0; i < length; i += 1) {
+    out += alphabet[bytes[i] % alphabet.length];
+  }
+  return out;
+}
+
+/** 判断成员当前是否被授权使用该发件地址。 */
+export function memberCanSendFrom(address) {
+  if (state.isAdmin) return true;
+  const norm = normalizeAddress(address);
+  if (!norm) return false;
+  const at = norm.lastIndexOf("@");
+  const local = norm.slice(0, at);
+  const plus = local.indexOf("+");
+  const base = plus > 0 ? local.slice(0, plus) : local;
+  const domain = norm.slice(at + 1);
+  const candidates = state.allocatedMailboxes.filter(
+    (b) => b.domain === domain && (b.localpart === local || b.localpart === base || b.localpart === "*"),
+  );
+  if (candidates.length === 0) return false;
+  candidates.sort((a, b) => {
+    const rank = (x) => (x.localpart === local ? 1 : x.localpart === "*" ? 3 : 2);
+    return rank(a) - rank(b);
+  });
+  return Boolean(candidates[0] && candidates[0].canSend);
 }

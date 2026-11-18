@@ -1,4 +1,5 @@
 import type { Db } from "../index.js";
+import { canViewerAccessMessage, getMessage, type ViewerContext } from "./messages.js";
 
 export interface StoredAttachment {
   filename: string | null;
@@ -23,6 +24,19 @@ export function findAttachment(db: Db, sha256: string): { path: string; mime: st
   return db
     .prepare("SELECT path, mime, size_bytes FROM attachments WHERE sha256 = ?")
     .get(sha256) as { path: string; mime: string | null; size_bytes: number } | undefined;
+}
+
+/** Verify that a viewer can read at least one message referencing `sha256`. */
+export function canViewerReadAttachment(db: Db, sha256: string, viewer?: ViewerContext): boolean {
+  if (!viewer || viewer.role === "admin") return true;
+  const links = db
+    .prepare("SELECT message_id FROM message_attachments WHERE sha256 = ?")
+    .all(sha256) as Array<{ message_id: string }>;
+  for (const link of links) {
+    const msg = getMessage(db, link.message_id);
+    if (msg && canViewerAccessMessage(db, msg, viewer)) return true;
+  }
+  return false;
 }
 
 export function upsertAttachment(

@@ -1,6 +1,16 @@
-// 登录 / 登出 / 找回密码。
+// 登录、退出、密码修改、个人资料与验证码密码重置。
 import { state } from "./state.js";
-import { appEl, btnResetResend, loginEl, loginError, resetCodeStep, resetDigits, resetError, resetModal, resetPasswordStep } from "./dom.js";
+import {
+  appEl,
+  btnResetResend,
+  loginEl,
+  loginError,
+  resetCodeStep,
+  resetDigits,
+  resetError,
+  resetModal,
+  resetPasswordStep,
+} from "./dom.js";
 import { request } from "./net.js";
 import { explain, toast } from "./ui.js";
 import { revealApp } from "./nav.js";
@@ -22,6 +32,8 @@ export async function signIn() {
     });
     document.querySelector("#password").value = "";
     state.csrfToken = null;
+    state.adminScope = "mine";
+    state.domainFilter = "";
     await revealApp();
   } catch (err) {
     loginError.textContent = explain(err);
@@ -37,7 +49,7 @@ export async function signOut() {
   try {
     await request("/v1/logout", { method: "POST", body: {} });
   } catch {
-    // Session destroyed
+    // 会话已销毁
   }
   state.csrfToken = null;
   showLogin();
@@ -70,7 +82,7 @@ export function bindResetDigits() {
       if (event.key === "Backspace" && !input.value && resetDigits[index - 1]) resetDigits[index - 1].focus();
     });
     input.addEventListener("paste", (event) => {
-      const text = (event.clipboardData && event.clipboardData.getData("text") || "").replace(/\D/g, "");
+      const text = ((event.clipboardData && event.clipboardData.getData("text")) || "").replace(/\D/g, "");
       if (!text) return;
       event.preventDefault();
       fillResetDigits(text);
@@ -81,7 +93,7 @@ export function bindResetDigits() {
 export function fillResetDigits(digits) {
   for (let i = 0; i < resetDigits.length; i += 1) resetDigits[i].value = digits[i] || "";
   const focusAt = Math.min(Math.max(digits.length, 1), resetDigits.length) - 1;
-  resetDigits[focusAt].focus();
+  resetDigits[focusAt]?.focus();
 }
 
 export function resetCodeValue() {
@@ -96,8 +108,8 @@ export async function startReset() {
   loginError.textContent = "";
   const username = document.querySelector("#username");
   const email = username ? username.value.trim() : "";
-  if (!email) {
-    loginError.textContent = "先填写邮箱";
+  if (!email || !email.includes("@")) {
+    loginError.textContent = "先在上方填写接收验证码的邮箱地址";
     if (username) username.focus();
     return;
   }
@@ -137,7 +149,7 @@ export function showResetCode() {
 export function showResetPassword() {
   if (resetError) resetError.textContent = "";
   if (!/^\d{6}$/.test(resetCodeValue())) {
-    if (resetError) resetError.textContent = "请输入验证码";
+    if (resetError) resetError.textContent = "请输入 6 位验证码";
     return;
   }
   if (resetCodeStep) resetCodeStep.hidden = true;
@@ -169,15 +181,15 @@ export async function finishReset() {
     closeReset(false);
     const password = document.querySelector("#password");
     if (password) password.value = "";
-    loginError.textContent = "密码已更新，请登录";
+    loginError.textContent = "密码已更新，请重新登录";
   } catch (err) {
     if (err && err.status === 401) {
       showResetCode();
       clearResetDigits();
-      if (resetError) resetError.textContent = "验证码不正确";
+      if (resetError) resetError.textContent = "验证码不正确或已失效";
       if (resetDigits[0]) resetDigits[0].focus();
     } else if (err && err.status === 400) {
-      if (resetError) resetError.textContent = "新密码至少 8 位";
+      if (resetError) resetError.textContent = "新密码至少 8 位且不可过于简单";
     } else if (resetError) {
       resetError.textContent = explain(err);
     }
@@ -236,8 +248,29 @@ export async function savePassword() {
     if (current) current.value = "";
     if (next) next.value = "";
     toast("密码已更新");
+  } catch (err) {
+    toast(err && err.status === 401 ? "当前密码不正确" : "密码未更新");
+  }
+}
+
+export async function saveProfile() {
+  const nameInput = document.querySelector("#profile-display-name");
+  const emailInput = document.querySelector("#profile-recovery-email");
+  const displayName = nameInput ? nameInput.value.trim() : "";
+  const recoveryEmail = emailInput ? emailInput.value.trim() : "";
+  try {
+    const res = await request("/v1/account/profile", {
+      method: "PATCH",
+      body: {
+        displayName: displayName || null,
+        recoveryEmail: recoveryEmail || null,
+      },
+    });
+    state.displayName = res.displayName || "";
+    state.recoveryEmail = res.recoveryEmail || "";
+    toast("资料已保存");
   } catch {
-    toast("密码未更新");
+    toast("资料格式有误");
   }
 }
 

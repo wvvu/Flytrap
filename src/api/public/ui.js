@@ -1,7 +1,22 @@
-// 通用 UI：提示、确认框、标题、未读数、移动端面板、详情小组件。
+// 通用界面辅助：通知条、确认框、快捷键面板、角色化显隐、未读数同步。
 import { VIEW_TITLES } from "./constants.js";
 import { state } from "./state.js";
-import { appEl, confirmCancel, confirmModal, confirmOk, confirmText, loginEl, streamTitle, toastEl } from "./dom.js";
+import {
+  appEl,
+  confirmCancel,
+  confirmModal,
+  confirmOk,
+  confirmText,
+  loginEl,
+  logoutBtn,
+  navDlqBtn,
+  navUsersBtn,
+  readAllBtn,
+  shortcutModal,
+  spamReadAllBtn,
+  streamTitle,
+  toastEl,
+} from "./dom.js";
 import { request } from "./net.js";
 
 export function setGlyph(el, name) {
@@ -18,26 +33,66 @@ export function setGlyph(el, name) {
 
 export function setViewTitle(view) {
   document.title = VIEW_TITLES[view] || "收件箱";
-  if (view === "inbox" && state.inboxPromoOnly) document.title = "推广";
-  else if (view === "inbox" && state.unreadInbox > 0) document.title += " (" + state.unreadInbox + ")";
+  const count = state.inboxPromoOnly ? state.unreadPromo : state.unreadInbox;
+  if (view === "inbox" && state.inboxPromoOnly) {
+    document.title = count > 0 ? `推广 (${count})` : "推广";
+  } else if (view === "inbox" && state.unreadInbox > 0) {
+    document.title += " (" + state.unreadInbox + ")";
+  }
   if (state.panelTitle !== "邮箱") document.title = state.panelTitle + " · " + document.title;
-  if (streamTitle) streamTitle.textContent = view === "inbox" && state.inboxPromoOnly ? "推广" : state.unreadInbox > 0 ? "收件箱 (" + state.unreadInbox + ")" : "收件箱";
+  if (streamTitle) {
+    if (view === "inbox" && state.inboxPromoOnly) {
+      streamTitle.textContent = count > 0 ? `推广 (${count})` : "推广";
+    } else {
+      streamTitle.textContent = state.unreadInbox > 0 ? "收件箱 (" + state.unreadInbox + ")" : "收件箱";
+    }
+  }
+  syncReadAllButtons();
+}
+
+export function syncReadAllButtons() {
+  if (readAllBtn) {
+    const activeUnread = state.inboxPromoOnly ? state.unreadPromo : state.unreadInbox;
+    readAllBtn.hidden = activeUnread <= 0;
+  }
+  if (spamReadAllBtn) {
+    spamReadAllBtn.hidden = state.unreadSpam <= 0;
+  }
+}
+
+export function applyRoleUI() {
+  if (navUsersBtn) navUsersBtn.hidden = !state.isAdmin;
+  if (navDlqBtn) navDlqBtn.hidden = !state.isAdmin;
+  if (logoutBtn) {
+    const roleLabel = state.isAdmin ? "管理员" : "成员";
+    logoutBtn.title = state.sessionUser ? `退出 (${state.sessionUser} · ${roleLabel})` : "退出";
+  }
+  const verEl = document.querySelector("#settings-version");
+  if (verEl) verEl.textContent = state.appVersion ? `v${state.appVersion}` : "";
 }
 
 export async function refreshUnread() {
   try {
-    const counts = await request("/v1/unread");
+    const params = new URLSearchParams();
+    if (state.isAdmin && state.adminScope && state.adminScope !== "mine") {
+      params.set("scope", state.adminScope);
+    }
+    const qs = params.toString();
+    const counts = await request("/v1/unread" + (qs ? "?" + qs : ""));
     state.unreadInbox = Number(counts.inbox) || 0;
+    state.unreadSpam = Number(counts.spam) || 0;
+    state.unreadPromo = Number(counts.promo) || 0;
     if (appEl && !appEl.hidden) setViewTitle(state.currentView);
+    else syncReadAllButtons();
   } catch {
-    // The next poll tries again.
+    // 下轮轮询自动重试
   }
 }
 
-export async function copyText(text) {
+export async function copyText(text, message = "已复制") {
   try {
     await navigator.clipboard.writeText(text);
-    toast("已复制");
+    toast(message);
   } catch {
     toast("复制失败");
   }
@@ -52,6 +107,12 @@ export function showApp() {
   loginEl.style.display = "none";
   appEl.hidden = false;
   appEl.style.display = "grid";
+}
+
+export function toggleShortcutModal(force) {
+  if (!shortcutModal) return;
+  const next = typeof force === "boolean" ? force : shortcutModal.hidden;
+  shortcutModal.hidden = !next;
 }
 
 export function isTypingTarget(target) {
@@ -106,9 +167,10 @@ export function askConfirm(message) {
 }
 
 export function explain(err) {
-  if (err && err.status === 401) return "用户名或口令不正确";
-  if (err && err.status === 429) return "请求过于频繁，请稍后再试";
-  if (err && err.status === 403) return "缺少有效 CSRF 令牌";
+  if (err && err.status === 401) return "账号或口令不正确";
+  if (err && err.status === 403) return "当前账号无权执行此操作";
+  if (err && err.status === 409) return "账号或邮箱已被占用";
+  if (err && err.status === 429) return "请求过于频繁或已达今日发信上限";
   return "操作失败，请重试";
 }
 
@@ -121,25 +183,16 @@ export function createAuthChip(label, status) {
   return chip;
 }
 
-export function createMetaItem(label, val) {
-  const item = document.createElement("div");
-  item.className = "meta-item";
-  const l = document.createElement("span");
-  l.className = "meta-label";
-  l.textContent = label + "：";
-  const v = document.createElement("span");
-  v.className = "meta-val";
-  v.textContent = val;
-  item.append(l, v);
-  return item;
-}
-
 export function formatRawHeaders(detail) {
   const lines = [];
   if (detail.messageId) lines.push(`Message-ID: ${detail.messageId}`);
   if (detail.from) lines.push(`From: ${detail.from}`);
   if (detail.envelopeFrom) lines.push(`Return-Path: <${detail.envelopeFrom}>`);
-  if (detail.envelopeTo) lines.push(`Delivered-To: ${Array.isArray(detail.envelopeTo) ? detail.envelopeTo.join(", ") : detail.envelopeTo}`);
+  if (detail.envelopeTo) {
+    lines.push(
+      `Delivered-To: ${Array.isArray(detail.envelopeTo) ? detail.envelopeTo.join(", ") : detail.envelopeTo}`,
+    );
+  }
   if (detail.subject) lines.push(`Subject: ${detail.subject}`);
   if (detail.receivedAt) lines.push(`Date: ${new Date(detail.receivedAt).toUTCString()}`);
   if (detail.smtpMeta) lines.push(`X-Mail-Smtp: ${JSON.stringify(detail.smtpMeta)}`);

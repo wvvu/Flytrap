@@ -1,5 +1,4 @@
-// 共享可变状态：原来散在 app.js 顶层的 let，集中到一个对象里，
-// 各模块读写 state.xxx（ES 模块不允许跨模块直接改 import 来的 let）。
+// 全局共享可变状态：集中供各原生 ES 模块读写。
 import { LABEL_NAMES } from "./constants.js";
 
 export const state = {
@@ -13,9 +12,11 @@ export const state = {
   attemptsBaseline: "",
   namesBaseline: "",
   settingsDomains: [],
+  dkimDomains: [],
   currentMailHtml: "",
   currentMailPlain: "",
   allowExternalImages: false,
+  sandboxExpanded: false,
   labelNames: { ...LABEL_NAMES },
   panelTitle: "邮箱",
   domainNames: {},
@@ -34,6 +35,8 @@ export const state = {
   currentPromptId: "classify-v1",
   skipFirstOpen: false,
   unreadInbox: 0,
+  unreadSpam: 0,
+  unreadPromo: 0,
   blockedSenders: [],
   dkimKeys: [],
   sentItems: [],
@@ -41,11 +44,14 @@ export const state = {
   currentFromAddress: "",
   openDetail: null,
   replyContext: null,
+  replySubjectHint: "",
   replyArmed: false,
+  draftSaveTimer: 0,
   currentSettingsSection: "domains",
   selectedFailureKey: "",
   aiModels: [],
   aiKeyRows: [],
+  keyProbeResults: new Map(),
   aiJob: Promise.resolve(),
   namesJob: Promise.resolve(),
   domainShortNames: {},
@@ -55,4 +61,26 @@ export const state = {
   resetEmail: "",
   resetLeft: 0,
   resetTimer: 0,
+
+  // 多用户与过滤上下文
+  sessionUser: "",
+  sessionUserId: "owner",
+  sessionRole: "admin",
+  isAdmin: true,
+  displayName: "",
+  recoveryEmail: "",
+  quotaSendPerDay: null,
+  sentToday: 0,
+  allocatedMailboxes: [],
+  hasMembers: false,
+  appVersion: "",
+  adminScope: "mine",
+  domainFilter: "",
+
+  // 成员管理页状态
+  usersList: [],
+  usersQuery: "",
+  selectedUserId: "",
+  creatingUser: true,
+  lastCreatedCredentials: "",
 };

@@ -1,68 +1,227 @@
-// 入口：事件绑定、启动初始化、15 秒轮询。只组装，不放业务逻辑。
+// 入口装配：全局事件监听、键盘流快捷键、15 秒增量轮询。
 import { state } from "./state.js";
-import { appEl, backListBtn, btnBlockMail, btnDeleteMail, btnLoadImages, btnReclassify, btnReply, btnRestoreMail, btnTrashMail, confirmModal, detailModelVerdict, detailVerdictSelect, dlqRefreshBtn, emptyTrashBtn, filterSelect, labelInput, listEl, loginForm, logoutBtn, navDlqBtn, navInboxBtn, navSendBtn, navSettingsBtn, navSpamBtn, navTrashBtn, noticeEl, promoBtn, queryInput, refreshBtn, retryAllBtn, spamRefreshBtn, themeBtn, trashQueryInput, trashRefreshBtn } from "./dom.js";
+import {
+  adminScopeSelect,
+  appEl,
+  backListBtn,
+  btnBlockMail,
+  btnDeleteMail,
+  btnExpandPreview,
+  btnLoadImages,
+  btnMarkUnread,
+  btnReclassify,
+  btnReply,
+  btnRestoreMail,
+  btnTrashMail,
+  confirmModal,
+  detailModelVerdict,
+  detailOtpBtn,
+  detailVerdictSelect,
+  dlqRefreshBtn,
+  domainFilterSelect,
+  emptyTrashBtn,
+  filterSelect,
+  labelInput,
+  listEl,
+  loginForm,
+  logoutBtn,
+  navDlqBtn,
+  navInboxBtn,
+  navSendBtn,
+  navSettingsBtn,
+  navSpamBtn,
+  navTrashBtn,
+  navUsersBtn,
+  newUserBtn,
+  noticeEl,
+  promoBtn,
+  queryInput,
+  readAllBtn,
+  refreshBtn,
+  resetModal,
+  retryAllBtn,
+  shortcutCloseBtn,
+  shortcutModal,
+  shortcutsBtn,
+  spamReadAllBtn,
+  spamRefreshBtn,
+  themeBtn,
+  trashQueryInput,
+  trashRefreshBtn,
+  usersQueryInput,
+  usersRefreshBtn,
+} from "./dom.js";
 import { request } from "./net.js";
-import { explain, findByDataId, isTypingTarget, refreshUnread, setMobilePane, toast } from "./ui.js";
+import {
+  copyText,
+  explain,
+  findByDataId,
+  isTypingTarget,
+  refreshUnread,
+  setMobilePane,
+  toast,
+  toggleShortcutModal,
+} from "./ui.js";
 import { debounce, hashMailId } from "./util.js";
 import { initTheme, revealApp, setPromoMode, switchNav, toggleTheme } from "./shell.js";
-import { closeReset, finishReset, savePassword, sendResetCode, showLogin, showResetPassword, signIn, signOut, startReset } from "./auth.js";
-import { handleBlockMail, handleDeleteMail, handleEmptyTrash, handleRestoreMail, handleTrashMail, maybeLoadMore, mergeFreshMail, navigateMail, reclassify, reloadMessages, reloadTrash, removeStaleMail, renderSandboxHtml, staysInList, switchTab, syncListLabel } from "./mail-view.js";
+import {
+  closeReset,
+  finishReset,
+  savePassword,
+  saveProfile,
+  sendResetCode,
+  showLogin,
+  showResetPassword,
+  signIn,
+  signOut,
+  startReset,
+} from "./auth.js";
+import {
+  appendScopeParams,
+  handleBlockMail,
+  handleDeleteMail,
+  handleEmptyTrash,
+  handleMarkAllRead,
+  handleMarkUnread,
+  handleRestoreMail,
+  handleTrashMail,
+  maybeLoadMore,
+  mergeFreshMail,
+  navigateMail,
+  reclassify,
+  reloadMessages,
+  reloadTrash,
+  removeStaleMail,
+  renderSandboxHtml,
+  staysInList,
+  switchTab,
+  syncListLabel,
+  toggleSandboxExpand,
+} from "./mail-view.js";
 import { loadDlqJobs, openFailedMail, renderFailureGroups, retryAllDead, updateDlqBadge } from "./dlq-view.js";
-import { addBlocked, addDomain, addKeyRow, addModelRow, addSenderRow, enqueueAi, generateDkim, labelName, loadLogs, saveAttemptSettings, saveCurrentPrompt, saveMailbox, saveNameSettings, saveNotifySettings, syncAttemptSave, syncNamesSave, syncNotifySave, syncPromptSave } from "./settings-view.js";
-import { loadSendPage, openComposer, refreshSendNote, refreshSentList, renderSentList, startReply, submitSend } from "./send-view.js";
+import {
+  addBlocked,
+  addDomain,
+  addKeyRow,
+  addModelRow,
+  addSenderRow,
+  enqueueAi,
+  generateDkim,
+  labelName,
+  loadLogs,
+  saveAttemptSettings,
+  saveCurrentPrompt,
+  saveMailbox,
+  saveNameSettings,
+  saveNotifySettings,
+  syncAttemptSave,
+  syncNamesSave,
+  syncNotifySave,
+  syncPromptSave,
+} from "./settings-view.js";
+import {
+  copyCreatedCredentials,
+  fillCreateRandomPassword,
+  loadUsersPage,
+  openCreateUserCard,
+  renderUsersStream,
+  submitCreateUser,
+} from "./users-view.js";
+import {
+  cancelReplyLink,
+  discardComposeDraft,
+  loadSendPage,
+  navigateSent,
+  openComposer,
+  refreshSendNote,
+  refreshSentList,
+  renderSentList,
+  scheduleDraftSave,
+  startReply,
+  submitSend,
+} from "./send-view.js";
 
-// 事件绑定
+// 登录与全局轨道事件
 loginForm.addEventListener("submit", (e) => {
   e.preventDefault();
   void signIn();
 });
 
 logoutBtn.addEventListener("click", () => void signOut());
-
 themeBtn.addEventListener("click", () => toggleTheme());
+shortcutsBtn?.addEventListener("click", () => toggleShortcutModal());
+shortcutCloseBtn?.addEventListener("click", () => toggleShortcutModal(false));
+shortcutModal?.addEventListener("click", (e) => {
+  if (e.target === shortcutModal) toggleShortcutModal(false);
+});
 
-navInboxBtn?.addEventListener("click", () => switchNav("inbox"));
+navInboxBtn?.addEventListener("click", () => void switchNav("inbox"));
+navSendBtn?.addEventListener("click", () => void switchNav("send"));
+navSpamBtn?.addEventListener("click", () => void switchNav("spam"));
+navTrashBtn?.addEventListener("click", () => void switchNav("trash"));
+navUsersBtn?.addEventListener("click", () => void switchNav("users"));
+navSettingsBtn?.addEventListener("click", () => void switchNav("settings"));
+navDlqBtn?.addEventListener("click", () => void switchNav("dlq"));
 
-navSendBtn?.addEventListener("click", () => switchNav("send"));
-
-navSpamBtn?.addEventListener("click", () => switchNav("spam"));
-
-navTrashBtn?.addEventListener("click", () => switchNav("trash"));
-
-navSettingsBtn?.addEventListener("click", () => switchNav("settings"));
-
-navDlqBtn?.addEventListener("click", () => switchNav("dlq"));
-
+// 列表头与过滤器事件
 refreshBtn?.addEventListener("click", () => void reloadMessages());
-
+readAllBtn?.addEventListener("click", () => void handleMarkAllRead("inbox"));
+spamReadAllBtn?.addEventListener("click", () => void handleMarkAllRead("spam"));
 promoBtn?.addEventListener("click", () => setPromoMode(!state.inboxPromoOnly));
-
 spamRefreshBtn?.addEventListener("click", () => void reloadMessages());
-
 trashRefreshBtn?.addEventListener("click", () => void reloadTrash());
-
 emptyTrashBtn?.addEventListener("click", () => void handleEmptyTrash());
-
 dlqRefreshBtn?.addEventListener("click", () => void loadDlqJobs());
-
 retryAllBtn?.addEventListener("click", () => void retryAllDead());
 
+adminScopeSelect?.addEventListener("change", () => {
+  state.adminScope = adminScopeSelect.value || "mine";
+  void refreshUnread();
+  if (state.currentView === "trash") void reloadTrash();
+  else void reloadMessages();
+});
+
+domainFilterSelect?.addEventListener("change", () => {
+  state.domainFilter = domainFilterSelect.value || "";
+  if (state.currentView === "trash") void reloadTrash();
+  else void reloadMessages();
+});
+
+// 邮件阅读动作事件
 btnReply?.addEventListener("click", () => void startReply());
-
+btnMarkUnread?.addEventListener("click", () => void handleMarkUnread());
 btnTrashMail?.addEventListener("click", () => void handleTrashMail());
-
 btnBlockMail?.addEventListener("click", () => void handleBlockMail());
-
 btnRestoreMail?.addEventListener("click", () => void handleRestoreMail());
-
 btnDeleteMail?.addEventListener("click", () => void handleDeleteMail());
+btnExpandPreview?.addEventListener("click", () => toggleSandboxExpand());
+detailOtpBtn?.addEventListener("click", () => {
+  const code = detailOtpBtn.dataset.code || "";
+  if (code) void copyText(code, "验证码已复制");
+});
 
 backListBtn?.addEventListener("click", () => setMobilePane("list"));
-
 document.querySelector("#btn-back-dlq")?.addEventListener("click", () => setMobilePane("list"));
-
 document.querySelector("#btn-back-settings")?.addEventListener("click", () => setMobilePane("list"));
+document.querySelector("#btn-back-users")?.addEventListener("click", () => setMobilePane("list"));
+document.querySelector("#btn-back-send")?.addEventListener("click", () => setMobilePane("list"));
 
+// 成员管理页事件
+newUserBtn?.addEventListener("click", () => openCreateUserCard());
+usersRefreshBtn?.addEventListener("click", () => void loadUsersPage());
+document.querySelector("#users-search-form")?.addEventListener("submit", (e) => e.preventDefault());
+usersQueryInput?.addEventListener("input", () => {
+  state.usersQuery = usersQueryInput.value || "";
+  renderUsersStream();
+});
+document.querySelector("#btn-uc-gen-pass")?.addEventListener("click", () => fillCreateRandomPassword());
+document.querySelector("#user-create-form")?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  void submitCreateUser();
+});
+document.querySelector("#btn-copy-credentials")?.addEventListener("click", () => copyCreatedCredentials());
+
+// 设置与账号事件
 document.querySelector("#ai-enabled")?.addEventListener("change", () => {
   const box = document.querySelector("#ai-enabled");
   if (!box) return;
@@ -84,23 +243,16 @@ document.querySelector("#ai-thinking")?.addEventListener("change", () => {
 });
 
 document.querySelector("#btn-save-password")?.addEventListener("click", () => void savePassword());
-
+document.querySelector("#btn-save-profile")?.addEventListener("click", () => void saveProfile());
 document.querySelector("#btn-forgot")?.addEventListener("click", () => void startReset());
-
 document.querySelector("#btn-reset-close")?.addEventListener("click", () => closeReset(false));
-
 document.querySelector("#btn-reset-other")?.addEventListener("click", () => closeReset(true));
-
 document.querySelector("#btn-reset-continue")?.addEventListener("click", () => showResetPassword());
-
 document.querySelector("#btn-reset-save")?.addEventListener("click", () => void finishReset());
-
 document.querySelector("#btn-reset-resend")?.addEventListener("click", () => void sendResetCode());
 
 document.querySelector("#btn-refresh-logs")?.addEventListener("click", () => void loadLogs());
-
 document.querySelector("#btn-add-model")?.addEventListener("click", () => addModelRow());
-
 document.querySelector("#btn-add-key")?.addEventListener("click", () => addKeyRow());
 
 document.querySelector("#model-add")?.addEventListener("keydown", (event) => {
@@ -118,25 +270,18 @@ document.querySelector("#key-add")?.addEventListener("keydown", (event) => {
 });
 
 document.querySelector("#btn-save-prompt")?.addEventListener("click", () => void saveCurrentPrompt());
-
 document.querySelector("#prompt-editor")?.addEventListener("input", syncPromptSave);
-
 document.querySelector("#btn-save-notify")?.addEventListener("click", () => void saveNotifySettings());
-
 document.querySelector("#notify-confidence")?.addEventListener("input", syncNotifySave);
-
 document.querySelector("#btn-save-attempts")?.addEventListener("click", () => void saveAttemptSettings());
-
 document.querySelector("#job-max-attempts")?.addEventListener("input", syncAttemptSave);
-
 document.querySelector("#btn-add-domain")?.addEventListener("click", () => void addDomain());
 
+// 发信与写信草稿事件
 document.querySelector("#btn-send-refresh")?.addEventListener("click", () => void loadSendPage());
-
 document.querySelector("#btn-compose")?.addEventListener("click", () => openComposer());
-
-document.querySelector("#btn-back-send")?.addEventListener("click", () => setMobilePane("list"));
-
+document.querySelector("#btn-discard-draft")?.addEventListener("click", () => void discardComposeDraft());
+document.querySelector("#btn-cancel-reply")?.addEventListener("click", () => cancelReplyLink());
 document.querySelector("#send-filters")?.addEventListener("submit", (event) => event.preventDefault());
 
 document.querySelector("#send-q")?.addEventListener("input", () => {
@@ -149,14 +294,26 @@ document.querySelector("#send-form")?.addEventListener("submit", (event) => {
   void submitSend();
 });
 
+for (const fieldId of ["#send-from", "#send-to", "#send-cc", "#send-bcc", "#send-subject", "#send-text"]) {
+  document.querySelector(fieldId)?.addEventListener("input", () => {
+    if (fieldId === "#send-from") refreshSendNote();
+    scheduleDraftSave();
+  });
+}
+
+document.querySelector("#send-text")?.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+    event.preventDefault();
+    void submitSend();
+  }
+});
+
 document.querySelector("#btn-cc-toggle")?.addEventListener("click", () => {
   for (const id of ["#send-cc-row", "#send-bcc-row"]) {
     const row = document.querySelector(id);
     if (row) row.hidden = !row.hidden;
   }
 });
-
-document.querySelector("#send-from")?.addEventListener("input", refreshSendNote);
 
 document.querySelector("#btn-dkim-generate")?.addEventListener("click", () => {
   const input = document.querySelector("#dkim-domain");
@@ -169,7 +326,6 @@ document.querySelector("#btn-dkim-generate")?.addEventListener("click", () => {
 });
 
 document.querySelector("#btn-add-block")?.addEventListener("click", () => void addBlocked());
-
 document.querySelector("#block-add")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -190,9 +346,7 @@ document.querySelector("#mailbox-form")?.addEventListener("submit", (event) => {
 });
 
 document.querySelector("#btn-save-names")?.addEventListener("click", () => void saveNameSettings());
-
 document.querySelector("#panel-title")?.addEventListener("input", syncNamesSave);
-
 document.querySelector("#btn-add-sender")?.addEventListener("click", () => addSenderRow());
 
 document.querySelector("#sender-address")?.addEventListener("keydown", (event) => {
@@ -210,17 +364,6 @@ document.querySelector("#sender-name")?.addEventListener("keydown", (event) => {
 });
 
 document.querySelector("#dlq-search")?.addEventListener("submit", (event) => event.preventDefault());
-
-document.querySelector(".settings-nav")?.addEventListener("click", (event) => {
-  const link = event.target instanceof Element ? event.target.closest("a[href^='#']") : null;
-  if (!link) return;
-  const href = link.getAttribute("href");
-  const target = href ? document.querySelector(href) : null;
-  if (!target) return;
-  event.preventDefault();
-  target.scrollIntoView({ block: "start" });
-});
-
 document.querySelector("#dlq-q")?.addEventListener("input", () => {
   state.dlqQuery = document.querySelector("#dlq-q")?.value.trim().toLowerCase() || "";
   renderFailureGroups(state.currentJobs);
@@ -230,14 +373,12 @@ document.querySelector("#trash-filters")?.addEventListener("submit", (e) => {
   e.preventDefault();
   void reloadTrash();
 });
-
 trashQueryInput?.addEventListener("input", debounce(() => void reloadTrash(), 350));
 
 document.querySelector("#filters")?.addEventListener("submit", (e) => {
   e.preventDefault();
   void reloadMessages();
 });
-
 queryInput?.addEventListener("input", debounce(() => void reloadMessages(), 350));
 
 filterSelect?.addEventListener("change", () => {
@@ -272,7 +413,10 @@ detailVerdictSelect?.addEventListener("change", async () => {
         tag.dataset.label = newLabel;
         tag.hidden = newLabel === "legit";
         tag.textContent = newLabel === "legit" ? "" : labelName(newLabel) + " 已改";
-        if (tag.parentElement) tag.parentElement.hidden = newLabel === "legit";
+        if (tag.parentElement) {
+          const hasOtp = Boolean(tag.parentElement.querySelector(".otp-pill"));
+          tag.parentElement.hidden = newLabel === "legit" && !hasOtp;
+        }
       }
     }
     noticeEl.textContent = "已改成 " + labelName(newLabel);
@@ -318,10 +462,90 @@ btnReclassify?.addEventListener("click", () => {
   if (state.selectedMailId && !state.readingSentId) void reclassify(state.selectedMailId, btnReclassify);
 });
 
+function activeSearchInput() {
+  if (state.currentView === "inbox" || state.currentView === "spam") return queryInput;
+  if (state.currentView === "trash") return trashQueryInput;
+  if (state.currentView === "send") return document.querySelector("#send-q");
+  if (state.currentView === "dlq") return document.querySelector("#dlq-q");
+  if (state.currentView === "users") return usersQueryInput;
+  return null;
+}
+
+function handleEscapeInSearch(target) {
+  if (!(target instanceof HTMLInputElement) || target.type !== "search") return false;
+  const hadValue = Boolean(target.value);
+  target.value = "";
+  target.blur();
+  if (!hadValue) return true;
+  if (target === queryInput) void reloadMessages();
+  else if (target === trashQueryInput) void reloadTrash();
+  else if (target.id === "send-q") {
+    state.sentQuery = "";
+    renderSentList();
+  } else if (target.id === "dlq-q") {
+    state.dlqQuery = "";
+    renderFailureGroups(state.currentJobs);
+  } else if (target === usersQueryInput) {
+    state.usersQuery = "";
+    renderUsersStream();
+  }
+  return true;
+}
+
 window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (shortcutModal && !shortcutModal.hidden) {
+      e.preventDefault();
+      toggleShortcutModal(false);
+      return;
+    }
+    if (resetModal && !resetModal.hidden) {
+      e.preventDefault();
+      closeReset(false);
+      return;
+    }
+    if (handleEscapeInSearch(e.target)) {
+      e.preventDefault();
+    }
+    return;
+  }
+
+  if (appEl.hidden) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (confirmModal && !confirmModal.hidden) return;
   if (isTypingTarget(e.target)) return;
+
+  if (e.key === "?") {
+    e.preventDefault();
+    toggleShortcutModal();
+    return;
+  }
+  if (shortcutModal && !shortcutModal.hidden) return;
+
+  if (e.key === "/") {
+    const searchEl = activeSearchInput();
+    if (searchEl) {
+      e.preventDefault();
+      searchEl.focus();
+      searchEl.select();
+    }
+    return;
+  }
+
+  if (e.key === "c") {
+    e.preventDefault();
+    void switchNav("send");
+    return;
+  }
+
+  if (e.key === "u") {
+    if ((state.currentView === "inbox" || state.currentView === "spam") && state.selectedMailId && !state.readingSentId) {
+      e.preventDefault();
+      void handleMarkUnread();
+    }
+    return;
+  }
+
   if (state.currentView === "inbox" || state.currentView === "spam") {
     if (e.key === "j") navigateMail(1);
     else if (e.key === "k") navigateMail(-1);
@@ -330,10 +554,14 @@ window.addEventListener("keydown", (e) => {
     if (e.key === "j") navigateMail(1);
     else if (e.key === "k") navigateMail(-1);
     else if (e.key === "r") void reloadTrash();
+  } else if (state.currentView === "send") {
+    if (e.key === "j") navigateSent(1);
+    else if (e.key === "k") navigateSent(-1);
+    else if (e.key === "r") void loadSendPage();
   } else if (state.currentView === "dlq" && e.key === "r") {
     void loadDlqJobs();
-  } else if (state.currentView === "send" && e.key === "r") {
-    void loadSendPage();
+  } else if (state.currentView === "users" && e.key === "r") {
+    void loadUsersPage();
   }
 });
 
@@ -354,7 +582,7 @@ export async function init() {
 
 export async function pollLive() {
   if (document.hidden || appEl.hidden) return;
-  void updateDlqBadge();
+  if (state.isAdmin) void updateDlqBadge();
   void refreshUnread();
   if (state.currentView === "send") {
     void refreshSentList();
@@ -368,9 +596,19 @@ export async function pollLive() {
     params.set("trashed", state.currentView === "trash" ? "true" : "false");
     params.set("limit", "40");
     syncListLabel();
-    if ((state.currentView === "inbox" || state.currentView === "spam") && labelInput.value) params.set("label", labelInput.value);
-    const q = state.currentView === "trash" ? (trashQueryInput ? trashQueryInput.value.trim() : "") : (queryInput ? queryInput.value.trim() : "");
+    if ((state.currentView === "inbox" || state.currentView === "spam") && labelInput.value) {
+      params.set("label", labelInput.value);
+    }
+    const q =
+      state.currentView === "trash"
+        ? trashQueryInput
+          ? trashQueryInput.value.trim()
+          : ""
+        : queryInput
+          ? queryInput.value.trim()
+          : "";
     if (q) params.set("q", q);
+    appendScopeParams(params);
     const page = await request("/v1/messages?" + params.toString());
     if (token !== state.listLoadToken) return;
     const items = Array.isArray(page.items) ? page.items : [];
@@ -380,18 +618,21 @@ export async function pollLive() {
     }
     const same =
       items.length === state.currentMessages.length &&
-      items.every((item, index) => item.id === state.currentMessages[index]?.id && item.label === state.currentMessages[index]?.label && item.read === state.currentMessages[index]?.read);
+      items.every(
+        (item, index) =>
+          item.id === state.currentMessages[index]?.id &&
+          item.label === state.currentMessages[index]?.label &&
+          item.read === state.currentMessages[index]?.read,
+      );
     if (same) return;
     if (state.currentView === "trash") await reloadTrash();
     else {
       mergeFreshMail(items);
-      // The response was a full page, so anything missing has left this view.
       if (items.length < 40) removeStaleMail(items);
     }
   } catch {
-    // The next tick tries again.
+    // 下轮轮询自动重试
   }
 }
 
-// 启动初始化
 void init();

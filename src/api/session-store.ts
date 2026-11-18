@@ -1,6 +1,7 @@
 import type { SessionStore } from "@fastify/session";
 import type { Session } from "fastify";
 import type { Db } from "../db/index.js";
+import { OWNER_USER_ID } from "../db/repos/users.js";
 
 const DEFAULT_SESSION_TTL_MS = 15 * 24 * 60 * 60 * 1000;
 
@@ -20,7 +21,6 @@ export function sqliteSessionStore(db: Db, defaultTtlMs = DEFAULT_SESSION_TTL_MS
       try {
         const now = Date.now();
         write.run(sessionId, JSON.stringify(session), expiresAt(session, now, defaultTtlMs));
-        // 启动会连打多次会话写入。过期清理跟着每次写会抢 SQLite 的写锁，一分钟清一次就够。
         if (now - sweptAt >= 60_000) {
           sweptAt = now;
           sweep.run(now);
@@ -56,6 +56,32 @@ export function sqliteSessionStore(db: Db, defaultTtlMs = DEFAULT_SESSION_TTL_MS
 
 export function clearSessions(db: Db): void {
   db.prepare("DELETE FROM sessions").run();
+}
+
+/** Immediately drop all active sessions belonging to one user without logging out others. */
+export function clearUserSessions(db: Db, userId: string, username?: string): number {
+  if (userId === OWNER_USER_ID && username) {
+    const res = db
+      .prepare(
+        `DELETE FROM sessions
+         WHERE json_extract(data, '$.userId') = ?
+            OR (json_extract(data, '$.userId') IS NULL AND json_extract(data, '$.user') = ?)`,
+      )
+      .run(OWNER_USER_ID, username);
+    return res.changes;
+  }
+  if (username) {
+    const res = db
+      .prepare(
+        `DELETE FROM sessions
+         WHERE json_extract(data, '$.userId') = ?
+            OR lower(COALESCE(json_extract(data, '$.user'), '')) = lower(?)`,
+      )
+      .run(userId, username);
+    return res.changes;
+  }
+  const res = db.prepare("DELETE FROM sessions WHERE json_extract(data, '$.userId') = ?").run(userId);
+  return res.changes;
 }
 
 function expiresAt(session: Session, now: number, defaultTtlMs = DEFAULT_SESSION_TTL_MS): number {

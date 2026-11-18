@@ -1,9 +1,11 @@
 import { ulid } from "ulid";
+import { envelopeAddresses } from "../ai/prompt.js";
+import type { Codec } from "../compress.js";
 import type { Db } from "../db/index.js";
 import { enqueueJob, hasOpenJob, type JobRow } from "../db/repos/jobs.js";
-import { getMessage, saveParsedMessage, trashMessage } from "../db/repos/messages.js";
+import { getMessage, saveParsedMessage, setUserMessageTrashed, trashMessage } from "../db/repos/messages.js";
 import { isBlockedSender } from "../db/repos/settings.js";
-import type { Codec } from "../compress.js";
+import { OWNER_USER_ID, resolveAddressOwner } from "../db/repos/users.js";
 import { readRaw } from "../ingest/read-raw.js";
 import type { AppLog } from "../log.js";
 import { parseMessage } from "../mail/parse.js";
@@ -17,7 +19,7 @@ export interface ParseJobDeps {
   now: () => number;
 }
 
-/** Parse always runs, including when authentication failed. Classification is queued after it. */
+/** Parse always runs, including when authentication failed. Classification is queued after it unless all recipient owners blocked the sender. */
 export async function runParseJob(deps: ParseJobDeps, job: JobRow): Promise<void> {
   if (!job.message_id) throw new Error("parse job has no message");
   const message = getMessage(deps.db, job.message_id);
@@ -42,12 +44,41 @@ export async function runParseJob(deps: ParseJobDeps, job: JobRow): Promise<void
     parsed: JSON.stringify(result.parsed),
     now: deps.now(),
   });
-  if (isBlockedSender(deps.db, fromAddr) || isBlockedSender(deps.db, message.envelope_from)) {
-    trashMessage(deps.db, message.id, deps.now());
+
+  const recipients = envelopeAddresses(message.envelope_to);
+  const owners = new Set<string>();
+  if (recipients.length === 0) {
+    owners.add(OWNER_USER_ID);
+  } else {
+    for (const rcpt of recipients) {
+      owners.add(resolveAddressOwner(deps.db, rcpt));
+    }
+  }
+
+  const now = deps.now();
+  let unblockedCount = 0;
+  for (const ownerId of owners) {
+    const blocked =
+      isBlockedSender(deps.db, fromAddr, ownerId) ||
+      isBlockedSender(deps.db, message.envelope_from, ownerId);
+    if (blocked) {
+      if (ownerId === OWNER_USER_ID && owners.size === 1) {
+        trashMessage(deps.db, message.id, now);
+      } else if (ownerId === OWNER_USER_ID) {
+        trashMessage(deps.db, message.id, now);
+      } else {
+        setUserMessageTrashed(deps.db, ownerId, message.id, now, now);
+      }
+    } else {
+      unblockedCount += 1;
+    }
+  }
+
+  if (unblockedCount === 0) {
     deps.log.info({ messageId: message.id }, "blocked sender moved to trash");
     return;
   }
-  const now = deps.now();
+
   if (!hasOpenJob(deps.db, message.id, "classify")) {
     enqueueJob(deps.db, { id: ulid(), type: "classify", messageId: message.id, now });
   }
