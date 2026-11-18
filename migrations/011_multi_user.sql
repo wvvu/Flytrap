@@ -46,4 +46,5 @@ CREATE INDEX idx_ums_user_state ON user_message_state(user_id, deleted_at, trash
 CREATE INDEX idx_ums_message ON user_message_state(message_id);
 
 ALTER TABLE outbox ADD COLUMN user_id TEXT;
+UPDATE outbox SET user_id = 'owner' WHERE user_id IS NULL;
 CREATE INDEX idx_outbox_user_created ON outbox(user_id, created_at DESC);

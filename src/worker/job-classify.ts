@@ -99,6 +99,11 @@ export async function runClassifyJob(deps: ClassifyJobDeps, job: JobRow): Promis
     return;
   }
   saveAiResult(deps.db, message.id, JSON.stringify(guarded), now);
+  if (force) {
+    deps.db
+      .prepare("UPDATE user_message_state SET manual_label = NULL, updated_at = ? WHERE message_id = ?")
+      .run(now, message.id);
+  }
   if (!hasOpenJob(deps.db, message.id, "notify")) {
     enqueueJob(deps.db, { id: ulid(), type: "notify", messageId: message.id, now });
   }

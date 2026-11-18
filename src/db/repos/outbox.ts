@@ -124,8 +124,9 @@ export function listOutbox(db: Db, limit: number, viewer?: ViewerContext): Outbo
 }
 
 export function countUserOutboxSince(db: Db, userId: string, sinceMs: number): number {
+  const ownerClause = userId === OWNER_USER_ID ? "(user_id IS NULL OR user_id = ?)" : "user_id = ?";
   const row = db
-    .prepare("SELECT COUNT(*) AS c FROM outbox WHERE user_id = ? AND created_at >= ?")
+    .prepare(`SELECT COUNT(*) AS c FROM outbox WHERE ${ownerClause} AND created_at >= ?`)
     .get(userId, sinceMs) as { c: number } | undefined;
   return row?.c ?? 0;
 }

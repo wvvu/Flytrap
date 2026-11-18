@@ -36,6 +36,7 @@ import {
 } from "../db/repos/jobs.js";
 import { findMailboxHistory, listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
 import {
+  canViewerAccessMessage,
   countTrash,
   countUnreadForViewer,
   deleteMessageForViewer,
@@ -876,7 +877,12 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const id = messageId(request);
     const q = request.query as Record<string, unknown>;
     const viewer = viewerOf(db, request, optionalString(q?.scope));
-    requireMessage(db, id, request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer);
+    const message = requireMessage(
+      db,
+      id,
+      request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer,
+    );
+    if (!canViewerAccessMessage(db, message, viewer)) throw new HttpError(404, "not_found");
     trashMessageForViewer(db, id, viewer, now());
     writeAudit(db, {
       id: ulid(),
@@ -922,7 +928,12 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const id = messageId(request);
     const q = request.query as Record<string, unknown>;
     const viewer = viewerOf(db, request, optionalString(q?.scope));
-    requireMessage(db, id, request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer);
+    const message = requireMessage(
+      db,
+      id,
+      request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer,
+    );
+    if (!canViewerAccessMessage(db, message, viewer)) throw new HttpError(404, "not_found");
     restoreMessageForViewer(db, id, viewer, now());
     writeAudit(db, {
       id: ulid(),
@@ -1780,7 +1791,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     rejectAdminTarget(request, existing, true);
     const body = updateUserBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
-    if (body.data.role === "admin" && !sessionIsOwner(request)) {
+    if (body.data.role === "admin" && existing.role !== "admin" && !sessionIsOwner(request)) {
       throw new HttpError(403, "only_owner_can_grant_admin");
     }
     if (body.data.status === "disabled" && request.session.userId === existing.id) {
@@ -2007,7 +2018,7 @@ function requireAcceptDomain(db: Db, config: Config, domain: string): void {
 }
 
 function sessionIsOwner(request: FastifyRequest): boolean {
-  return (request.session.userId ?? OWNER_USER_ID) === OWNER_USER_ID;
+  return request.session.userId === OWNER_USER_ID;
 }
 
 function rejectAdminTarget(
