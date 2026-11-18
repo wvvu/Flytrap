@@ -154,7 +154,7 @@ function resolveViewerTarget(viewer?: ViewerContext): EffectiveTarget {
     }
   }
   if (viewer.userId !== OWNER_USER_ID) {
-    return { visibility: viewer.userId, stateUserId: viewer.userId, redactOtherRecipients: false };
+    return { visibility: viewer.userId, stateUserId: viewer.userId, redactOtherRecipients: true };
   }
   return { visibility: OWNER_USER_ID, stateUserId: OWNER_USER_ID, redactOtherRecipients: false };
 }
@@ -713,6 +713,16 @@ export function deleteMessage(db: Db, id: string, purgedAt: number): PurgedFiles
   })();
 }
 
+function markMessageDeletedForUser(db: Db, userId: string, messageId: string, deletedAt: number): void {
+  db.prepare(
+    `INSERT INTO user_message_state (user_id, message_id, deleted_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, message_id) DO UPDATE SET
+       deleted_at = excluded.deleted_at,
+       updated_at = excluded.updated_at`,
+  ).run(userId, messageId, deletedAt, deletedAt);
+}
+
 /**
  * Reference-counted multi-user delete:
  * - When `viewer` is omitted or has global scope 'all', physically purges immediately.
@@ -742,13 +752,10 @@ export function deleteMessageForViewer(
     return deleteMessage(db, id, purgedAt);
   }
 
-  db.prepare(
-    `INSERT INTO user_message_state (user_id, message_id, deleted_at, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(user_id, message_id) DO UPDATE SET
-       deleted_at = excluded.deleted_at,
-       updated_at = excluded.updated_at`,
-  ).run(target.stateUserId, id, purgedAt, purgedAt);
+  markMessageDeletedForUser(db, target.stateUserId, id, purgedAt);
+  if (target.stateUserId === OWNER_USER_ID) {
+    db.prepare("UPDATE messages SET trashed_at = NULL, updated_at = ? WHERE id = ?").run(purgedAt, id);
+  }
   return { count: 1, paths: [] };
 }
 
@@ -797,6 +804,7 @@ function emptyGlobalTrash(db: Db, purgedAt: number): PurgedFiles {
       if (!message) continue;
       const holders = [...remainingActiveOwners(db, message)].filter((uid) => uid !== OWNER_USER_ID);
       if (holders.length > 0) {
+        markMessageDeletedForUser(db, OWNER_USER_ID, id, purgedAt);
         db.prepare("UPDATE messages SET trashed_at = NULL, updated_at = ? WHERE id = ?").run(purgedAt, id);
         count += 1;
         continue;

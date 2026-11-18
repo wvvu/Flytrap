@@ -199,12 +199,18 @@ export function memberCanSendFrom(address) {
   const at = norm.lastIndexOf("@");
   const local = norm.slice(0, at);
   const plus = local.indexOf("+");
-  const base = plus > 1 ? local.slice(0, plus) : local;
+  const base = plus > 0 ? local.slice(0, plus) : local;
   const domain = norm.slice(at + 1);
   const candidates = state.allocatedMailboxes.filter(
     (b) => b.domain === domain && allocationRank(b, local, base) < 9,
   );
   if (candidates.length === 0) return false;
-  candidates.sort((a, b) => allocationRank(a, local, base) - allocationRank(b, local, base));
+  candidates.sort((a, b) => {
+    const rankA = allocationRank(a, local, base);
+    const rankB = allocationRank(b, local, base);
+    if (rankA !== rankB) return rankA - rankB;
+    if (rankA === 3) return b.localpart.length - a.localpart.length;
+    return 0;
+  });
   return Boolean(candidates[0] && candidates[0].canSend);
 }

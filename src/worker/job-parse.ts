@@ -56,25 +56,24 @@ export async function runParseJob(deps: ParseJobDeps, job: JobRow): Promise<void
   }
 
   const now = deps.now();
+  const blockedOwners: string[] = [];
   let unblockedCount = 0;
   for (const ownerId of owners) {
     const blocked =
       isBlockedSender(deps.db, fromAddr, ownerId) ||
       isBlockedSender(deps.db, message.envelope_from, ownerId);
-    if (blocked) {
-      if (ownerId === OWNER_USER_ID) {
-        trashMessage(deps.db, message.id, now);
-      } else {
-        setUserMessageTrashed(deps.db, ownerId, message.id, now, now);
-      }
-    } else {
-      unblockedCount += 1;
-    }
+    if (blocked) blockedOwners.push(ownerId);
+    else unblockedCount += 1;
   }
 
   if (unblockedCount === 0) {
+    trashMessage(deps.db, message.id, now);
     deps.log.info({ messageId: message.id }, "blocked sender moved to trash");
     return;
+  }
+
+  for (const ownerId of blockedOwners) {
+    setUserMessageTrashed(deps.db, ownerId, message.id, now, now);
   }
 
   if (!hasOpenJob(deps.db, message.id, "classify")) {

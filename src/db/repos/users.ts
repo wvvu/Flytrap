@@ -122,7 +122,7 @@ export function sqlResolvedOwner(addrExpr: string): string {
       WHEN um.localpart GLOB '*[*]' AND um.localpart != '*' THEN 3
       WHEN um.localpart = '*' THEN 4
       ELSE 5
-    END ASC
+    END ASC, length(um.localpart) DESC
     LIMIT 1
   )`;
 }
@@ -503,7 +503,7 @@ export function findWinningAllocation(db: Db, rawAddress: string): UserMailboxRo
          WHEN localpart GLOB '*[*]' AND localpart != '*' THEN 3
          WHEN localpart = '*' THEN 4
          ELSE 5
-       END ASC
+       END ASC, length(localpart) DESC
        LIMIT 1`,
     )
     .get(
@@ -586,7 +586,7 @@ function splitNormalized(raw: string): { localpart: string; baseLocalpart: strin
   const localpart = normalized.slice(0, at);
   const domain = normalized.slice(at + 1);
   const plus = localpart.indexOf("+");
-  const baseLocalpart = plus > 1 ? localpart.slice(0, plus) : localpart;
+  const baseLocalpart = plus > 0 ? localpart.slice(0, plus) : localpart;
   return { localpart, baseLocalpart, domain };
 }
 
