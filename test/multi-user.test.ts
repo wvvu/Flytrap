@@ -765,6 +765,345 @@ test("a prefix mailbox outranks the domain star, and a collaborative admin canno
   }
 });
 
+test("a longer prefix wildcard outranks a shorter prefix and the domain star", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-prefix-length-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 19, 1, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+  const short = jar();
+  const long = jar();
+  const catchAll = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    await owner.post(app, "/v1/users", {
+      username: "short",
+      password: "short-password-123",
+      initialMailbox: { localpart: "alerts-*", domain: "example.com" },
+    });
+    await owner.post(app, "/v1/users", {
+      username: "long",
+      password: "long-password-123",
+      initialMailbox: { localpart: "alerts-prod-*", domain: "example.com" },
+    });
+    await owner.post(app, "/v1/users", {
+      username: "catch",
+      password: "catch-password-123",
+      initialMailbox: { localpart: "*", domain: "example.com" },
+    });
+
+    const eu = await deliver(db, dir, ["alerts-prod-eu@example.com"], "Subject: eu\r\n\r\nHi\r\n", ++clock);
+    const stage = await deliver(db, dir, ["alerts-stage@example.com"], "Subject: stage\r\n\r\nHi\r\n", ++clock);
+    const other = await deliver(db, dir, ["other@example.com"], "Subject: other\r\n\r\nHi\r\n", ++clock);
+
+    await short.login(app, "short", "short-password-123");
+    await long.login(app, "long", "long-password-123");
+    await catchAll.login(app, "catch", "catch-password-123");
+
+    const shortList = (await short.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    const longList = (await long.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    const catchList = (await catchAll.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+
+    assert.deepEqual(shortList.map((item) => item.id), [stage.id]);
+    assert.deepEqual(longList.map((item) => item.id), [eu.id]);
+    assert.deepEqual(catchList.map((item) => item.id), [other.id]);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a single-character mailbox keeps its plus-tag base for receiving and sending", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-single-base-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 19, 2, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+  const single = jar();
+  const catchAll = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    await owner.post(app, "/v1/users", {
+      username: "single",
+      password: "single-password-123",
+      initialMailbox: { localpart: "a", domain: "example.com", canSend: true },
+    });
+    await owner.post(app, "/v1/users", {
+      username: "catch",
+      password: "catch-password-123",
+      initialMailbox: { localpart: "*", domain: "example.com", canSend: true },
+    });
+
+    const exact = await deliver(db, dir, ["a@example.com"], "Subject: exact\r\n\r\nHi\r\n", ++clock);
+    const tagged = await deliver(db, dir, ["a+github@example.com"], "Subject: tagged\r\n\r\nHi\r\n", ++clock);
+
+    await single.login(app, "single", "single-password-123");
+    await catchAll.login(app, "catch", "catch-password-123");
+
+    const singleList = (await single.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    const catchList = (await catchAll.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    assert.deepEqual(singleList.map((item) => item.id).sort(), [exact.id, tagged.id].sort());
+    assert.deepEqual(catchList.map((item) => item.id), []);
+
+    const sendTagged = await single.post(app, "/v1/outbox", {
+      from: "a+github@example.com",
+      to: ["x@outside.test"],
+      subject: "tagged",
+      text: "hi",
+    });
+    assert.equal(sendTagged.statusCode, 202);
+
+    const catchSpoof = await catchAll.post(app, "/v1/outbox", {
+      from: "a+github@example.com",
+      to: ["x@outside.test"],
+      subject: "spoof",
+      text: "hi",
+    });
+    assert.equal(catchSpoof.statusCode, 403);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("partial blocklists keep classification and the unblocked holder's webhook running", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-partial-block-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 19, 3, 0, 0);
+  const originalFetch = globalThis.fetch;
+  const webhookHits: string[] = [];
+  const globalHits: string[] = [];
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+  const alice = jar();
+  const bob = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    const createAlice = await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com" },
+    });
+    const aliceId = createAlice.json().user.id as string;
+    const createBob = await owner.post(app, "/v1/users", {
+      username: "bob",
+      password: "bob-password-123",
+      initialMailbox: { localpart: "bob", domain: "example.com" },
+    });
+    assert.equal(createBob.statusCode, 201);
+
+    await alice.login(app, "alice", "alice-password-123");
+    await bob.login(app, "bob", "bob-password-123");
+    const blocked = await alice.put(app, "/v1/settings/blocklist", { addresses: ["sender@outside.test"] });
+    assert.equal(blocked.statusCode, 200);
+    const notify = await bob.put(app, "/v1/settings/notify/personal", {
+      labels: ["gray"],
+      minConfidence: 0.1,
+      webhookUrl: "https://bob.hooks/in",
+    });
+    assert.equal(notify.statusCode, 200);
+
+    globalThis.fetch = (async (input) => {
+      webhookHits.push(String(input));
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+
+    const shared = await deliver(
+      db,
+      dir,
+      ["alice@example.com", "bob@example.com"],
+      "Subject: partial block\r\n\r\nHi\r\n",
+      ++clock,
+    );
+
+    const workerOpts: WorkerOptions = {
+      db,
+      dataDir: dir,
+      codec: gzipCodec(),
+      banner: "mx.test",
+      log: silent,
+      authenticate: async () =>
+        authResultSchema.parse({
+          schema: 1,
+          spf: "pass",
+          dkim: "none",
+          dmarc: "pass",
+          arc: "none",
+          rdns: { ptr: null, match: false },
+          headers: "",
+        }),
+      classifier: fakeClassifier(() => clock),
+      notifiers: [{
+        id: "global",
+        async notify(input: { label: string }) {
+          globalHits.push(input.label);
+        },
+      }],
+      notifyLabels: ["gray"],
+      notifyMinConfidence: 0,
+      promptsDir: defaultPromptsDir(),
+      panelBaseUrl: "http://127.0.0.1:8080",
+      now: () => clock,
+    };
+    while (await processNext(workerOpts, "w1")) {
+      // drain auth -> parse -> classify -> notify
+    }
+
+    const classified = db.prepare("SELECT ai_result FROM messages WHERE id = ?").get(shared.id) as { ai_result: string };
+    assert.equal((JSON.parse(classified.ai_result) as { label: string }).label, "gray");
+
+    const aliceInbox = (await alice.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    const aliceTrash = (await alice.get(app, "/v1/messages?trashed=1")).json().items as Array<{ id: string }>;
+    const bobInbox = (await bob.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    assert.equal(aliceInbox.some((item) => item.id === shared.id), false);
+    assert.equal(aliceTrash.some((item) => item.id === shared.id), true);
+    assert.equal(bobInbox.some((item) => item.id === shared.id), true);
+
+    assert.deepEqual(globalHits, ["gray"]);
+    assert.equal(webhookHits.includes("https://bob.hooks/in"), true);
+    assert.equal(webhookHits.some((url) => url.includes("alice.hooks")), false);
+    const aliceState = db
+      .prepare("SELECT trashed_at FROM user_message_state WHERE user_id = ? AND message_id = ?")
+      .get(aliceId, shared.id) as { trashed_at: number | null } | undefined;
+    assert.notEqual(aliceState?.trashed_at, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("global empty trash records the owner soft delete and releases the shared reference", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-empty-release-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 19, 4, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+  const alice = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com" },
+    });
+
+    const shared = await deliver(
+      db,
+      dir,
+      ["ops@example.com", "alice@example.com"],
+      "Subject: release\r\n\r\nHi\r\n",
+      ++clock,
+    );
+    const rawRow = db.prepare("SELECT raw_path FROM messages WHERE id = ?").get(shared.id) as { raw_path: string };
+    const rawAbs = resolveInside(dir, rawRow.raw_path);
+    assert.equal(fs.existsSync(rawAbs), true);
+
+    await owner.post(app, `/v1/messages/${shared.id}/trash?scope=all`, {});
+    const emptied = await owner.post(app, "/v1/messages/empty-trash?scope=all", {});
+    assert.equal(emptied.statusCode, 200);
+
+    assert.deepEqual(db.prepare("SELECT trashed_at FROM messages WHERE id = ?").get(shared.id), { trashed_at: null });
+    const ownerState = db
+      .prepare("SELECT deleted_at FROM user_message_state WHERE user_id = 'owner' AND message_id = ?")
+      .get(shared.id) as { deleted_at: number | null };
+    assert.notEqual(ownerState?.deleted_at, null);
+
+    await alice.login(app, "alice", "alice-password-123");
+    assert.equal((await owner.get(app, `/v1/messages/${shared.id}`)).statusCode, 404);
+    assert.equal((await owner.post(app, `/v1/messages/${shared.id}/restore`, {})).statusCode, 404);
+    assert.equal((await alice.get(app, `/v1/messages/${shared.id}`)).statusCode, 200);
+
+    const released = await alice.delete(app, `/v1/messages/${shared.id}`);
+    assert.equal(released.statusCode, 200);
+    assert.equal(db.prepare("SELECT id FROM messages WHERE id = ?").get(shared.id), undefined);
+    assert.equal(fs.existsSync(rawAbs), false);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a shared letter keeps stars, labels, trash, and soft-delete on the person who did them", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-star-"));
   const db = openDatabase(path.join(dir, "db", "mail.db"));
