@@ -61,22 +61,34 @@ function readApplied(db: Db): string[] {
   return rows.map((row) => row.id);
 }
 
+const TRIGGER_START_RE = /^CREATE\s+(?:TEMP(?:ORARY)?\s+)?TRIGGER\b/i;
+const TRIGGER_END_RE = /\bEND$/i;
+
 export function splitSql(sql: string): string[] {
   const stripped = sql
     .split(/\r?\n/)
-    .map((line) => {
-      const mark = line.indexOf("--");
-      return mark === -1 ? line : line.slice(0, mark);
-    })
+    .map((line) => stripLineComment(line))
     .join("\n");
   const out: string[] = [];
   let buf = "";
   let inSingle = false;
-  for (const ch of stripped) {
-    if (ch === "'") inSingle = !inSingle;
+  for (let i = 0; i < stripped.length; i += 1) {
+    const ch = stripped[i]!;
+    if (ch === "'") {
+      if (inSingle && stripped[i + 1] === "'") {
+        buf += "''";
+        i += 1;
+        continue;
+      }
+      inSingle = !inSingle;
+    }
     if (ch === ";" && !inSingle) {
-      const stmt = buf.trim();
-      if (stmt) out.push(stmt);
+      const trimmed = buf.trim();
+      if (TRIGGER_START_RE.test(trimmed) && !TRIGGER_END_RE.test(trimmed)) {
+        buf += ch;
+        continue;
+      }
+      if (trimmed) out.push(trimmed);
       buf = "";
       continue;
     }
@@ -85,4 +97,23 @@ export function splitSql(sql: string): string[] {
   const tail = buf.trim();
   if (tail) out.push(tail);
   return out;
+}
+
+function stripLineComment(line: string): string {
+  let inSingle = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "'") {
+      if (inSingle && line[i + 1] === "'") {
+        i += 1;
+        continue;
+      }
+      inSingle = !inSingle;
+      continue;
+    }
+    if (!inSingle && ch === "-" && line[i + 1] === "-") {
+      return line.slice(0, i);
+    }
+  }
+  return line;
 }

@@ -2,9 +2,11 @@ import type { Db } from "../db/index.js";
 import type { JobRow } from "../db/repos/jobs.js";
 import { readRuntimeSettings } from "../db/repos/settings.js";
 import { getMessage, markMessageNotified } from "../db/repos/messages.js";
+import { findUserById, readUserPersonalSettings } from "../db/repos/users.js";
 import type { AppLog } from "../log.js";
 import { aiResultSchema } from "../ai/types.js";
 import type { Notifier } from "../notify/types.js";
+import { createWebhookNotifier } from "../notify/webhook.js";
 
 export interface NotifyJobDeps {
   db: Db;
@@ -28,26 +30,56 @@ export async function runNotifyJob(deps: NotifyJobDeps, job: JobRow): Promise<vo
     notifyMinConfidence: deps.notifyMinConfidence,
     acceptDomains: [],
   });
-  const wanted = policy.notifyLabels.includes(ai.label) && ai.confidence >= policy.notifyMinConfidence;
-  if (wanted && deps.notifiers.length > 0) {
-    const input = {
-      messageId: message.id,
-      subject: message.subject,
-      from: message.from_addr,
-      label: ai.label,
-      confidence: ai.confidence,
-      summary: ai.summary,
-      panelUrl: `${deps.panelBaseUrl.replace(/\/$/, "")}/#/m/${message.id}`,
-    };
-    const done = notifiedIds(job.payload);
+
+  const input = {
+    messageId: message.id,
+    subject: message.subject,
+    from: message.from_addr,
+    label: ai.label,
+    confidence: ai.confidence,
+    summary: ai.summary,
+    panelUrl: `${deps.panelBaseUrl.replace(/\/$/, "")}/#/m/${message.id}`,
+  };
+
+  const done = notifiedIds(job.payload);
+  let sentAny = false;
+
+  const wantedGlobal = policy.notifyLabels.includes(ai.label) && ai.confidence >= policy.notifyMinConfidence;
+  if (wantedGlobal && deps.notifiers.length > 0) {
     for (const notifier of deps.notifiers) {
       if (done.includes(notifier.id)) continue;
       await notifier.notify(input);
       done.push(notifier.id);
       rememberNotified(deps.db, job.id, done, deps.now());
       deps.log.info({ messageId: message.id, notifier: notifier.id, label: ai.label }, "notified");
+      sentAny = true;
     }
-  } else {
+  }
+
+  const activeHolders = deps.db
+    .prepare("SELECT user_id FROM user_messages WHERE message_id = ? AND trashed_at IS NULL")
+    .all(message.id) as Array<{ user_id: string }>;
+
+  for (const holder of activeHolders) {
+    const user = findUserById(deps.db, holder.user_id);
+    if (!user || user.disabled_at !== null) continue;
+    const personal = readUserPersonalSettings(user);
+    if (!personal.notifyWebhookUrl) continue;
+    if (!personal.notifyLabels.includes(ai.label) || ai.confidence < personal.notifyMinConfidence) continue;
+    const channelId = `user:${user.id}:webhook`;
+    if (done.includes(channelId)) continue;
+    const notifier = createWebhookNotifier({
+      url: personal.notifyWebhookUrl,
+      bearer: personal.notifyWebhookBearer || undefined,
+    });
+    await notifier.notify(input);
+    done.push(channelId);
+    rememberNotified(deps.db, job.id, done, deps.now());
+    deps.log.info({ messageId: message.id, userId: user.id, label: ai.label }, "user webhook notified");
+    sentAny = true;
+  }
+
+  if (!sentAny) {
     deps.log.info({ messageId: message.id, label: ai.label, confidence: ai.confidence }, "notify skipped");
   }
   markMessageNotified(deps.db, message.id, deps.now());

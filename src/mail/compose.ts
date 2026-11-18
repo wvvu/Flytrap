@@ -1,5 +1,13 @@
+import { randomBytes } from "node:crypto";
+
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+
+export interface ComposeAttachment {
+  filename: string;
+  contentType: string;
+  content: Buffer;
+}
 
 export interface ComposeTextInput {
   from: string;
@@ -13,6 +21,10 @@ export interface ComposeTextInput {
   date: Date;
   inReplyTo?: string | null;
   references?: readonly string[];
+}
+
+export interface ComposeMailInput extends ComposeTextInput {
+  attachments?: readonly ComposeAttachment[];
 }
 
 /** A text/plain letter. Bcc stays off the header so it only exists on the envelope. */
@@ -31,6 +43,83 @@ export function composeText(input: ComposeTextInput): Buffer {
     `Content-Transfer-Encoding: ${encoded.cte}`,
   ].filter((line) => line.length > 0);
   return Buffer.from(`${lines.join("\r\n")}\r\n\r\n${encoded.body}`, "utf8");
+}
+
+/** Compose either a single text/plain message or a multipart/mixed message with attachments. */
+export function composeMail(input: ComposeMailInput): Buffer {
+  if (!input.attachments || input.attachments.length === 0) {
+    return composeText(input);
+  }
+  const boundary = `----=_Part_${randomBytes(12).toString("hex")}`;
+  const encodedText = encodeBody(input.text);
+  const topHeaders = [
+    `From: ${formatFrom(input.fromName, input.from)}`,
+    foldAddressHeader("To", input.to),
+    input.cc.length > 0 ? foldAddressHeader("Cc", input.cc) : "",
+    `Subject: ${encodeHeader(input.subject)}`,
+    `Date: ${formatDate(input.date)}`,
+    `Message-ID: <${input.messageId}>`,
+    ...replyHeaders(input),
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+  ].filter((line) => line.length > 0);
+
+  const parts: string[] = [
+    [
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=utf-8",
+      `Content-Transfer-Encoding: ${encodedText.cte}`,
+      "",
+      encodedText.body.replace(/\r\n$/, ""),
+    ].join("\r\n"),
+  ];
+
+  for (const att of input.attachments) {
+    const mime = sanitizeMimeType(att.contentType);
+    const filename = sanitizeAttachmentFilename(att.filename);
+    const b64 = wrapBase64(att.content.toString("base64"));
+    parts.push(
+      [
+        `--${boundary}`,
+        `Content-Type: ${mime}; name="${encodeHeader(filename)}"`,
+        `Content-Disposition: attachment; ${formatDispositionFilename(filename)}`,
+        "Content-Transfer-Encoding: base64",
+        "",
+        b64,
+      ].join("\r\n"),
+    );
+  }
+
+  const full = `${topHeaders.join("\r\n")}\r\n\r\n${parts.join("\r\n")}\r\n--${boundary}--\r\n`;
+  return Buffer.from(full, "utf8");
+}
+
+function sanitizeMimeType(raw: string): string {
+  const clean = raw.trim().toLowerCase();
+  if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(clean)) {
+    return "application/octet-stream";
+  }
+  return clean;
+}
+
+function sanitizeAttachmentFilename(raw: string): string {
+  const base = raw.split(/[/\\]/).pop() ?? "";
+  const clean = base.replace(/[\u0000-\u001F\u007F"\\;]/g, "_").trim().slice(0, 180);
+  return clean || "attachment.bin";
+}
+
+function formatDispositionFilename(filename: string): string {
+  if (/^[\x20-\x7E]+$/.test(filename)) {
+    return `filename="${filename}"`;
+  }
+  const encoded = encodeURIComponent(filename);
+  return `filename*=UTF-8''${encoded}`;
+}
+
+function wrapBase64(b64: string): string {
+  if (!b64) return "";
+  const lines = b64.match(/.{1,76}/g) ?? [];
+  return lines.join("\r\n");
 }
 
 function formatFrom(name: string | undefined, address: string): string {

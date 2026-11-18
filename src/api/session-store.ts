@@ -8,8 +8,8 @@ const DEFAULT_SESSION_TTL_MS = 15 * 24 * 60 * 60 * 1000;
 export function sqliteSessionStore(db: Db, defaultTtlMs = DEFAULT_SESSION_TTL_MS): SessionStore {
   const read = db.prepare("SELECT data, expires_at FROM sessions WHERE sid = ?");
   const write = db.prepare(
-    `INSERT INTO sessions (sid, data, expires_at) VALUES (?, ?, ?)
-     ON CONFLICT(sid) DO UPDATE SET data = excluded.data, expires_at = excluded.expires_at`,
+    `INSERT INTO sessions (sid, user_id, data, expires_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(sid) DO UPDATE SET user_id = excluded.user_id, data = excluded.data, expires_at = excluded.expires_at`,
   );
   const remove = db.prepare("DELETE FROM sessions WHERE sid = ?");
   const sweep = db.prepare("DELETE FROM sessions WHERE expires_at <= ?");
@@ -19,8 +19,8 @@ export function sqliteSessionStore(db: Db, defaultTtlMs = DEFAULT_SESSION_TTL_MS
     set(sessionId, session, callback) {
       try {
         const now = Date.now();
-        write.run(sessionId, JSON.stringify(session), expiresAt(session, now, defaultTtlMs));
-        // 启动会连打多次会话写入。过期清理跟着每次写会抢 SQLite 的写锁，一分钟清一次就够。
+        const userId = typeof session.userId === "string" && session.userId ? session.userId : null;
+        write.run(sessionId, userId, JSON.stringify(session), expiresAt(session, now, defaultTtlMs));
         if (now - sweptAt >= 60_000) {
           sweptAt = now;
           sweep.run(now);
@@ -56,6 +56,18 @@ export function sqliteSessionStore(db: Db, defaultTtlMs = DEFAULT_SESSION_TTL_MS
 
 export function clearSessions(db: Db): void {
   db.prepare("DELETE FROM sessions").run();
+}
+
+export function deleteUserSessions(db: Db, userId: string, username?: string): void {
+  if (username) {
+    db.prepare(
+      `DELETE FROM sessions
+       WHERE user_id = ?
+          OR (user_id IS NULL AND lower(IFNULL(json_extract(data, '$.user'), '')) = lower(?))`,
+    ).run(userId, username);
+    return;
+  }
+  db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
 }
 
 function expiresAt(session: Session, now: number, defaultTtlMs = DEFAULT_SESSION_TTL_MS): number {

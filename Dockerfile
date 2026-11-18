@@ -13,6 +13,7 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
+ARG APP_VERSION=v0.8.0
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/* \
@@ -26,6 +27,7 @@ COPY --chown=node:node migrations ./migrations
 COPY --chown=node:node prompts ./prompts
 COPY --chown=node:node scripts/healthcheck.mjs scripts/docker-entrypoint.mjs ./scripts/
 ENV NODE_ENV=production \
+  APP_VERSION=${APP_VERSION} \
   MAIL_DATA_DIR=/srv/mail/data \
   API_HOST=0.0.0.0 \
   API_PORT=8080 \

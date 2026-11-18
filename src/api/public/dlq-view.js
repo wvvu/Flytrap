@@ -1,4 +1,4 @@
-// 处理失败（DLQ）：失败任务列表、详情、重试 / 忽略 / 全部重试。
+// 处理失败队列（DLQ）：仅管理员可见，支持单步重试、整封重试与放过步骤。
 import { STEP_NAMES, STEP_ORDER } from "./constants.js";
 import { state } from "./state.js";
 import { badgeDlq, dlqEmptyEl, dlqNoticeEl, failureDetailEl, listEl, retryAllBtn } from "./dom.js";
@@ -9,6 +9,7 @@ import { switchNav } from "./nav.js";
 import { selectMail } from "./mail-view.js";
 
 export async function loadDlqJobs(scope = state.currentDlqScope) {
+  if (state.role !== "admin") return;
   state.currentDlqScope = scope || "open";
   listEl.replaceChildren();
   if (dlqNoticeEl) dlqNoticeEl.textContent = "正在读取";
@@ -45,9 +46,9 @@ export function paintDlqCounts(summary) {
   setPillLabel("dismissed", "已放过", state.failureCounts.dismissed);
   const summaryEl = document.querySelector("#dlq-summary");
   if (summaryEl) {
-    const waiting = state.failureCounts.retrying ? `还有 ${state.failureCounts.retrying} 步会自己再试。` : "";
+    const waiting = state.failureCounts.retrying ? `另有 ${state.failureCounts.retrying} 步等待自动重试。` : "";
     summaryEl.textContent = stopped
-      ? `停住 ${stopped} 步。再试会重新排队，放过则先不动这步。${waiting}`
+      ? `停住 ${stopped} 步。再试将重新排队，放过则搁置该步骤。${waiting}`
       : `没有停住的步骤。${waiting}`;
   }
   if (retryAllBtn) retryAllBtn.disabled = stopped === 0;
@@ -83,7 +84,7 @@ export function renderFailureGroups(jobs) {
     listEl.append(createFailureListItem(key, group));
   }
   if (matched) renderFailureDetail(matched);
-  else if (groups.size > 0 && window.matchMedia("(min-width: 901px)").matches) {
+  else if (groups.size > 0 && window.matchMedia("(min-width: 1036px)").matches) {
     const first = groups.entries().next().value;
     if (first) selectFailure(first[0], first[1], { keepListOnNarrow: true });
   } else {
@@ -150,7 +151,13 @@ export function renderFailureDetail(jobs) {
 }
 
 export function jobMatches(job, needle) {
-  const haystack = [job.messageSubject, job.messageFrom, job.messageTo, job.lastError, STEP_NAMES[job.type] || job.type]
+  const haystack = [
+    job.messageSubject,
+    job.messageFrom,
+    job.messageTo,
+    job.lastError,
+    STEP_NAMES[job.type] || job.type,
+  ]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
@@ -158,10 +165,10 @@ export function jobMatches(job, needle) {
 }
 
 export function emptyDlqCopy(scope) {
-  if (scope === "stopped") return "没有已经放弃的步骤";
-  if (scope === "retrying") return "没有还在等的步骤";
-  if (scope === "dismissed") return "没有放过的步骤";
-  return "没有要处理的任务";
+  if (scope === "stopped") return "没有已停止的步骤";
+  if (scope === "retrying") return "没有等待重试的步骤";
+  if (scope === "dismissed") return "没有已放过的步骤";
+  return "没有待处理的任务";
 }
 
 export function stepRank(type) {
@@ -223,10 +230,10 @@ export function createFailureStep(job) {
   const error = document.createElement("p");
   error.className = "step-error";
   error.textContent = job.lastError || "没有错误说明";
-  const state = document.createElement("p");
-  state.className = "muted";
-  state.textContent = stepState(job);
-  copy.append(name, error, state);
+  const stateLine = document.createElement("p");
+  stateLine.className = "muted";
+  stateLine.textContent = stepState(job);
+  copy.append(name, error, stateLine);
 
   const actions = document.createElement("div");
   actions.className = "step-actions";
@@ -238,8 +245,7 @@ export function createFailureStep(job) {
     retry.textContent = "再试一次";
     retry.addEventListener("click", () => void retrySingleJob(job.id));
     actions.append(retry);
-  }
-  if (stopped) {
+
     const dismiss = document.createElement("button");
     dismiss.type = "button";
     dismiss.className = "btn-fit ghost";
@@ -266,14 +272,15 @@ export function stepState(job) {
   if (job.status === "dead" || job.status === "failed") {
     return `已放弃 · 试了 ${job.attempts}/${job.maxAttempts} 次${when}`;
   }
-  if (job.status === "running") return "正在跑";
+  if (job.status === "running") return "执行中";
   if (job.status === "queued" && job.runAfter) {
-    return `还会再试 · 下次 ${formatFullTime(job.runAfter)}`;
+    return `等待重试 · 下次 ${formatFullTime(job.runAfter)}`;
   }
-  return "还会再试";
+  return "等待执行";
 }
 
 export async function openFailedMail(id) {
+  if (state.role === "admin") state.mailScope = "all";
   await switchNav("inbox");
   await selectMail(id);
 }
@@ -290,7 +297,7 @@ export async function retrySingleJob(id) {
 }
 
 export async function dismissJob(id) {
-  if (!(await askConfirm("此步骤不再自动执行。邮件仍保留，之后可以重试。"))) return;
+  if (!(await askConfirm("搁置此步骤？邮件原文保留，后续仍可手动重试。"))) return;
   try {
     await request("/v1/jobs/" + encodeURIComponent(id) + "/dismiss", { method: "POST", body: {} });
     toast("已放过");
@@ -313,10 +320,10 @@ export async function retryMessage(messageId) {
 }
 
 export async function retryAllDead() {
-  if (!(await askConfirm("重新执行全部已停止的任务？已放过的任务保持不变。"))) return;
+  if (!(await askConfirm("重新排队全部已停止的任务？已放过的步骤保持不变。"))) return;
   try {
     const res = await request("/v1/jobs/retry-all", { method: "POST", body: {} });
-    toast(`已重新排队 ${res.count || 0} 个`);
+    toast(`已重新排队 ${res.count || 0} 个任务`);
     await loadDlqJobs(state.currentDlqScope);
     void updateDlqBadge();
   } catch (err) {
@@ -325,6 +332,10 @@ export async function retryAllDead() {
 }
 
 export async function updateDlqBadge() {
+  if (state.role !== "admin") {
+    if (badgeDlq) badgeDlq.hidden = true;
+    return;
+  }
   try {
     const res = await request("/v1/jobs/summary");
     const count = (res.dead || 0) + (res.failed || 0);
@@ -336,6 +347,6 @@ export async function updateDlqBadge() {
     }
     if (state.currentView === "dlq") paintDlqCounts(res);
   } catch {
-    // ignore
+    // 忽略瞬时异常
   }
 }

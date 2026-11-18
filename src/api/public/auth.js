@@ -1,6 +1,19 @@
-// 登录 / 登出 / 找回密码。
+// 登录、登出、密码找回与密码修改。
 import { state } from "./state.js";
-import { appEl, btnResetResend, loginEl, loginError, resetCodeStep, resetDigits, resetError, resetModal, resetPasswordStep } from "./dom.js";
+import {
+  appEl,
+  btnResetResend,
+  composeSheet,
+  loginEl,
+  loginError,
+  paletteModal,
+  resetCodeStep,
+  resetDigits,
+  resetError,
+  resetModal,
+  resetPasswordStep,
+  shortcutsModal,
+} from "./dom.js";
 import { request } from "./net.js";
 import { explain, toast } from "./ui.js";
 import { revealApp } from "./nav.js";
@@ -22,6 +35,8 @@ export async function signIn() {
     });
     document.querySelector("#password").value = "";
     state.csrfToken = null;
+    state.mailScope = "mine";
+    state.recipientFilter = "";
     await revealApp();
   } catch (err) {
     loginError.textContent = explain(err);
@@ -37,15 +52,23 @@ export async function signOut() {
   try {
     await request("/v1/logout", { method: "POST", body: {} });
   } catch {
-    // Session destroyed
+    // 会话已销毁
   }
   state.csrfToken = null;
+  state.userId = "";
+  state.username = "";
+  state.userMailboxes = [];
+  state.selectedIds.clear();
+  if (composeSheet) composeSheet.hidden = true;
+  if (paletteModal) paletteModal.hidden = true;
+  if (shortcutsModal) shortcutsModal.hidden = true;
   showLogin();
 }
 
 export function showLogin() {
   document.title = "登录";
   if (appEl) appEl.classList.remove("is-booting");
+  if (composeSheet) composeSheet.hidden = true;
   loginEl.hidden = false;
   loginEl.style.display = "flex";
   appEl.hidden = true;
@@ -70,7 +93,7 @@ export function bindResetDigits() {
       if (event.key === "Backspace" && !input.value && resetDigits[index - 1]) resetDigits[index - 1].focus();
     });
     input.addEventListener("paste", (event) => {
-      const text = (event.clipboardData && event.clipboardData.getData("text") || "").replace(/\D/g, "");
+      const text = ((event.clipboardData && event.clipboardData.getData("text")) || "").replace(/\D/g, "");
       if (!text) return;
       event.preventDefault();
       fillResetDigits(text);
@@ -81,7 +104,7 @@ export function bindResetDigits() {
 export function fillResetDigits(digits) {
   for (let i = 0; i < resetDigits.length; i += 1) resetDigits[i].value = digits[i] || "";
   const focusAt = Math.min(Math.max(digits.length, 1), resetDigits.length) - 1;
-  resetDigits[focusAt].focus();
+  resetDigits[focusAt]?.focus();
 }
 
 export function resetCodeValue() {
@@ -96,8 +119,8 @@ export async function startReset() {
   loginError.textContent = "";
   const username = document.querySelector("#username");
   const email = username ? username.value.trim() : "";
-  if (!email) {
-    loginError.textContent = "先填写邮箱";
+  if (!email || !email.includes("@")) {
+    loginError.textContent = "请先在账号栏填写找回邮箱地址";
     if (username) username.focus();
     return;
   }
@@ -137,7 +160,7 @@ export function showResetCode() {
 export function showResetPassword() {
   if (resetError) resetError.textContent = "";
   if (!/^\d{6}$/.test(resetCodeValue())) {
-    if (resetError) resetError.textContent = "请输入验证码";
+    if (resetError) resetError.textContent = "请输入 6 位数字验证码";
     return;
   }
   if (resetCodeStep) resetCodeStep.hidden = true;
@@ -169,15 +192,15 @@ export async function finishReset() {
     closeReset(false);
     const password = document.querySelector("#password");
     if (password) password.value = "";
-    loginError.textContent = "密码已更新，请登录";
+    loginError.textContent = "密码已更新，请重新登录";
   } catch (err) {
     if (err && err.status === 401) {
       showResetCode();
       clearResetDigits();
-      if (resetError) resetError.textContent = "验证码不正确";
+      if (resetError) resetError.textContent = "验证码无效或已过期";
       if (resetDigits[0]) resetDigits[0].focus();
     } else if (err && err.status === 400) {
-      if (resetError) resetError.textContent = "新密码至少 8 位";
+      if (resetError) resetError.textContent = "新密码至少 8 位且不可使用弱口令";
     } else if (resetError) {
       resetError.textContent = explain(err);
     }
@@ -227,6 +250,10 @@ export async function savePassword() {
   const next = document.querySelector("#password-next");
   const currentValue = current ? current.value : "";
   const nextValue = next ? next.value : "";
+  if (!currentValue) {
+    toast("请填写当前密码");
+    return;
+  }
   if (nextValue.length < 8) {
     toast("新密码至少 8 位");
     return;
@@ -236,8 +263,8 @@ export async function savePassword() {
     if (current) current.value = "";
     if (next) next.value = "";
     toast("密码已更新");
-  } catch {
-    toast("密码未更新");
+  } catch (err) {
+    toast("密码未更新: " + explain(err));
   }
 }
 

@@ -4,23 +4,45 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { openDatabase } from "../src/db/index.js";
-import { migrate } from "../src/db/migrate.js";
+import { migrate, splitSql } from "../src/db/migrate.js";
 import { claimJob, completeJob, enqueueJob, failJob, recoverRunning } from "../src/db/repos/jobs.js";
 import { findMessageBySha, insertDelivery, insertMessage } from "../src/db/repos/messages.js";
 import { migrationsDir } from "../src/paths.js";
 
-test("migration is idempotent and jobs are claimed atomically", () => {
+test("migration is idempotent, supports compound triggers, and jobs are claimed atomically", () => {
+  const statements = splitSql(
+    `CREATE TABLE t (x INTEGER);
+     CREATE TRIGGER tr AFTER INSERT ON t BEGIN
+       UPDATE t SET x = x + 1;
+       DELETE FROM t WHERE x > 10;
+     END;
+     INSERT INTO t VALUES (1);`,
+  );
+  assert.equal(statements.length, 3);
+
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-db-"));
   const db = openDatabase(path.join(dir, "mail.db"));
   try {
     const first = migrate(db, migrationsDir(), () => 1);
     const second = migrate(db, migrationsDir(), () => 2);
-    assert.deepEqual(first, ["001_init", "002_trash", "003_indexes", "004_settings", "005_display_names", "006_read", "007_sessions", "008_outbox", "009_dkim_alg", "010_thread"]);
+    assert.deepEqual(first, [
+      "001_init",
+      "002_trash",
+      "003_indexes",
+      "004_settings",
+      "005_display_names",
+      "006_read",
+      "007_sessions",
+      "008_outbox",
+      "009_dkim_alg",
+      "010_thread",
+      "011_multiuser",
+    ]);
     assert.deepEqual(second, []);
-    assert.equal(db.pragma("user_version", { simple: true }), 10);
+    assert.equal(db.pragma("user_version", { simple: true }), 11);
     db.pragma("user_version = 999");
     assert.throws(() => migrate(db, migrationsDir()), /newer than supported/);
-    db.pragma("user_version = 10");
+    db.pragma("user_version = 11");
     const journal = db.pragma("journal_mode", { simple: true });
     assert.equal(String(journal).toLowerCase(), "wal");
 
@@ -28,14 +50,36 @@ test("migration is idempotent and jobs are claimed atomically", () => {
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all() as Array<{ name: string }>;
     const names = tables.map((row) => row.name);
-    for (const required of ["messages", "deliveries", "attachments", "jobs", "mailbox_history", "audit_log", "purged_messages", "settings", "sessions", "outbox", "dkim_keys"]) {
+    for (const required of [
+      "messages",
+      "deliveries",
+      "attachments",
+      "jobs",
+      "mailbox_history",
+      "audit_log",
+      "purged_messages",
+      "settings",
+      "sessions",
+      "outbox",
+      "dkim_keys",
+      "users",
+      "user_mailboxes",
+      "user_messages",
+    ]) {
       assert.ok(names.includes(required), required);
     }
     const indexes = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
       .all() as Array<{ name: string }>;
     const indexNames = new Set(indexes.map((row) => row.name));
-    for (const required of ["idx_messages_from_lower", "idx_jobs_message_id", "idx_jobs_queued_created", "idx_mailbox_history_lower"]) {
+    for (const required of [
+      "idx_messages_from_lower",
+      "idx_jobs_message_id",
+      "idx_jobs_queued_created",
+      "idx_mailbox_history_lower",
+      "idx_users_username_lower",
+      "idx_user_messages_inbox",
+    ]) {
       assert.ok(indexNames.has(required), required);
     }
 

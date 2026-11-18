@@ -1,19 +1,109 @@
-// 收件箱、已拦截、垃圾桶：列表、详情面板、线程、分类、拦截与删除。
+// 邮件流与详情主视图：收件箱、星标、已拦截、垃圾桶、多选批量处理、星标、未读、OTP 提取与沙箱高度调节。
 import { state } from "./state.js";
-import { attachmentCountEl, attachmentsList, authChips, btnBlockMail, btnDeleteMail, btnDownloadEml, btnLoadImages, btnReclassify, btnReply, btnRestoreMail, btnTrashMail, detailFrom, detailModelVerdict, detailSubject, detailSummary, detailTime, detailTo, detailVerdictSelect, emptyTrashBtn, filterSelect, labelInput, listEl, mailDetailEl, mailEmptyEl, mailLoadingEl, mailSandbox, noticeEl, plainTextBody, queryInput, rawHeaders, sectionAttachments, sectionSignals, sectionUrls, signalsCountEl, signalsList, threadBox, threadList, trashQueryInput, urlCountEl, urlsList, verdictBar, verdictPercent } from "./dom.js";
+import {
+  attachmentCountEl,
+  attachmentsList,
+  authBox,
+  authChips,
+  batchBar,
+  batchCountEl,
+  btnBatchDelete,
+  btnBatchRestore,
+  btnBatchTrash,
+  btnBlockMail,
+  btnDeleteMail,
+  btnDownloadEml,
+  btnExpandPreview,
+  btnLoadImages,
+  btnReclassify,
+  btnReply,
+  btnRestoreMail,
+  btnStarDetail,
+  btnTrashMail,
+  btnUnreadMail,
+  detailFrom,
+  detailModelVerdict,
+  detailSubject,
+  detailSummary,
+  detailTime,
+  detailTo,
+  detailVerdictRow,
+  detailVerdictSelect,
+  emptyTrashBtn,
+  filterSelect,
+  labelInput,
+  listEl,
+  mailDetailEl,
+  mailEmptyEl,
+  mailLoadingEl,
+  mailSandbox,
+  noticeEl,
+  otpBanner,
+  otpCodeEl,
+  plainTextBody,
+  queryInput,
+  rawHeaders,
+  sandboxWrap,
+  sectionAttachments,
+  sectionSignals,
+  sectionUrls,
+  signalsCountEl,
+  signalsList,
+  threadBox,
+  threadList,
+  trashQueryInput,
+  urlCountEl,
+  urlsList,
+  verdictBar,
+  verdictPercent,
+} from "./dom.js";
 import { request } from "./net.js";
-import { askConfirm, createAuthChip, explain, findByDataId, formatRawHeaders, refreshUnread, setMobilePane, toast } from "./ui.js";
-import { extractEmail, formatBytes, formatFrom, formatFullTime, formatRecipients, formatShortTime, outboxStatus, replyAddress } from "./util.js";
+import {
+  askConfirm,
+  createAuthChip,
+  explain,
+  findByDataId,
+  formatRawHeaders,
+  makeSvgIcon,
+  refreshUnread,
+  setGlyph,
+  setMobilePane,
+  syncReadAllButtons,
+  toast,
+} from "./ui.js";
+import {
+  extractEmail,
+  extractOtpCode,
+  formatBytes,
+  formatFrom,
+  formatFullTime,
+  formatListSender,
+  formatRecipients,
+  formatShortRecipient,
+  formatShortTime,
+  outboxStatus,
+  replyAddress,
+} from "./util.js";
 import { showLogin } from "./auth.js";
 import { labelName, renderBlockList } from "./settings-view.js";
 
+function scopeQuerySuffix(prefix = "&") {
+  return state.role === "admin" && state.mailScope === "all" ? `${prefix}scope=all` : "";
+}
+
 export function syncListLabel() {
   if (!labelInput) return;
-  if (state.currentView === "inbox") labelInput.value = state.inboxPromoOnly ? "unsolicited-admin" : "legit";
-  else if (state.currentView === "spam") labelInput.value = filterSelect ? filterSelect.value : "not-legit";
+  if (state.currentView === "inbox") {
+    labelInput.value = state.inboxPromoOnly ? "unsolicited-admin" : "legit";
+  } else if (state.currentView === "spam") {
+    labelInput.value = filterSelect ? filterSelect.value : "not-legit";
+  } else {
+    labelInput.value = "";
+  }
 }
 
 export function staysInList(newLabel) {
+  if (state.currentView === "starred") return true;
   if (state.currentView === "inbox") return newLabel === (state.inboxPromoOnly ? "unsolicited-admin" : "legit");
   if (state.currentView !== "spam") return true;
   const filter = filterSelect ? filterSelect.value : "not-legit";
@@ -22,15 +112,158 @@ export function staysInList(newLabel) {
   return newLabel === filter;
 }
 
+export function clearSelection() {
+  state.selectedIds.clear();
+  state.lastCheckedId = null;
+  if (listEl) {
+    listEl.classList.remove("selecting");
+    for (const card of listEl.querySelectorAll(".mail-item")) {
+      card.classList.remove("checked");
+      const box = card.querySelector(".item-check");
+      if (box instanceof HTMLInputElement) box.checked = false;
+    }
+  }
+  syncBatchBar();
+}
+
+export function selectAllVisible() {
+  for (const item of state.currentMessages) {
+    state.selectedIds.add(item.id);
+  }
+  if (listEl) {
+    listEl.classList.toggle("selecting", state.selectedIds.size > 0);
+    for (const card of listEl.querySelectorAll(".mail-item")) {
+      const id = card.dataset.id;
+      const on = Boolean(id && state.selectedIds.has(id));
+      card.classList.toggle("checked", on);
+      const box = card.querySelector(".item-check");
+      if (box instanceof HTMLInputElement) box.checked = on;
+    }
+  }
+  syncBatchBar();
+}
+
+export function syncBatchBar() {
+  if (!batchBar) return;
+  const count = state.selectedIds.size;
+  const inMailStream =
+    state.currentView === "inbox" ||
+    state.currentView === "starred" ||
+    state.currentView === "spam" ||
+    state.currentView === "trash";
+  if (!inMailStream || count === 0) {
+    batchBar.hidden = true;
+    if (listEl) listEl.classList.remove("selecting");
+    return;
+  }
+  batchBar.hidden = false;
+  if (listEl) listEl.classList.add("selecting");
+  if (batchCountEl) batchCountEl.textContent = `已选 ${count} 封`;
+  const isTrash = state.currentView === "trash";
+  if (btnBatchTrash) btnBatchTrash.hidden = isTrash;
+  if (btnBatchRestore) btnBatchRestore.hidden = !isTrash;
+  if (btnBatchDelete) btnBatchDelete.hidden = !isTrash;
+}
+
+function toggleCardSelection(id, checked, shiftKey) {
+  if (shiftKey && state.lastCheckedId && state.lastCheckedId !== id) {
+    const ids = state.currentMessages.map((m) => m.id);
+    const a = ids.indexOf(state.lastCheckedId);
+    const b = ids.indexOf(id);
+    if (a >= 0 && b >= 0) {
+      const [start, end] = a < b ? [a, b] : [b, a];
+      for (let i = start; i <= end; i += 1) {
+        const cur = ids[i];
+        if (!cur) continue;
+        if (checked) state.selectedIds.add(cur);
+        else state.selectedIds.delete(cur);
+      }
+    }
+  } else if (checked) {
+    state.selectedIds.add(id);
+  } else {
+    state.selectedIds.delete(id);
+  }
+  state.lastCheckedId = id;
+  if (listEl) {
+    for (const card of listEl.querySelectorAll(".mail-item")) {
+      const cid = card.dataset.id;
+      const isChecked = Boolean(cid && state.selectedIds.has(cid));
+      card.classList.toggle("checked", isChecked);
+      const box = card.querySelector(".item-check");
+      if (box instanceof HTMLInputElement) box.checked = isChecked;
+    }
+  }
+  syncBatchBar();
+}
+
+export async function runBatchAction(action) {
+  const ids = [...state.selectedIds];
+  if (ids.length === 0) return;
+  if (action === "delete") {
+    if (!(await askConfirm(`永久删除选中的 ${ids.length} 封邮件？此操作无法撤销。`))) return;
+  }
+  try {
+    const qs = scopeQuerySuffix("?");
+    const res = await request("/v1/messages/batch" + qs, {
+      method: "POST",
+      body: { ids, action },
+    });
+    clearSelection();
+    toast(`已处理 ${res.count || 0} 封邮件`);
+    void refreshUnread();
+    if (state.currentView === "trash") await reloadTrash();
+    else await reloadMessages();
+  } catch (err) {
+    toast("批量操作失败: " + explain(err));
+  }
+}
+
+export async function handleMarkAllRead(viewMode) {
+  const view =
+    viewMode ||
+    (state.currentView === "spam"
+      ? "spam"
+      : state.inboxPromoOnly
+        ? "promo"
+        : "inbox");
+  try {
+    const qs = scopeQuerySuffix("?");
+    const body = { view };
+    if (state.recipientFilter) body.to = state.recipientFilter;
+    const res = await request("/v1/messages/read-all" + qs, {
+      method: "POST",
+      body,
+    });
+    for (const item of state.currentMessages) {
+      item.read = true;
+    }
+    if (listEl) {
+      for (const card of listEl.querySelectorAll(".mail-item")) {
+        card.classList.remove("unread");
+        card.querySelector(".unread-dot")?.remove();
+      }
+    }
+    if (state.openDetail) state.openDetail.read = true;
+    syncUnreadButton();
+    await refreshUnread();
+    toast(res.count ? `已将 ${res.count} 封邮件标为已读` : "当前列表均已读");
+  } catch (err) {
+    toast("操作失败: " + explain(err));
+  }
+}
+
 export async function reloadMessages() {
   const token = ++state.listLoadToken;
   state.cursor = null;
   state.loadingMore = false;
+  clearSelection();
   listEl.replaceChildren();
   noticeEl.textContent = "";
   const ok = await loadMessagesPage(true, token);
   if (ok === false) return false;
   if (token !== state.listLoadToken) return;
+  syncReadAllButtons();
   maybeLoadMore();
 }
 
@@ -38,6 +271,7 @@ export async function reloadTrash() {
   const token = ++state.listLoadToken;
   state.cursor = null;
   state.loadingMore = false;
+  clearSelection();
   listEl.replaceChildren();
   noticeEl.textContent = "";
   await loadMessagesPage(true, token);
@@ -46,7 +280,14 @@ export async function reloadTrash() {
 }
 
 export function maybeLoadMore() {
-  if (state.currentView !== "inbox" && state.currentView !== "spam" && state.currentView !== "trash") return;
+  if (
+    state.currentView !== "inbox" &&
+    state.currentView !== "starred" &&
+    state.currentView !== "spam" &&
+    state.currentView !== "trash"
+  ) {
+    return;
+  }
   if (!state.cursor || state.loadingMore) return;
   const remaining = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
   if (remaining < 280) void loadMoreMessages();
@@ -54,7 +295,14 @@ export function maybeLoadMore() {
 
 export async function loadMoreMessages() {
   if (!state.cursor || state.loadingMore) return;
-  if (state.currentView !== "inbox" && state.currentView !== "spam" && state.currentView !== "trash") return;
+  if (
+    state.currentView !== "inbox" &&
+    state.currentView !== "starred" &&
+    state.currentView !== "spam" &&
+    state.currentView !== "trash"
+  ) {
+    return;
+  }
   const token = state.listLoadToken;
   const previous = state.cursor;
   const beforeCount = state.currentMessages.length;
@@ -68,12 +316,23 @@ export async function loadMoreMessages() {
   if (state.cursor && state.cursor !== previous && state.currentMessages.length > beforeCount) maybeLoadMore();
 }
 
-export async function loadMessagesPage(replace, token) {
+export function buildStreamQueryParams(replace) {
   const params = new URLSearchParams();
+  if (state.role === "admin" && state.mailScope === "all") {
+    params.set("scope", "all");
+  }
+  if (state.recipientFilter) {
+    params.set("to", state.recipientFilter);
+  }
   if (state.currentView === "trash") {
     params.set("trashed", "true");
     const tq = trashQueryInput ? trashQueryInput.value.trim() : "";
     if (tq) params.set("q", tq);
+  } else if (state.currentView === "starred") {
+    params.set("trashed", "false");
+    params.set("starred", "true");
+    const q = queryInput ? queryInput.value.trim() : "";
+    if (q) params.set("q", q);
   } else {
     params.set("trashed", "false");
     syncListLabel();
@@ -83,7 +342,11 @@ export async function loadMessagesPage(replace, token) {
   }
   params.set("limit", "40");
   if (!replace && state.cursor) params.set("cursor", state.cursor);
+  return params;
+}
 
+export async function loadMessagesPage(replace, token) {
+  const params = buildStreamQueryParams(replace);
   try {
     const page = await request("/v1/messages?" + params.toString());
     if (token !== state.listLoadToken) return;
@@ -92,7 +355,9 @@ export async function loadMessagesPage(replace, token) {
     else state.currentMessages = state.currentMessages.concat(items);
 
     if (replace && items.length === 0) {
-      noticeEl.textContent = state.currentView === "trash" ? "垃圾桶空空如也" : "没有匹配的邮件";
+      if (state.currentView === "trash") noticeEl.textContent = "垃圾桶为空";
+      else if (state.currentView === "starred") noticeEl.textContent = "暂无星标邮件";
+      else noticeEl.textContent = "没有匹配的邮件";
     }
 
     for (const item of items) {
@@ -100,10 +365,10 @@ export async function loadMessagesPage(replace, token) {
     }
     state.cursor = page.nextCursor || null;
 
-    // 桌面端顺手打开第一封。窄屏留在列表，避免一进来就盖住收件流。
-    // 不等正文。启动时壳子在列表画完就揭开，详情自己补上。
     if (replace && items.length > 0 && !state.selectedMailId && !state.skipFirstOpen) {
-      void selectMail(items[0].id, { keepListOnNarrow: true });
+      if (window.matchMedia("(min-width: 1036px)").matches) {
+        void selectMail(items[0].id, { keepListOnNarrow: true });
+      }
     }
     return true;
   } catch (err) {
@@ -122,21 +387,68 @@ export function createMailListItem(item) {
   card.dataset.id = item.id;
   if (!item.read) card.classList.add("unread");
   if (item.id === state.selectedMailId) card.classList.add("selected");
+  if (state.selectedIds.has(item.id)) card.classList.add("checked");
 
   const line1 = document.createElement("div");
   line1.className = "item-line1";
 
+  const senderGroup = document.createElement("div");
+  senderGroup.className = "item-sender-group";
+
+  const check = document.createElement("input");
+  check.type = "checkbox";
+  check.className = "item-check";
+  check.checked = state.selectedIds.has(item.id);
+  check.setAttribute("aria-label", "选择邮件");
+  check.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    toggleCardSelection(item.id, check.checked, ev.shiftKey);
+  });
+  senderGroup.append(check);
+
+  if (!item.read) {
+    const dot = document.createElement("span");
+    dot.className = "unread-dot";
+    senderGroup.append(dot);
+  }
+
   const from = document.createElement("span");
   from.className = "item-from";
   const rawFrom = item.from || item.envelopeFrom || "";
-  from.textContent = rawFrom ? formatFrom(rawFrom) : "没有发件人";
+  from.textContent = rawFrom ? formatListSender(rawFrom) : "没有发件人";
   if (rawFrom) from.title = rawFrom;
+  senderGroup.append(from);
+
+  const rightMeta = document.createElement("div");
+  rightMeta.className = "item-right-meta";
+
+  if (item.attachmentCount && item.attachmentCount > 0) {
+    const clip = document.createElement("span");
+    clip.className = "item-clip";
+    clip.title = `包含 ${item.attachmentCount} 个附件`;
+    clip.append(makeSvgIcon("clip"));
+    rightMeta.append(clip);
+  }
 
   const time = document.createElement("span");
   time.className = "item-time";
   time.textContent = formatShortTime(item.receivedAt);
+  rightMeta.append(time);
 
-  line1.append(from, time);
+  if (state.mailScope !== "all") {
+    const starBtn = document.createElement("button");
+    starBtn.type = "button";
+    starBtn.className = "item-star-btn" + (item.starred ? " starred" : "");
+    starBtn.title = item.starred ? "取消星标" : "标为星标";
+    starBtn.append(makeSvgIcon(item.starred ? "star-fill" : "star"));
+    starBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      void toggleMailStar(item.id, !item.starred);
+    });
+    rightMeta.append(starBtn);
+  }
+
+  line1.append(senderGroup, rightMeta);
 
   const subject = document.createElement("p");
   subject.className = "item-subject";
@@ -145,47 +457,51 @@ export function createMailListItem(item) {
   const line3 = document.createElement("div");
   line3.className = "item-line3";
 
-  const snippet = document.createElement("span");
-  snippet.className = "item-snippet";
-  // 列表先不放摘要。需要时把下一行接回去。
-  // snippet.textContent = item.summary || "";
-  snippet.hidden = true;
+  const rcptText = item.recipient ? formatShortRecipient(item.recipient) : "";
+  if (rcptText) {
+    const rcptChip = document.createElement("span");
+    rcptChip.className = "item-rcpt-chip";
+    rcptChip.textContent = rcptText;
+    rcptChip.title = item.recipient;
+    line3.append(rcptChip);
+  }
 
+  const named = Boolean(item.label) && item.label !== "legit";
   const tag = document.createElement("span");
   tag.className = "verdict-tag";
   tag.dataset.label = item.label || "none";
-  // 列表先不显示置信度，正常也不显示标签。需要时把下面两行接回去。
-  // const confText = item.manualOverride
-  //   ? " 已改"
-  //   : item.label && item.label !== "legit" && typeof item.confidence === "number"
-  //     ? ` ${Math.round(item.confidence * 100)}%`
-  //     : "";
-  // tag.textContent = labelName(item.label) + confText;
-  const named = Boolean(item.label) && item.label !== "legit";
   tag.hidden = !named;
   if (item.manualOverride) tag.dataset.manual = "1";
-  tag.textContent = named ? labelName(item.label) + (item.manualOverride ? " 已改" : "") : "";
+  tag.textContent = named ? labelName(item.label) + (item.manualOverride ? " · 已改" : "") : "";
+  line3.append(tag);
 
-  line3.hidden = !named;
-  line3.append(snippet, tag);
+  line3.hidden = !rcptText && !named;
 
   card.append(line1, subject, line3);
   card.addEventListener("click", () => void selectMail(item.id));
   return card;
 }
 
-// 称呼和分类名可能比列表晚到。补上已经画出来的行，避免先闪一截裸地址。
 export function refreshShownNames() {
-  if (state.currentView !== "inbox" && state.currentView !== "spam" && state.currentView !== "trash") return;
+  if (
+    state.currentView !== "inbox" &&
+    state.currentView !== "starred" &&
+    state.currentView !== "spam" &&
+    state.currentView !== "trash"
+  ) {
+    return;
+  }
   if (listEl) {
     for (const card of listEl.querySelectorAll(".mail-item")) {
       const from = card.querySelector(".item-from");
-      if (from instanceof HTMLElement && from.title) from.textContent = formatFrom(from.title);
+      if (from instanceof HTMLElement && from.title) from.textContent = formatListSender(from.title);
+      const rcpt = card.querySelector(".item-rcpt-chip");
+      if (rcpt instanceof HTMLElement && rcpt.title) rcpt.textContent = formatShortRecipient(rcpt.title);
       const tag = card.querySelector(".verdict-tag");
       if (!(tag instanceof HTMLElement)) continue;
       const label = tag.dataset.label || "";
       if (!label || label === "none" || label === "legit") continue;
-      tag.textContent = labelName(label) + (tag.dataset.manual ? " 已改" : "");
+      tag.textContent = labelName(label) + (tag.dataset.manual ? " · 已改" : "");
     }
   }
   if (detailFrom && detailFrom.title) detailFrom.textContent = formatFrom(detailFrom.title);
@@ -194,14 +510,142 @@ export function refreshShownNames() {
   }
 }
 
+function syncStarDetailButton(starred) {
+  if (!btnStarDetail) return;
+  btnStarDetail.hidden = Boolean(state.readingSentId) || state.mailScope === "all";
+  btnStarDetail.classList.toggle("starred", Boolean(starred));
+  setGlyph(btnStarDetail, starred ? "star-fill" : "star");
+}
+
+function syncUnreadButton() {
+  if (!btnUnreadMail) return;
+  if (!state.openDetail || state.readingSentId) {
+    btnUnreadMail.hidden = true;
+    return;
+  }
+  btnUnreadMail.hidden = false;
+  btnUnreadMail.textContent = state.openDetail.read === false ? "标为已读" : "标为未读";
+}
+
+export async function toggleMailStar(id, nextStarred) {
+  const item = state.currentMessages.find((m) => m.id === id);
+  const prev = item ? Boolean(item.starred) : false;
+  const target = nextStarred === undefined ? !prev : Boolean(nextStarred);
+
+  if (item) item.starred = target;
+  if (state.openDetail && state.openDetail.id === id) {
+    state.openDetail.starred = target;
+    syncStarDetailButton(target);
+  }
+  const card = findByDataId(listEl, ".mail-item", id);
+  if (card) {
+    const btn = card.querySelector(".item-star-btn");
+    if (btn) {
+      btn.classList.toggle("starred", target);
+      btn.replaceChildren(makeSvgIcon(target ? "star-fill" : "star"));
+    }
+  }
+
+  try {
+    await request("/v1/messages/" + encodeURIComponent(id) + "/star", {
+      method: "POST",
+      body: { starred: target },
+    });
+    if (state.currentView === "starred" && !target) {
+      card?.remove();
+      state.currentMessages = state.currentMessages.filter((m) => m.id !== id);
+    }
+  } catch (err) {
+    if (item) item.starred = prev;
+    toast("星标更新失败: " + explain(err));
+  }
+}
+
+export async function toggleSelectedReadState() {
+  if (!state.selectedMailId || state.readingSentId || !state.openDetail) return;
+  const id = state.selectedMailId;
+  const qs = scopeQuerySuffix("?");
+  const currentlyRead = state.openDetail.read !== false;
+  const card = findByDataId(listEl, ".mail-item", id);
+  const known = state.currentMessages.find((m) => m.id === id);
+
+  try {
+    if (currentlyRead) {
+      await request("/v1/messages/" + encodeURIComponent(id) + "/unread" + qs, { method: "POST", body: {} });
+      state.openDetail.read = false;
+      if (known) known.read = false;
+      if (card) {
+        card.classList.add("unread");
+        const group = card.querySelector(".item-sender-group");
+        if (group && !group.querySelector(".unread-dot")) {
+          const dot = document.createElement("span");
+          dot.className = "unread-dot";
+          const fromEl = group.querySelector(".item-from");
+          if (fromEl) group.insertBefore(dot, fromEl);
+          else group.append(dot);
+        }
+      }
+      toast("已标为未读");
+    } else {
+      await request("/v1/messages/" + encodeURIComponent(id) + "/read" + qs, { method: "POST", body: {} });
+      state.openDetail.read = true;
+      if (known) known.read = true;
+      if (card) {
+        card.classList.remove("unread");
+        card.querySelector(".unread-dot")?.remove();
+      }
+      toast("已标为已读");
+    }
+    syncUnreadButton();
+    void refreshUnread();
+  } catch (err) {
+    toast("状态修改失败: " + explain(err));
+  }
+}
+
+export function togglePreviewHeight() {
+  state.previewExpanded = !state.previewExpanded;
+  if (sandboxWrap) {
+    sandboxWrap.classList.toggle("is-expanded", state.previewExpanded);
+    if (state.previewExpanded) {
+      sandboxWrap.style.height = "980px";
+    } else {
+      applyEstimatedSandboxHeight(state.currentMailHtml, state.currentMailPlain);
+    }
+  }
+  if (btnExpandPreview) {
+    btnExpandPreview.textContent = state.previewExpanded ? "标准高度" : "展开高度";
+  }
+}
+
+function applyEstimatedSandboxHeight(html, plain) {
+  if (!sandboxWrap || state.previewExpanded) return;
+  const textLen = String(plain || "").trim().length;
+  const htmlLen = String(html || "").trim().length;
+  let px = 480;
+  if (htmlLen === 0 && textLen < 220) px = 250;
+  else if (htmlLen < 900 && textLen < 350) px = 320;
+  else if (htmlLen > 12000 || textLen > 2400) px = 640;
+  sandboxWrap.style.height = `${px}px`;
+}
+
 export async function selectMail(id, options = {}) {
   const token = ++state.mailLoadToken;
   state.selectedMailId = id;
   state.readingSentId = null;
   state.openDetail = null;
+  state.currentOtpCode = "";
+  state.previewExpanded = false;
+  if (sandboxWrap) sandboxWrap.classList.remove("is-expanded");
+  if (btnExpandPreview) btnExpandPreview.textContent = "展开高度";
+  if (otpBanner) otpBanner.hidden = true;
+
   showInboundExtras(true);
+  if (detailVerdictRow) detailVerdictRow.hidden = false;
   if (detailVerdictSelect) detailVerdictSelect.hidden = false;
+  if (authBox) authBox.hidden = false;
   if (btnReply) btnReply.hidden = true;
+  if (btnUnreadMail) btnUnreadMail.hidden = true;
   if (threadBox) threadBox.hidden = true;
   state.allowExternalImages = false;
   if (btnLoadImages) {
@@ -213,11 +657,9 @@ export async function selectMail(id, options = {}) {
   if (guard) guard.textContent = "";
   if (!options.keepListOnNarrow) setMobilePane("detail");
 
-  // 默认折叠威胁指纹与外链
   if (sectionSignals) sectionSignals.open = false;
   if (sectionUrls) sectionUrls.open = false;
 
-  // 更新左侧列表的高亮状态。已读先改列表，不等正文；已拦截的信往往更大，不该把已读拖在正文后面。
   document.querySelectorAll(".mail-item").forEach((el) => {
     if (el.dataset.id === id) el.classList.add("selected");
     else el.classList.remove("selected");
@@ -230,9 +672,15 @@ export async function selectMail(id, options = {}) {
   mailSandbox.removeAttribute("srcdoc");
 
   try {
-    const detail = await request("/v1/messages/" + encodeURIComponent(id));
+    const qs = scopeQuerySuffix("?");
+    const detail = await request("/v1/messages/" + encodeURIComponent(id) + qs);
     if (token !== state.mailLoadToken) return;
+    detail.read = true;
+    state.openDetail = detail;
+
     if (detailSubject) detailSubject.textContent = detail.subject || "(无主题)";
+    syncStarDetailButton(detail.starred);
+
     const rawFrom = detail.from || detail.envelopeFrom || "";
     if (detailFrom) {
       detailFrom.textContent = rawFrom ? formatFrom(rawFrom) : "没有发件人";
@@ -245,8 +693,9 @@ export async function selectMail(id, options = {}) {
     if (detailTime) detailTime.textContent = formatFullTime(detail.receivedAt);
 
     state.currentFromAddress = extractEmail(rawFrom);
-    state.openDetail = detail;
     if (btnReply) btnReply.hidden = !replyAddress(detail);
+    syncUnreadButton();
+
     const isTrashed = Boolean(detail.trashedAt || state.currentView === "trash");
     if (btnBlockMail) btnBlockMail.hidden = !state.currentFromAddress;
     if (btnTrashMail) btnTrashMail.hidden = isTrashed;
@@ -266,7 +715,8 @@ export async function selectMail(id, options = {}) {
     if (confidenceChip) confidenceChip.hidden = !showProb;
     if (detailModelVerdict) {
       if (detail.aiResult?.manualOverride) {
-        detailModelVerdict.textContent = `(已改分类，原先为 ${labelName(detail.aiResult.originalLabel)})`;
+        const orig = detail.aiResult.originalLabel ? `，原为 ${labelName(detail.aiResult.originalLabel)}` : "";
+        detailModelVerdict.textContent = `(已手动调整${orig})`;
       } else if (showProb) {
         detailModelVerdict.textContent = `(模型 ${Math.round(confidence * 100)}%)`;
       } else {
@@ -277,6 +727,14 @@ export async function selectMail(id, options = {}) {
     if (verdictBar) verdictBar.style.width = Math.round(confidence * 100) + "%";
     if (verdictPercent) verdictPercent.textContent = Math.round(confidence * 100) + "%";
     if (detailSummary) detailSummary.textContent = detail.aiResult?.summary || "尚未分类";
+
+    const otp = extractOtpCode(detail.subject, detail.parsed?.text);
+    state.currentOtpCode = otp;
+    if (otpBanner && otpCodeEl) {
+      otpCodeEl.textContent = otp;
+      otpBanner.hidden = !otp;
+    }
+
     const detailTags = document.querySelector("#detail-tags");
     if (detailTags) {
       detailTags.replaceChildren();
@@ -290,13 +748,12 @@ export async function selectMail(id, options = {}) {
       }
     }
 
-    // 威胁信号指纹
     signalsList.replaceChildren();
     const signals = detail.aiResult?.signals || [];
     if (signalsCountEl) signalsCountEl.textContent = String(signals.length);
     if (signals.length === 0) {
       const emptySig = document.createElement("span");
-      emptySig.className = "text-dim";
+      emptySig.className = "muted";
       emptySig.textContent = "没有额外依据";
       signalsList.append(emptySig);
     } else {
@@ -314,13 +771,12 @@ export async function selectMail(id, options = {}) {
       }
     }
 
-    // 正文提取外链
     urlsList.replaceChildren();
     const urls = detail.parsed?.urls || [];
     urlCountEl.textContent = String(urls.length);
     if (urls.length === 0) {
       const emptyUrl = document.createElement("span");
-      emptyUrl.className = "text-dim";
+      emptyUrl.className = "muted";
       emptyUrl.textContent = "没有链接";
       urlsList.append(emptyUrl);
     } else {
@@ -337,13 +793,12 @@ export async function selectMail(id, options = {}) {
       }
     }
 
-    // 附件清单
     attachmentsList.replaceChildren();
     const attachments = detail.attachments || [];
     attachmentCountEl.textContent = String(attachments.length);
     if (attachments.length === 0) {
       const emptyAtt = document.createElement("span");
-      emptyAtt.className = "text-dim";
+      emptyAtt.className = "muted";
       emptyAtt.textContent = "没有附件";
       attachmentsList.append(emptyAtt);
     } else {
@@ -363,11 +818,9 @@ export async function selectMail(id, options = {}) {
       }
     }
 
-    // 下载 EML 链接
-    btnDownloadEml.href = "/v1/messages/" + encodeURIComponent(id) + "/raw";
+    btnDownloadEml.href = "/v1/messages/" + encodeURIComponent(id) + "/raw" + qs;
     btnDownloadEml.setAttribute("download", `${detail.sha256 || id}.eml`);
 
-    // 邮件来源鉴权标签
     authChips.replaceChildren();
     if (detail.authResult) {
       const auth = detail.authResult;
@@ -376,15 +829,14 @@ export async function selectMail(id, options = {}) {
       authChips.append(createAuthChip("DMARC", auth.dmarc));
     }
 
-    // 纯文本正文与原始头
     state.currentMailPlain = detail.parsed?.text || "";
     plainTextBody.textContent = state.currentMailPlain || "(正文为空)";
     rawHeaders.textContent = formatRawHeaders(detail);
+    applyEstimatedSandboxHeight("", state.currentMailPlain);
+
     if (mailLoadingEl) mailLoadingEl.hidden = true;
     mailDetailEl.hidden = false;
 
-    // 加载 HTML 与真正的 RFC822 信头。信头随 HTML 一起回来，省一次请求；
-    // 只有 HTML 里没带信头时才单独拉一次。不等这些请求，列表先露面。
     const htmlReady = loadMailHtml(id, token);
     void (async () => {
       const headers = await htmlReady;
@@ -398,7 +850,6 @@ export async function selectMail(id, options = {}) {
     void loadThread(id, token);
   } catch (err) {
     if (token !== state.mailLoadToken) return;
-    console.error("selectMail error:", err);
     if (mailLoadingEl) mailLoadingEl.hidden = true;
     mailDetailEl.hidden = false;
     if (btnReply) btnReply.hidden = true;
@@ -410,22 +861,25 @@ export async function selectMail(id, options = {}) {
 
 export async function loadMailHtml(id, token) {
   try {
-    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/html");
+    const qs = scopeQuerySuffix("?");
+    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/html" + qs);
     if (token !== state.mailLoadToken) return null;
     state.currentMailHtml = res.html || "";
+    applyEstimatedSandboxHeight(state.currentMailHtml, state.currentMailPlain);
     renderSandboxHtml(state.currentMailHtml);
     return typeof res.headers === "string" ? res.headers : null;
   } catch {
     if (token !== state.mailLoadToken) return null;
-    state.currentMailHtml = "<p style='color:#888;padding:20px'>没有 HTML 正文</p>";
-    renderSandboxHtml(state.currentMailHtml);
+    state.currentMailHtml = "";
+    renderSandboxHtml("");
     return null;
   }
 }
 
 export async function loadRawHeaders(id, token, detail) {
   try {
-    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/headers");
+    const qs = scopeQuerySuffix("?");
+    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/headers" + qs);
     if (token !== state.mailLoadToken) return;
     rawHeaders.textContent = res.headers && res.headers.trim() ? res.headers : formatRawHeaders(detail);
   } catch {
@@ -501,7 +955,8 @@ export function mailBringsItsOwnCanvas(html) {
 
 export async function loadThread(id, token) {
   try {
-    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/thread");
+    const qs = scopeQuerySuffix("?");
+    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/thread" + qs);
     if (token !== state.mailLoadToken || state.selectedMailId !== id) return;
     renderThread(Array.isArray(res.items) ? res.items : []);
   } catch {
@@ -527,7 +982,7 @@ export function renderThread(items) {
     row.className = "thread-row" + (current ? " current" : "");
     const who = document.createElement("span");
     who.className = "thread-who";
-    who.textContent = item.from || (sent ? "已发出" : "没有发件人");
+    who.textContent = item.from ? formatListSender(item.from) : sent ? "已发出" : "没有发件人";
     const subject = document.createElement("span");
     subject.className = "thread-subject";
     subject.textContent = item.subject || "(无主题)";
@@ -572,25 +1027,32 @@ export async function openSentLetter(id) {
     if (token !== state.mailLoadToken) return;
     state.readingSentId = null;
     renderThread(state.threadItems);
-    toast("打开发出的信失败: " + explain(err));
+    toast("打开发信记录失败: " + explain(err));
   }
 }
 
 export function paintSentLetter(letter) {
   showInboundExtras(false);
+  if (otpBanner) otpBanner.hidden = true;
+  if (btnStarDetail) btnStarDetail.hidden = true;
+  if (detailVerdictRow) detailVerdictRow.hidden = false;
   if (detailVerdictSelect) detailVerdictSelect.hidden = true;
+  if (authBox) authBox.hidden = true;
   const confidenceChip = document.querySelector(".confidence-chip");
   if (confidenceChip) confidenceChip.hidden = true;
   const detailTags = document.querySelector("#detail-tags");
   if (detailTags) detailTags.replaceChildren();
   state.openDetail = null;
   if (btnReply) btnReply.hidden = true;
+  if (btnUnreadMail) btnUnreadMail.hidden = true;
   if (btnReclassify) btnReclassify.hidden = true;
   if (btnBlockMail) btnBlockMail.hidden = true;
   if (btnTrashMail) btnTrashMail.hidden = true;
   if (btnRestoreMail) btnRestoreMail.hidden = true;
   if (btnDeleteMail) btnDeleteMail.hidden = true;
+
   const status = outboxStatus(letter);
+  const dkimInfo = letter.dkim === "signed" ? " · 已签 DKIM" : " · 未签 DKIM";
   if (detailSubject) detailSubject.textContent = letter.subject || "(无主题)";
   if (detailFrom) {
     detailFrom.textContent = letter.from || "没有发件人";
@@ -601,9 +1063,17 @@ export function paintSentLetter(letter) {
     detailTo.title = Array.isArray(letter.to) ? letter.to.join(", ") : "";
   }
   if (detailTime) detailTime.textContent = formatFullTime(letter.createdAt);
-  if (detailModelVerdict) detailModelVerdict.textContent = status;
+  if (detailModelVerdict) detailModelVerdict.textContent = status + dkimInfo;
+
+  const attNote =
+    Array.isArray(letter.attachments) && letter.attachments.length > 0
+      ? ` · 附件：${letter.attachments.join("、")}`
+      : "";
   if (detailSummary) {
-    detailSummary.textContent = letter.error && letter.status !== "sent" ? status + "。" + letter.error : status;
+    detailSummary.textContent =
+      letter.error && letter.status !== "sent"
+        ? `${status}${dkimInfo}${attNote}。原因：${letter.error}`
+        : `${status}${dkimInfo}${attNote}`;
   }
   if (signalsList) signalsList.replaceChildren();
   if (urlsList) urlsList.replaceChildren();
@@ -618,6 +1088,7 @@ export function paintSentLetter(letter) {
     btnDownloadEml.setAttribute("download", "sent.eml");
   }
   state.allowExternalImages = false;
+  applyEstimatedSandboxHeight("", state.currentMailPlain);
   renderSandboxHtml("");
   switchTab("ai");
   mailEmptyEl.hidden = true;
@@ -633,26 +1104,25 @@ export function renderSandboxHtml(html) {
   const unstyled = !mailBringsItsOwnCanvas(body);
   const imgSrc = shown ? "http: https: data: cid:" : "data: cid:";
   const isDark = document.documentElement.getAttribute("data-theme") !== "light";
-  const pageBg = isDark ? "#0a0a0a" : "#ffffff";
-  const textColor = isDark ? "#e5e5e5" : "#111111";
-  const linkColor = isDark ? "#93c5fd" : "#1d4ed8";
-  const trackBg = unstyled ? pageBg : (isDark ? "#18181b" : "#f1f5f9");
-  const thumbBg = isDark ? "#52525b" : "#cbd5e1";
-  const thumbHover = isDark ? "#71717a" : "#94a3b8";
-  const thumbActive = isDark ? "#9ca3af" : "#64748b";
+  const pageBg = isDark ? "#121216" : "#ffffff";
+  const textColor = isDark ? "#e4e4e7" : "#111827";
+  const linkColor = isDark ? "#8ab4f8" : "#0b57d0";
+  const trackBg = unstyled ? pageBg : isDark ? "#18181b" : "#f1f5f9";
+  const thumbBg = isDark ? "#3f3f46" : "#cbd5e1";
+  const thumbHover = isDark ? "#52525b" : "#94a3b8";
   const canvasCss = unstyled
     ? `html,body{background:${pageBg};color:${textColor};}a{color:${linkColor};}`
     : `html{background:${pageBg};}`;
-  const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${thumbBg} ${trackBg};}::-webkit-scrollbar{width:10px;height:10px;}::-webkit-scrollbar-track{background:${trackBg};}::-webkit-scrollbar-thumb{background:${thumbBg};border-radius:5px;border:2px solid ${trackBg};}::-webkit-scrollbar-thumb:hover{background:${thumbHover};}::-webkit-scrollbar-thumb:active{background:${thumbActive};}::-webkit-scrollbar-corner{background:${trackBg};}::-webkit-resizer{background:transparent;}`;
+  const scrollbarCss = `:root{color-scheme:${isDark ? "dark" : "light"};}*{scrollbar-width:thin;scrollbar-color:${thumbBg} ${trackBg};}::-webkit-scrollbar{width:9px;height:9px;}::-webkit-scrollbar-track{background:${trackBg};}::-webkit-scrollbar-thumb{background:${thumbBg};border-radius:5px;border:2px solid ${trackBg};}::-webkit-scrollbar-thumb:hover{background:${thumbHover};}::-webkit-scrollbar-corner{background:${trackBg};}`;
   const linked = openMailLinks(body);
   const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src data:;">`;
-  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:sans-serif;font-size:16px;line-height:1.6;padding:18px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${linked}</body></html>`;
+  const doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${csp}<style>${scrollbarCss}html,body{margin:0;}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:15px;line-height:1.65;padding:18px 20px;word-break:break-word;}${canvasCss}img{max-width:100%;height:auto;}</style></head><body>${linked}</body></html>`;
   mailSandbox.setAttribute("srcdoc", doc);
   const hint = document.querySelector("#preview-guard");
   if (hint) {
     hint.textContent = shown
-      ? "共 " + remoteCount + " 处外链资源已加载"
-      : "共 " + remoteCount + " 处外链资源未加载";
+      ? `共 ${remoteCount} 处外链资源已加载`
+      : `共 ${remoteCount} 处外链资源未加载`;
   }
   if (btnLoadImages) {
     btnLoadImages.hidden = remoteCount === 0;
@@ -695,8 +1165,27 @@ export function navigateMail(delta) {
   if (state.currentMessages.length === 0) return;
   const idx = state.currentMessages.findIndex((m) => m.id === state.selectedMailId);
   const nextIdx = Math.max(0, Math.min(state.currentMessages.length - 1, idx + delta));
-  if (nextIdx !== idx) {
+  if (nextIdx !== idx && state.currentMessages[nextIdx]) {
     void selectMail(state.currentMessages[nextIdx].id);
+  }
+}
+
+function advanceAfterRemove(id) {
+  state.selectedIds.delete(id);
+  syncBatchBar();
+  const card = findByDataId(listEl, ".mail-item", id);
+  if (card) card.remove();
+  state.currentMessages = state.currentMessages.filter((m) => m.id !== id);
+  const nextCard = listEl.querySelector(".mail-item");
+  if (nextCard && nextCard.getAttribute("data-id")) {
+    void selectMail(nextCard.getAttribute("data-id"));
+  } else {
+    state.selectedMailId = null;
+    state.currentFromAddress = "";
+    state.openDetail = null;
+    mailDetailEl.hidden = true;
+    mailEmptyEl.hidden = false;
+    setMobilePane("list");
   }
 }
 
@@ -704,30 +1193,16 @@ export async function handleBlockMail() {
   if (!state.selectedMailId || !state.currentFromAddress) return;
   const email = state.currentFromAddress;
   const id = state.selectedMailId;
-  if (!(await askConfirm(`把 ${email} 加入黑名单？之后该地址来的信直接进垃圾桶。`))) return;
+  if (!(await askConfirm(`将 ${email} 加入黑名单？此后该地址的新来信直接进入垃圾桶。`))) return;
   if (btnBlockMail) btnBlockMail.disabled = true;
   try {
     const res = await request("/v1/messages/" + encodeURIComponent(id) + "/block", { method: "POST", body: {} });
     state.blockedSenders = Array.isArray(res.blockedSenders) ? res.blockedSenders : state.blockedSenders;
     renderBlockList(state.blockedSenders);
-    toast("已加入黑名单");
+    toast("已加入黑名单并移入垃圾桶");
     void refreshUnread();
     if (state.currentView === "trash") return;
-    noticeEl.textContent = "邮件已移入垃圾桶";
-    setTimeout(() => { if (noticeEl.textContent === "邮件已移入垃圾桶") noticeEl.textContent = ""; }, 3000);
-    const card = findByDataId(listEl, ".mail-item", id);
-    if (card) card.remove();
-    state.currentMessages = state.currentMessages.filter((m) => m.id !== id);
-    const nextCard = listEl.querySelector(".mail-item");
-    if (nextCard && nextCard.getAttribute("data-id")) {
-      void selectMail(nextCard.getAttribute("data-id"));
-    } else {
-      state.selectedMailId = null;
-      state.currentFromAddress = "";
-      mailDetailEl.hidden = true;
-      mailEmptyEl.hidden = false;
-      setMobilePane("list");
-    }
+    advanceAfterRemove(id);
   } catch (err) {
     noticeEl.textContent = "加入黑名单失败: " + explain(err);
   } finally {
@@ -736,26 +1211,14 @@ export async function handleBlockMail() {
 }
 
 export async function handleTrashMail() {
-  if (!state.selectedMailId) return;
+  if (!state.selectedMailId || state.readingSentId) return;
   const id = state.selectedMailId;
   if (btnTrashMail) btnTrashMail.disabled = true;
   try {
     await request("/v1/messages/" + encodeURIComponent(id) + "/trash", { method: "POST", body: {} });
-    noticeEl.textContent = "邮件已移入垃圾桶";
+    toast("已移入垃圾桶");
     void refreshUnread();
-    setTimeout(() => { if (noticeEl.textContent === "邮件已移入垃圾桶") noticeEl.textContent = ""; }, 3000);
-    const card = findByDataId(listEl, ".mail-item", id);
-    if (card) card.remove();
-    state.currentMessages = state.currentMessages.filter((m) => m.id !== id);
-    const nextCard = listEl.querySelector(".mail-item");
-    if (nextCard && nextCard.getAttribute("data-id")) {
-      void selectMail(nextCard.getAttribute("data-id"));
-    } else {
-      state.selectedMailId = null;
-      mailDetailEl.hidden = true;
-      mailEmptyEl.hidden = false;
-      setMobilePane("list");
-    }
+    advanceAfterRemove(id);
   } catch (err) {
     noticeEl.textContent = "移入垃圾桶失败: " + explain(err);
   } finally {
@@ -769,21 +1232,9 @@ export async function handleRestoreMail() {
   if (btnRestoreMail) btnRestoreMail.disabled = true;
   try {
     await request("/v1/messages/" + encodeURIComponent(id) + "/restore", { method: "POST", body: {} });
-    noticeEl.textContent = "已从垃圾桶恢复";
+    toast("已从垃圾桶恢复");
     void refreshUnread();
-    setTimeout(() => { if (noticeEl.textContent === "已从垃圾桶恢复") noticeEl.textContent = ""; }, 3000);
-    const card = findByDataId(listEl, ".mail-item", id);
-    if (card) card.remove();
-    state.currentMessages = state.currentMessages.filter((m) => m.id !== id);
-    const nextCard = listEl.querySelector(".mail-item");
-    if (nextCard && nextCard.getAttribute("data-id")) {
-      void selectMail(nextCard.getAttribute("data-id"));
-    } else {
-      state.selectedMailId = null;
-      mailDetailEl.hidden = true;
-      mailEmptyEl.hidden = false;
-      setMobilePane("list");
-    }
+    advanceAfterRemove(id);
   } catch (err) {
     noticeEl.textContent = "恢复邮件失败: " + explain(err);
   } finally {
@@ -793,26 +1244,14 @@ export async function handleRestoreMail() {
 
 export async function handleDeleteMail() {
   if (!state.selectedMailId) return;
-  if (!(await askConfirm("确定永久删除此邮件吗？此操作无法撤销。"))) return;
+  if (!(await askConfirm("永久删除此邮件？删除后无法恢复。"))) return;
   const id = state.selectedMailId;
   if (btnDeleteMail) btnDeleteMail.disabled = true;
   try {
     await request("/v1/messages/" + encodeURIComponent(id), { method: "DELETE" });
-    noticeEl.textContent = "邮件已彻底删除";
+    toast("已彻底删除");
     void refreshUnread();
-    setTimeout(() => { if (noticeEl.textContent === "邮件已彻底删除") noticeEl.textContent = ""; }, 3000);
-    const card = findByDataId(listEl, ".mail-item", id);
-    if (card) card.remove();
-    state.currentMessages = state.currentMessages.filter((m) => m.id !== id);
-    const nextCard = listEl.querySelector(".mail-item");
-    if (nextCard && nextCard.getAttribute("data-id")) {
-      void selectMail(nextCard.getAttribute("data-id"));
-    } else {
-      state.selectedMailId = null;
-      mailDetailEl.hidden = true;
-      mailEmptyEl.hidden = false;
-      setMobilePane("list");
-    }
+    advanceAfterRemove(id);
   } catch (err) {
     noticeEl.textContent = "彻底删除失败: " + explain(err);
   } finally {
@@ -821,12 +1260,12 @@ export async function handleDeleteMail() {
 }
 
 export async function handleEmptyTrash() {
-  if (!(await askConfirm("确定清空垃圾桶内全部邮件吗？此操作无法撤销。"))) return;
+  if (!(await askConfirm("确定清空垃圾桶内全部邮件？此操作无法撤销。"))) return;
   if (emptyTrashBtn) emptyTrashBtn.disabled = true;
   try {
-    const res = await request("/v1/messages/empty-trash", { method: "POST", body: {} });
-    noticeEl.textContent = `垃圾桶已清空 (共清除 ${res.count || 0} 封邮件)`;
-    setTimeout(() => { if (noticeEl.textContent.startsWith("垃圾桶已清空")) noticeEl.textContent = ""; }, 3000);
+    const qs = scopeQuerySuffix("?");
+    const res = await request("/v1/messages/empty-trash" + qs, { method: "POST", body: {} });
+    toast(`垃圾桶已清空（共清除 ${res.count || 0} 封）`);
     state.selectedMailId = null;
     mailDetailEl.hidden = true;
     if (mailLoadingEl) mailLoadingEl.hidden = true;
@@ -844,9 +1283,11 @@ export function removeStaleMail(items) {
   const kept = new Set(items.map((item) => item.id));
   for (const item of state.currentMessages) {
     if (kept.has(item.id)) continue;
+    state.selectedIds.delete(item.id);
     findByDataId(listEl, ".mail-item", item.id)?.remove();
   }
   state.currentMessages = state.currentMessages.filter((item) => kept.has(item.id));
+  syncBatchBar();
 }
 
 export function mergeFreshMail(items) {
@@ -858,26 +1299,38 @@ export function mergeFreshMail(items) {
       fresh.push(item);
       continue;
     }
-    // A list response that left before the read landed still says unread. Keep the row read.
     if (prev.read && !item.read) item.read = true;
-    if (prev.label === item.label && prev.read === item.read) continue;
+    if (
+      prev.label === item.label &&
+      prev.read === item.read &&
+      prev.starred === item.starred
+    ) {
+      continue;
+    }
     prev.label = item.label;
     prev.read = item.read;
+    prev.starred = item.starred;
     const card = findByDataId(listEl, ".mail-item", item.id);
     card?.replaceWith(createMailListItem(item));
   }
   if (fresh.length === 0) return;
   state.currentMessages = fresh.concat(state.currentMessages);
-  for (let i = fresh.length - 1; i >= 0; i -= 1) listEl.prepend(createMailListItem(fresh[i]));
+  for (let i = fresh.length - 1; i >= 0; i -= 1) {
+    listEl.prepend(createMailListItem(fresh[i]));
+  }
 }
 
 export function markOpened(id) {
   const card = findByDataId(listEl, ".mail-item", id);
   const known = state.currentMessages.find((item) => item.id === id);
   const wasRead = Boolean(known && known.read) || Boolean(card && !card.classList.contains("unread"));
-  if (card) card.classList.remove("unread");
+  if (card) {
+    card.classList.remove("unread");
+    card.querySelector(".unread-dot")?.remove();
+  }
   if (known) known.read = true;
-  return request("/v1/messages/" + encodeURIComponent(id) + "/read", { method: "POST", body: {} })
+  const qs = scopeQuerySuffix("?");
+  return request("/v1/messages/" + encodeURIComponent(id) + "/read" + qs, { method: "POST", body: {} })
     .then(() => refreshUnread())
     .catch(() => {
       if (wasRead) return;

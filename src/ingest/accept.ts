@@ -2,6 +2,7 @@ import { ulid } from "ulid";
 import type { Db } from "../db/index.js";
 import { enqueueJob } from "../db/repos/jobs.js";
 import { findMessageBySha, insertDelivery, insertMessage } from "../db/repos/messages.js";
+import { routeMessageRecipients } from "../db/repos/users.js";
 import { sha256 } from "../hash.js";
 import type { Codec } from "../compress.js";
 import { storeRaw } from "./store-raw.js";
@@ -31,7 +32,8 @@ export interface AcceptResult {
 /**
  * Write the raw bytes first. The database row is inserted only after the
  * file is in place and the hash of the bytes we just stored matches.
- * A second delivery of the same hash adds a delivery and does not requeue AI.
+ * A second delivery of the same hash adds a delivery, merges recipients,
+ * routes to any newly matched user mailboxes, and does not requeue AI.
  */
 export async function acceptMessage(deps: AcceptDeps, input: AcceptInput): Promise<AcceptResult> {
   const hash = sha256(input.bytes);
@@ -52,8 +54,11 @@ export async function acceptMessage(deps: AcceptDeps, input: AcceptInput): Promi
     if (!isUnique(err)) throw err;
     const winner = findMessageBySha(deps.db, stored.sha256);
     if (!winner) throw err;
-    mergeEnvelope(deps.db, winner.id, input);
-    insertDeliverySoft(deps.db, winner.id, input);
+    deps.db.transaction(() => {
+      mergeEnvelope(deps.db, winner.id, input);
+      routeMessageRecipients(deps.db, winner.id, input.meta.rcptTo, winner.received_at);
+      insertDeliverySoft(deps.db, winner.id, input);
+    })();
     return { id: winner.id, sha256: stored.sha256, duplicate: true, sizeBytes: stored.sizeBytes };
   }
 }
@@ -62,6 +67,7 @@ function record(db: Db, hash: string, rawPath: string, input: AcceptInput): { id
   const current = findMessageBySha(db, hash);
   if (current) {
     mergeEnvelope(db, current.id, input);
+    routeMessageRecipients(db, current.id, input.meta.rcptTo, current.received_at);
     insertDeliverySoft(db, current.id, input);
     return { id: current.id, duplicate: true };
   }
@@ -80,6 +86,7 @@ function record(db: Db, hash: string, rawPath: string, input: AcceptInput): { id
     smtpMeta: input.meta,
     now: input.receivedAtMs,
   });
+  routeMessageRecipients(db, id, input.meta.rcptTo, input.receivedAtMs);
   insertDelivery(db, {
     id: ulid(),
     messageId: id,

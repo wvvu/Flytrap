@@ -1,4 +1,4 @@
-// 纯工具函数：转义、格式化、地址解析、回复推导，不碰 DOM 状态以外的东西。
+// 纯工具函数：地址解析、显示格式化、验证码智能识别、文件读取与防抖。
 import { state } from "./state.js";
 
 export function hashMailId() {
@@ -42,13 +42,14 @@ export function quoteLetter(detail) {
   const who = replyAddress(detail) || "对方";
   const source = String((detail.parsed && detail.parsed.text) || "").replace(/\r\n/g, "\n").slice(0, 8000);
   const lines = source.split("\n").map((line) => "> " + line);
-  return "\n\n" + when + "，" + who + " 写道：\n" + lines.join("\n");
+  const sig = state.signature ? "\n\n--\n" + state.signature.trim() : "";
+  return sig + "\n\n" + when + "，" + who + " 写道：\n" + lines.join("\n");
 }
 
 export function outboxStatus(item) {
-  if (item.status === "sent") return "已发出";
+  if (item.status === "sent") return "已送达";
   if (item.status === "error") return "失败";
-  if (item.error) return "还会再试";
+  if (item.error) return "重试中";
   return "排队中";
 }
 
@@ -60,11 +61,34 @@ export function extractEmail(raw) {
   return candidate.includes("@") ? candidate : "";
 }
 
+export function extractDisplayName(raw) {
+  if (!raw) return "";
+  const text = String(raw).trim();
+  const match = text.match(/^([^<]+)<[^>]+>$/);
+  if (!match) return "";
+  return match[1].replace(/^["'\s]+|["'\s]+$/g, "").trim();
+}
+
 export function formatFrom(raw) {
+  if (!raw) return "没有发件人";
   const email = extractEmail(raw);
-  const named = email ? state.senderMap.get(email) : "";
-  if (named && email) return `${named} · ${email}`;
-  return raw || "没有发件人";
+  const custom = email ? state.senderMap.get(email) : "";
+  if (custom && email) return `${custom} · ${email}`;
+  const display = extractDisplayName(raw);
+  if (display && email && display.toLowerCase() !== email) {
+    return `${display} <${email}>`;
+  }
+  return email || raw;
+}
+
+export function formatListSender(raw) {
+  if (!raw) return "没有发件人";
+  const email = extractEmail(raw);
+  const custom = email ? state.senderMap.get(email) : "";
+  if (custom) return custom;
+  const display = extractDisplayName(raw);
+  if (display) return display;
+  return email || raw;
 }
 
 export function formatRecipients(value) {
@@ -82,7 +106,35 @@ export function formatRecipient(raw) {
   if (named) return `${named} · ${email}`;
   const domain = email.split("@")[1];
   if (domain && state.domainNames[domain]) return `${email}（${state.domainNames[domain]}）`;
-  return raw;
+  return email;
+}
+
+export function formatShortRecipient(raw) {
+  const email = extractEmail(raw);
+  if (!email) return "";
+  const named = state.mailboxNames.get(email);
+  if (named) return `→ ${named}`;
+  return `→ ${email}`;
+}
+
+const OTP_HINT_RE = /验证码|校验码|动态码|确认码|安全码|登录码|verification\s*code|security\s*code|passcode|one[-\s]?time|otp|login\s*code|auth\s*code/i;
+const OTP_NEAR_RE = /(?:验证码|校验码|动态码|确认码|安全码|code|otp|passcode)[^\dA-Za-z]{0,18}([0-9]{4,8})\b/i;
+const OTP_STANDALONE_RE = /\b([0-9]{6})\b/g;
+
+export function extractOtpCode(subject, text) {
+  const combined = `${subject || ""}\n${(text || "").slice(0, 2400)}`;
+  if (!OTP_HINT_RE.test(combined)) return "";
+  const near = OTP_NEAR_RE.exec(combined);
+  if (near && near[1] && !isLikelyYear(near[1])) return near[1];
+  const matches = [...combined.matchAll(OTP_STANDALONE_RE)];
+  for (const m of matches) {
+    if (m[1] && !isLikelyYear(m[1])) return m[1];
+  }
+  return "";
+}
+
+function isLikelyYear(code) {
+  return /^(?:19|20)\d{2}$/.test(code);
 }
 
 export function normalizeAddress(raw) {
@@ -102,7 +154,10 @@ export function formatShortTime(val) {
   if (d.toDateString() === now.toDateString()) {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
-  return `${d.getMonth() + 1}/${d.getDate()}`;
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  }
+  return `${String(d.getFullYear()).slice(2)}/${d.getMonth() + 1}/${d.getDate()}`;
 }
 
 export function formatFullTime(val) {
@@ -116,6 +171,19 @@ export function formatBytes(bytes) {
   const sizes = ["B", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+}
+
+export function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const res = typeof reader.result === "string" ? reader.result : "";
+      const comma = res.indexOf(",");
+      resolve(comma >= 0 ? res.slice(comma + 1) : res);
+    };
+    reader.onerror = () => reject(new Error("read_failed"));
+    reader.readAsDataURL(file);
+  });
 }
 
 export function debounce(fn, ms) {

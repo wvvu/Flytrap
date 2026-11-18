@@ -3,6 +3,7 @@ import { loadConfig, ConfigError, PLACEHOLDER_SESSION_SECRET, type Config } from
 import { dbFile, openDatabase } from "./db/index.js";
 import { migrate } from "./db/migrate.js";
 import { settleFinishedSends } from "./db/repos/jobs.js";
+import { syncBootstrapAdmin } from "./db/repos/users.js";
 import { createLogger } from "./log.js";
 import { ensureDataDirs, migrationsDir } from "./paths.js";
 import { fakeClassifier } from "./ai/classifier.js";
@@ -60,6 +61,7 @@ try {
 }
 const db = openDatabase(dbFile(config.mailDataDir));
 const applied = migrate(db, migrationsDir());
+syncBootstrapAdmin(db, { username: config.apiUsername });
 const settled = settleFinishedSends(db, Date.now());
 log.info({ applied, roles: config.roles }, "database ready");
 if (settled > 0) log.info({ settled }, "closed send jobs for letters already sent");
@@ -77,6 +79,7 @@ async function rebuildCommand(): Promise<void> {
   try {
     const codec = await loadCodec(config.compress, log);
     const report = await rebuildFromRaw({ db, dataDir: config.mailDataDir, codec });
+    syncBootstrapAdmin(db, { username: config.apiUsername });
     log.info(report, "rebuild complete");
     db.close();
     process.exit(0);
