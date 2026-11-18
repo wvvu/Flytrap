@@ -89,9 +89,10 @@ export interface PublicUser {
 /**
  * SQLite scalar subquery that resolves an email string expression (e.g. `je.value`)
  * to `user_mailboxes.user_id` with deterministic specificity priority:
- * 1. Exact `localpart@domain`
- * 2. Base `localpart` before `+tag` (RFC 5233 subaddressing)
- * 3. Whole-domain catch-all `*@domain`
+ * 1. Exact localpart
+ * 2. Base localpart before `+tag`, and only when the address local differs
+ * 3. Prefix localpart that ends in `*` and is not a lone `*`
+ * 4. Whole-domain `*`
  * Returns NULL when unallocated (owned by primary `'owner'`).
  */
 export function sqlResolvedOwner(addrExpr: string): string {
@@ -101,16 +102,26 @@ export function sqlResolvedOwner(addrExpr: string): string {
   const rawDomain = `lower(trim(substr(${trimmed}, ${atPos} + 1)))`;
   const plusPos = `instr(${rawLocal}, '+')`;
   const baseLocal = `CASE WHEN ${plusPos} > 1 THEN substr(${rawLocal}, 1, ${plusPos} - 1) ELSE ${rawLocal} END`;
+  const prefixHit = `(
+    um.localpart GLOB '*[*]'
+    AND um.localpart != '*'
+    AND substr(${rawLocal}, 1, length(um.localpart) - 1) = substr(um.localpart, 1, length(um.localpart) - 1)
+  )`;
   return `(
     SELECT um.user_id
     FROM user_mailboxes um
     WHERE ${atPos} > 1
       AND um.domain = ${rawDomain}
-      AND um.localpart IN ('*', ${rawLocal}, ${baseLocal})
+      AND (
+        um.localpart IN ('*', ${rawLocal}, ${baseLocal})
+        OR ${prefixHit}
+      )
     ORDER BY CASE
       WHEN um.localpart = ${rawLocal} THEN 1
-      WHEN um.localpart = '*' THEN 3
-      ELSE 2
+      WHEN um.localpart = ${baseLocal} AND ${rawLocal} != ${baseLocal} THEN 2
+      WHEN um.localpart GLOB '*[*]' AND um.localpart != '*' THEN 3
+      WHEN um.localpart = '*' THEN 4
+      ELSE 5
     END ASC
     LIMIT 1
   )`;
@@ -477,15 +488,34 @@ export function findWinningAllocation(db: Db, rawAddress: string): UserMailboxRo
   return db
     .prepare(
       `SELECT * FROM user_mailboxes
-       WHERE domain = ? AND localpart IN ('*', ?, ?)
+       WHERE domain = ?
+         AND (
+           localpart IN ('*', ?, ?)
+           OR (
+             localpart GLOB '*[*]'
+             AND localpart != '*'
+             AND substr(?, 1, length(localpart) - 1) = substr(localpart, 1, length(localpart) - 1)
+           )
+         )
        ORDER BY CASE
          WHEN localpart = ? THEN 1
-         WHEN localpart = '*' THEN 3
-         ELSE 2
+         WHEN localpart = ? AND ? != ? THEN 2
+         WHEN localpart GLOB '*[*]' AND localpart != '*' THEN 3
+         WHEN localpart = '*' THEN 4
+         ELSE 5
        END ASC
        LIMIT 1`,
     )
-    .get(parts.domain, parts.localpart, parts.baseLocalpart, parts.localpart) as UserMailboxRow | undefined;
+    .get(
+      parts.domain,
+      parts.localpart,
+      parts.baseLocalpart,
+      parts.localpart,
+      parts.localpart,
+      parts.baseLocalpart,
+      parts.localpart,
+      parts.baseLocalpart,
+    ) as UserMailboxRow | undefined;
 }
 
 /** Resolve an address to its owner userId, or `OWNER_USER_ID` ('owner') when unallocated. */

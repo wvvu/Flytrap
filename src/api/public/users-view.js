@@ -8,10 +8,6 @@ import { formatFullTime, generateRandomPassword } from "./util.js";
 const ALLOC_HINT =
   "精确邮箱（含 +tag）、前缀通配、整域接管。前缀按字面起首，team 会匹配 teammate。整域接住没被更具体规则分走的地址，连历史信一起划走。";
 
-function trailingStar(localpart) {
-  return localpart.endsWith("*") && localpart !== "*";
-}
-
 function setFormError(el, message) {
   if (!el) return;
   el.hidden = !message;
@@ -274,12 +270,6 @@ export async function submitCreateUser() {
     toast(message);
     return;
   }
-  if (mbLocal && trailingStar(mbLocal)) {
-    const message = "前缀通配这一档还没接上，先填精确前缀，或填 *。";
-    setFormError(errEl, message);
-    toast(message);
-    return;
-  }
 
   const payload = {
     username,
@@ -494,7 +484,7 @@ export function renderUserDetail(user) {
   addBoxForm.className = "inline-row";
   const localInput = document.createElement("input");
   localInput.className = "field-narrow";
-  localInput.placeholder = "精确前缀或 *";
+  localInput.placeholder = "前缀或 *";
   localInput.maxLength = 64;
   const atSign = document.createElement("span");
   atSign.className = "muted";
@@ -518,12 +508,6 @@ export function renderUserDetail(user) {
     setFormError(allocError, "");
     if (!lp || !dm) {
       const message = "请填写邮箱前缀与域名";
-      setFormError(allocError, message);
-      toast(message);
-      return;
-    }
-    if (trailingStar(lp)) {
-      const message = "前缀通配这一档还没接上，先填精确前缀，或填 *。";
       setFormError(allocError, message);
       toast(message);
       return;

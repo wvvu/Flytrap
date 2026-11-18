@@ -161,23 +161,35 @@ export function generateRandomPassword(length = 14) {
   return out;
 }
 
-/** 判断成员当前是否被授权使用该发件地址。 */
+function allocationRank(box, local, base) {
+  if (box.localpart === local) return 1;
+  if (box.localpart === base && local !== base) return 2;
+  if (
+    typeof box.localpart === "string" &&
+    box.localpart.endsWith("*") &&
+    box.localpart !== "*" &&
+    local.startsWith(box.localpart.slice(0, -1))
+  ) {
+    return 3;
+  }
+  if (box.localpart === "*") return 4;
+  return 9;
+}
+
+/** 判断当前账号是否被授权使用该发件地址。owner 直通，协同管理员和成员走同一套裁决。 */
 export function memberCanSendFrom(address) {
-  if (state.isAdmin) return true;
+  if (!state.sessionUserId || state.sessionUserId === "owner") return true;
   const norm = normalizeAddress(address);
   if (!norm) return false;
   const at = norm.lastIndexOf("@");
   const local = norm.slice(0, at);
   const plus = local.indexOf("+");
-  const base = plus > 0 ? local.slice(0, plus) : local;
+  const base = plus > 1 ? local.slice(0, plus) : local;
   const domain = norm.slice(at + 1);
   const candidates = state.allocatedMailboxes.filter(
-    (b) => b.domain === domain && (b.localpart === local || b.localpart === base || b.localpart === "*"),
+    (b) => b.domain === domain && allocationRank(b, local, base) < 9,
   );
   if (candidates.length === 0) return false;
-  candidates.sort((a, b) => {
-    const rank = (x) => (x.localpart === local ? 1 : x.localpart === "*" ? 3 : 2);
-    return rank(a) - rank(b);
-  });
+  candidates.sort((a, b) => allocationRank(a, local, base) - allocationRank(b, local, base));
   return Boolean(candidates[0] && candidates[0].canSend);
 }

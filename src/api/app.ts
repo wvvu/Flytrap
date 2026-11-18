@@ -1450,10 +1450,10 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const role = request.session.role ?? "admin";
     const currentNow = now();
 
+    if (userId !== OWNER_USER_ID && !canMemberSendFrom(db, userId, normalizedFrom)) {
+      throw new HttpError(403, "forbidden");
+    }
     if (role !== "admin") {
-      if (!canMemberSendFrom(db, userId, normalizedFrom)) {
-        throw new HttpError(403, "forbidden");
-      }
       const member = getUserById(db, userId);
       const dailyLimit = member?.quota_send_per_day ?? 100;
       const sentToday = countUserOutboxSince(db, userId, utcDayStart(currentNow));

@@ -665,6 +665,103 @@ test("a collaborative admin cannot manage other admins, and a member scope=all s
   }
 });
 
+test("a prefix mailbox outranks the domain star, and a collaborative admin cannot send as someone else", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-prefix-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 18, 18, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+  const carol = jar();
+  const dave = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    const createCarol = await owner.post(app, "/v1/users", {
+      username: "carol",
+      password: "carol-password-123",
+      initialMailbox: { localpart: "alerts-*", domain: "example.com", canSend: true },
+    });
+    assert.equal(createCarol.statusCode, 201);
+    await owner.post(app, "/v1/users", {
+      username: "bob",
+      password: "bob-password-123",
+      initialMailbox: { localpart: "*", domain: "example.com", canSend: true },
+    });
+    const createDave = await owner.post(app, "/v1/users", {
+      username: "dave",
+      password: "dave-password-123",
+      role: "admin",
+      initialMailbox: { localpart: "dave", domain: "example.com", canSend: true },
+    });
+    assert.equal(createDave.statusCode, 201);
+    await owner.post(app, `/v1/users/${createCarol.json().user.id}/mailboxes`, {
+      localpart: "team*",
+      domain: "example.com",
+      canSend: true,
+    });
+
+    const prod = await deliver(db, dir, ["alerts-prod@example.com"], "Subject: prod\r\n\r\nHi\r\n", ++clock);
+    const exact = await deliver(db, dir, ["alice@example.com"], "Subject: alice\r\n\r\nHi\r\n", ++clock);
+    const mate = await deliver(db, dir, ["teammate@example.com"], "Subject: mate\r\n\r\nHi\r\n", ++clock);
+    const other = await deliver(db, dir, ["other@example.com"], "Subject: other\r\n\r\nHi\r\n", ++clock);
+
+    await carol.login(app, "carol", "carol-password-123");
+    const carolList = (await carol.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    assert.deepEqual(carolList.map((item) => item.id).sort(), [prod.id, mate.id].sort());
+    assert.equal(carolList.some((item) => item.id === exact.id), false);
+
+    const bob = jar();
+    await bob.login(app, "bob", "bob-password-123");
+    const bobList = (await bob.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    assert.deepEqual(bobList.map((item) => item.id).sort(), [exact.id, other.id].sort());
+
+    await dave.login(app, "dave", "dave-password-123");
+    const spoof = await dave.post(app, "/v1/outbox", {
+      from: "alice@example.com",
+      to: ["x@outside.test"],
+      subject: "spoof",
+      text: "hi",
+    });
+    assert.equal(spoof.statusCode, 403);
+    const own = await dave.post(app, "/v1/outbox", {
+      from: "dave@example.com",
+      to: ["x@outside.test"],
+      subject: "own",
+      text: "hi",
+    });
+    assert.equal(own.statusCode, 202);
+    const ownerSend = await owner.post(app, "/v1/outbox", {
+      from: "alice@example.com",
+      to: ["x@outside.test"],
+      subject: "owner",
+      text: "hi",
+    });
+    assert.equal(ownerSend.statusCode, 202);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 async function deliver(db: Db, dir: string, rcptTo: string[], content: string, receivedAtMs: number) {
   return acceptMessage(
     { db, dataDir: dir, codec: gzipCodec() },

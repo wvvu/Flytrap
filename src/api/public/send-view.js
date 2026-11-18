@@ -47,7 +47,7 @@ export function rememberFrom(from) {
 export function defaultSenderAddress() {
   const remembered = lastUsedFrom();
   if (remembered && memberCanSendFrom(remembered)) return remembered;
-  if (!state.isAdmin && state.allocatedMailboxes.length > 0) {
+  if (state.sessionUserId && state.sessionUserId !== "owner" && state.allocatedMailboxes.length > 0) {
     const sendable = state.allocatedMailboxes.find((b) => b.canSend);
     if (sendable) {
       return sendable.localpart === "*" ? `mail@${sendable.domain}` : sendable.address;
@@ -341,7 +341,7 @@ export function renderFromSuggestions(items) {
   list.replaceChildren();
   const seen = new Set();
 
-  if (!state.isAdmin) {
+  if (state.sessionUserId && state.sessionUserId !== "owner") {
     for (const box of state.allocatedMailboxes) {
       if (!box.canSend) continue;
       const addr = box.localpart === "*" ? `mail@${box.domain}` : box.address;
@@ -380,7 +380,7 @@ export function refreshSendNote() {
   }
   const domain = from.includes("@") ? from.split("@")[1] : "";
 
-  if (!state.isAdmin && !memberCanSendFrom(from)) {
+  if (state.sessionUserId && state.sessionUserId !== "owner" && !memberCanSendFrom(from)) {
     note.hidden = false;
     note.textContent = "该地址不在当前账号的发信授权范围内。";
     if (badge) {
@@ -408,7 +408,7 @@ export function refreshSendNote() {
     }
   }
 
-  if (!knownDomain && state.isAdmin) {
+  if (!knownDomain && (!state.sessionUserId || state.sessionUserId === "owner")) {
     note.hidden = false;
     note.textContent = "该域名尚未加入收信域名，仍可对外发出。";
   } else {
