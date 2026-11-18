@@ -62,9 +62,7 @@ export async function runParseJob(deps: ParseJobDeps, job: JobRow): Promise<void
       isBlockedSender(deps.db, fromAddr, ownerId) ||
       isBlockedSender(deps.db, message.envelope_from, ownerId);
     if (blocked) {
-      if (ownerId === OWNER_USER_ID && owners.size === 1) {
-        trashMessage(deps.db, message.id, now);
-      } else if (ownerId === OWNER_USER_ID) {
+      if (ownerId === OWNER_USER_ID) {
         trashMessage(deps.db, message.id, now);
       } else {
         setUserMessageTrashed(deps.db, ownerId, message.id, now, now);

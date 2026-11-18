@@ -902,12 +902,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const q = request.query as Record<string, unknown>;
     const viewer = viewerOf(db, request, optionalString(q?.scope));
     requireMessage(db, id, request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer);
-    const purged = deleteMessageForViewer(
-      db,
-      id,
-      request.session.role === "admin" && !optionalString(q?.scope) ? viewerOf(db, request, "all") : viewer,
-      now(),
-    );
+    const purged = deleteMessageForViewer(db, id, viewer, now());
     if (!purged) throw new HttpError(404, "not_found");
     const failed = await removeStoredFiles(config.mailDataDir, purged.paths);
     if (failed.length > 0) request.log.warn({ failed: failed.length }, "stored files left on disk");
@@ -1857,9 +1852,6 @@ function viewerOf(db: Db, request: FastifyRequest, scopeHint?: string): ViewerCo
   }
   if (scopeHint && scopeHint.startsWith("user:")) {
     return { userId, role: "admin", scope: scopeHint };
-  }
-  if (userId !== OWNER_USER_ID && listUserMailboxes(db, userId).length === 0) {
-    return { userId, role: "admin", scope: "all" };
   }
   return { userId, role: "admin", scope: "mine" };
 }

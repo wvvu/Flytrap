@@ -166,6 +166,8 @@ export function canViewerAccessMessage(db: Db, message: StoredMessage, viewer?: 
     .get(target.stateUserId, message.id) as { deleted_at: number | null } | undefined;
   if (ums?.deleted_at != null) return false;
 
+  if (target.visibility === OWNER_USER_ID && message.trashed_at != null) return true;
+
   const recipients = parseEnvelopeArray(message.envelope_to);
   if (recipients.length === 0) {
     return target.visibility === OWNER_USER_ID;
@@ -488,14 +490,14 @@ export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] 
     where.push("ums.deleted_at IS NULL");
   }
 
-  if (target.visibility === OWNER_USER_ID) {
+  if (target.visibility === OWNER_USER_ID && query.trashed !== true) {
     where.push(
       `(json_array_length(m.envelope_to) = 0 OR EXISTS (
         SELECT 1 FROM json_each(m.envelope_to) je
         WHERE ${resolvedOwner} IS NULL
       ))`,
     );
-  } else if (target.visibility !== "all") {
+  } else if (target.visibility !== "all" && target.visibility !== OWNER_USER_ID) {
     params.visUid = target.visibility;
     where.push(
       `EXISTS (
@@ -736,6 +738,30 @@ export function emptyTrash(db: Db, purgedAt: number): PurgedFiles {
   })();
 }
 
+function emptyGlobalTrash(db: Db, purgedAt: number): PurgedFiles {
+  const ids = db.prepare("SELECT id FROM messages WHERE trashed_at IS NOT NULL").all() as Array<{ id: string }>;
+  if (ids.length === 0) return { count: 0, paths: [] };
+  let count = 0;
+  const paths: string[] = [];
+  db.transaction(() => {
+    for (const { id } of ids) {
+      const message = getMessage(db, id);
+      if (!message) continue;
+      const holders = [...remainingActiveOwners(db, message)].filter((uid) => uid !== OWNER_USER_ID);
+      if (holders.length > 0) {
+        db.prepare("UPDATE messages SET trashed_at = NULL, updated_at = ? WHERE id = ?").run(purgedAt, id);
+        count += 1;
+        continue;
+      }
+      const removed = deleteMessage(db, id, purgedAt);
+      if (!removed) continue;
+      count += removed.count;
+      paths.push(...removed.paths);
+    }
+  })();
+  return { count, paths: [...new Set(paths)] };
+}
+
 export function emptyTrashForViewer(
   db: Db,
   viewer: ViewerContext | undefined,
@@ -743,7 +769,7 @@ export function emptyTrashForViewer(
 ): PurgedFiles {
   if (!viewer) return emptyTrash(db, purgedAt);
   const target = resolveViewerTarget(viewer);
-  if (target.visibility === "all") return emptyTrash(db, purgedAt);
+  if (target.visibility === "all") return emptyGlobalTrash(db, purgedAt);
 
   const trashedRows = listMessages(db, { trashed: true, limit: 5_000, viewer });
   if (trashedRows.length === 0) return { count: 0, paths: [] };

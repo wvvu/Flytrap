@@ -543,14 +543,13 @@ function dkimDomainSet(db: Db): Set<string> {
 }
 
 function splitNormalized(raw: string): { localpart: string; baseLocalpart: string; domain: string } | null {
-  const text = raw.trim().replace(/^<|>$/g, "").toLowerCase();
-  const at = text.lastIndexOf("@");
-  if (at <= 0 || at === text.length - 1) return null;
-  const localpart = text.slice(0, at).trim();
-  const domain = text.slice(at + 1).trim().replace(/\.$/, "");
-  if (!localpart || !domain) return null;
+  const normalized = normalizeAddress(raw.trim().replace(/^<|>$/, ""));
+  if (!normalized) return null;
+  const at = normalized.lastIndexOf("@");
+  const localpart = normalized.slice(0, at);
+  const domain = normalized.slice(at + 1);
   const plus = localpart.indexOf("+");
-  const baseLocalpart = plus > 0 ? localpart.slice(0, plus) : localpart;
+  const baseLocalpart = plus > 1 ? localpart.slice(0, plus) : localpart;
   return { localpart, baseLocalpart, domain };
 }
 

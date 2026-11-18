@@ -942,7 +942,11 @@ export async function handleRestoreMail() {
 
 export async function handleDeleteMail() {
   if (!state.selectedMailId) return;
-  if (!(await askConfirm("确定永久删除此邮件吗？此操作无法撤销。"))) return;
+  const confirmText =
+    state.isAdmin && state.adminScope === "all"
+      ? "将为所有成员彻底删除。此操作无法撤销。"
+      : "确定永久删除此邮件吗？此操作无法撤销。";
+  if (!(await askConfirm(confirmText))) return;
   const id = state.selectedMailId;
   if (btnDeleteMail) btnDeleteMail.disabled = true;
   try {
@@ -981,7 +985,7 @@ export async function handleEmptyTrash() {
   if (emptyTrashBtn) emptyTrashBtn.disabled = true;
   try {
     const res = await request("/v1/messages/empty-trash" + scopeQuerySuffix(), { method: "POST", body: {} });
-    noticeEl.textContent = `垃圾桶已清空 (共清除 ${res.count || 0} 封邮件)`;
+    noticeEl.textContent = `垃圾桶已清空 (已处理 ${res.count || 0} 封)`;
     setTimeout(() => {
       if (noticeEl.textContent.startsWith("垃圾桶已清空")) noticeEl.textContent = "";
     }, 3000);

@@ -459,6 +459,106 @@ test("member RBAC, outbound sender authorization, daily send quota, session revo
   }
 });
 
+test("admin delete follows the requested scope and emptying all-scope trash keeps other holders", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-scope-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 18, 14, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const admin = jar();
+  const alice = jar();
+  const carol = jar();
+
+  try {
+    await admin.login(app, "admin", adminPassword);
+    const createAlice = await admin.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com" },
+    });
+    assert.equal(createAlice.statusCode, 201);
+    const aliceId = createAlice.json().user.id as string;
+    const createBob = await admin.post(app, "/v1/users", {
+      username: "bob",
+      password: "bob-password-123",
+      initialMailbox: { localpart: "bob", domain: "example.com" },
+    });
+    assert.equal(createBob.statusCode, 201);
+    const createCarol = await admin.post(app, "/v1/users", {
+      username: "carol",
+      password: "carol-password-123",
+      role: "admin",
+    });
+    assert.equal(createCarol.statusCode, 201);
+
+    const shared = await deliver(db, dir, ["ops@example.com", "alice@example.com"], "Subject: shared\r\n\r\nHi\r\n", ++clock);
+    const carolOnly = await deliver(db, dir, ["carolbox@example.com"], "Subject: carol\r\n\r\nHi\r\n", ++clock);
+    const kept = await deliver(db, dir, ["alice@example.com", "bob@example.com"], "Subject: keep\r\n\r\nHi\r\n", ++clock);
+
+    await alice.login(app, "alice", "alice-password-123");
+    await carol.login(app, "carol", "carol-password-123");
+
+    const carolMine = (await carol.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    assert.deepEqual(carolMine.map((item) => item.id), []);
+
+    const quietDelete = await admin.delete(app, `/v1/messages/${shared.id}`);
+    assert.equal(quietDelete.statusCode, 200);
+    assert.equal((await alice.get(app, `/v1/messages/${shared.id}`)).statusCode, 200);
+    assert.equal(db.prepare("SELECT id FROM messages WHERE id = ?").get(shared.id) === undefined, false);
+    const adminMine = (await admin.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    assert.equal(adminMine.some((item) => item.id === shared.id), false);
+
+    const userDelete = await admin.delete(app, `/v1/messages/${kept.id}?scope=user:${aliceId}`);
+    assert.equal(userDelete.statusCode, 200);
+    assert.equal((await alice.get(app, `/v1/messages/${kept.id}`)).statusCode, 404);
+    const bob = jar();
+    await bob.login(app, "bob", "bob-password-123");
+    assert.equal((await bob.get(app, `/v1/messages/${kept.id}`)).statusCode, 200);
+
+    const wiped = await admin.delete(app, `/v1/messages/${carolOnly.id}?scope=all`);
+    assert.equal(wiped.statusCode, 200);
+    assert.equal(db.prepare("SELECT id FROM messages WHERE id = ?").get(carolOnly.id), undefined);
+
+    const trashed = await deliver(db, dir, ["alice@example.com"], "Subject: trash\r\n\r\nHi\r\n", ++clock);
+    const trashRes = await admin.post(app, `/v1/messages/${trashed.id}/trash?scope=all`, {});
+    assert.equal(trashRes.statusCode, 200);
+    const ownerTrash = (await admin.get(app, "/v1/messages?trashed=1")).json().items as Array<{ id: string }>;
+    assert.equal(ownerTrash.some((item) => item.id === trashed.id), true);
+    const restored = await admin.post(app, `/v1/messages/${trashed.id}/restore`, {});
+    assert.equal(restored.statusCode, 200);
+    assert.equal((await alice.get(app, `/v1/messages/${trashed.id}`)).statusCode, 200);
+    const ownerTrashAfter = (await admin.get(app, "/v1/messages?trashed=1")).json().items as Array<{ id: string }>;
+    assert.equal(ownerTrashAfter.some((item) => item.id === trashed.id), false);
+
+    await admin.post(app, `/v1/messages/${trashed.id}/trash?scope=all`, {});
+    const emptied = await admin.post(app, "/v1/messages/empty-trash?scope=all", {});
+    assert.equal(emptied.statusCode, 200);
+    assert.equal((await alice.get(app, `/v1/messages/${trashed.id}`)).statusCode, 200);
+    assert.deepEqual(db.prepare("SELECT trashed_at FROM messages WHERE id = ?").get(trashed.id), { trashed_at: null });
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 async function deliver(db: Db, dir: string, rcptTo: string[], content: string, receivedAtMs: number) {
   return acceptMessage(
     { db, dataDir: dir, codec: gzipCodec() },
