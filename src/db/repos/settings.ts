@@ -3,6 +3,7 @@ import { keyTail } from "../../ai/secret.js";
 import { LABELS, type Label } from "../../ai/types.js";
 import { ConfigError, parseAcceptDomains } from "../../config.js";
 import type { Db } from "../index.js";
+import { OWNER_USER_ID } from "./users.js";
 
 export const SETTING_NOTIFY_LABELS = "notify_labels";
 export const SETTING_NOTIFY_MIN_CONFIDENCE = "notify_min_confidence";
@@ -18,6 +19,13 @@ export const SETTING_AI_ENABLED = "ai_enabled";
 export const SETTING_AI_THINKING = "ai_thinking";
 export const SETTING_PASSWORD_HASH = "password_hash";
 export const SETTING_PASSWORD_RESET = "password_reset";
+export const SETTING_OWNER_DISPLAY_NAME = "owner_display_name";
+export const SETTING_OWNER_RECOVERY_EMAIL = "owner_recovery_email";
+export const SETTING_BLOCKED_SENDERS = "blocked_senders";
+export const SETTING_NOTIFY_WEBHOOK_URL = "notify_webhook_url";
+export const SETTING_NOTIFY_WEBHOOK_BEARER = "notify_webhook_bearer";
+export const SETTING_NOTIFY_WEBHOOK_LABELS = "notify_webhook_labels";
+export const SETTING_NOTIFY_WEBHOOK_MIN_CONFIDENCE = "notify_webhook_min_confidence";
 
 export interface ResetSeal {
   salt: string;
@@ -25,8 +33,8 @@ export interface ResetSeal {
   expiresAt: number;
   attempts: number;
   sentAt: number;
+  target?: string;
 }
-export const SETTING_BLOCKED_SENDERS = "blocked_senders";
 
 export const THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
@@ -91,22 +99,26 @@ export interface RuntimeSettings extends NameSettings {
   jobMaxAttempts: number;
 }
 
-export function readRuntimeSettings(db: Db, defaults: RuntimeDefaults): RuntimeSettings {
+function userKey(userId: string, baseKey: string): string {
+  return userId === OWNER_USER_ID ? baseKey : `u:${userId}:${baseKey}`;
+}
+
+export function readRuntimeSettings(db: Db, defaults: RuntimeDefaults, userId = OWNER_USER_ID): RuntimeSettings {
   return {
     notifyLabels: readNotifyLabels(db, defaults.notifyLabels),
     notifyMinConfidence: readNotifyMinConfidence(db, defaults.notifyMinConfidence),
     acceptDomains: readAcceptDomains(db, defaults.acceptDomains),
     jobMaxAttempts: readJobMaxAttempts(db),
-    ...readNameSettings(db),
+    ...readNameSettings(db, userId),
   };
 }
 
-export function readNameSettings(db: Db): NameSettings {
+export function readNameSettings(db: Db, userId = OWNER_USER_ID): NameSettings {
   return {
-    panelTitle: readPanelTitle(db),
-    labelNames: readLabelNames(db),
+    panelTitle: readPanelTitle(db, userId),
+    labelNames: readLabelNames(db, userId),
     domainNames: readDomainNames(db),
-    senderNames: readSenderNames(db),
+    senderNames: readSenderNames(db, userId),
   };
 }
 
@@ -119,16 +131,20 @@ export function saveNameSettings(
     senderNames: readonly SenderName[];
   },
   now: number,
+  userId = OWNER_USER_ID,
 ): NameSettings {
   const panelTitle = cleanName(input.panelTitle, 1, MAX_PANEL_TITLE, "panel title");
   const labelNames = normalizeLabelNames(input.labelNames);
-  const domainNames = normalizeDomainNames(input.domainNames);
   const senderNames = normalizeSenderNames(input.senderNames);
+  const isOwner = userId === OWNER_USER_ID;
+  const domainNames = isOwner ? normalizeDomainNames(input.domainNames) : readDomainNames(db);
   const write = db.transaction(() => {
-    writeRaw(db, SETTING_PANEL_TITLE, panelTitle, now);
-    writeRaw(db, SETTING_LABEL_NAMES, JSON.stringify(labelNames), now);
-    writeRaw(db, SETTING_DOMAIN_NAMES, JSON.stringify(domainNames), now);
-    writeRaw(db, SETTING_SENDER_NAMES, JSON.stringify(senderNames), now);
+    writeRaw(db, userKey(userId, SETTING_PANEL_TITLE), panelTitle, now);
+    writeRaw(db, userKey(userId, SETTING_LABEL_NAMES), JSON.stringify(labelNames), now);
+    if (isOwner) {
+      writeRaw(db, SETTING_DOMAIN_NAMES, JSON.stringify(domainNames), now);
+    }
+    writeRaw(db, userKey(userId, SETTING_SENDER_NAMES), JSON.stringify(senderNames), now);
   });
   write();
   return {
@@ -137,6 +153,40 @@ export function saveNameSettings(
     domainNames,
     senderNames,
   };
+}
+
+export function readOwnerProfile(db: Db): { displayName: string | null; recoveryEmail: string | null } {
+  const name = readRaw(db, SETTING_OWNER_DISPLAY_NAME);
+  const email = readRaw(db, SETTING_OWNER_RECOVERY_EMAIL);
+  return {
+    displayName: name && name.trim() ? name.trim() : null,
+    recoveryEmail: email && email.trim() ? email.trim() : null,
+  };
+}
+
+export function saveOwnerProfile(
+  db: Db,
+  input: { displayName?: string | null; recoveryEmail?: string | null },
+  now: number,
+): { displayName: string | null; recoveryEmail: string | null } {
+  const current = readOwnerProfile(db);
+  let nextName = current.displayName;
+  if (input.displayName !== undefined) {
+    const trimmed = (input.displayName ?? "").trim();
+    nextName = trimmed ? cleanName(trimmed, 1, MAX_SENDER_NAME, "display name") : null;
+  }
+  let nextEmail = current.recoveryEmail;
+  if (input.recoveryEmail !== undefined) {
+    const trimmed = (input.recoveryEmail ?? "").trim();
+    nextEmail = trimmed ? normalizeAddress(trimmed) : null;
+  }
+  db.transaction(() => {
+    if (nextName) writeRaw(db, SETTING_OWNER_DISPLAY_NAME, nextName, now);
+    else db.prepare("DELETE FROM settings WHERE key = ?").run(SETTING_OWNER_DISPLAY_NAME);
+    if (nextEmail) writeRaw(db, SETTING_OWNER_RECOVERY_EMAIL, nextEmail, now);
+    else db.prepare("DELETE FROM settings WHERE key = ?").run(SETTING_OWNER_RECOVERY_EMAIL);
+  })();
+  return { displayName: nextName, recoveryEmail: nextEmail };
 }
 
 export function readAcceptDomains(db: Db, fallback: readonly string[]): string[] {
@@ -173,14 +223,61 @@ export function saveNotifySettings(db: Db, labels: readonly string[], minConfide
   return normalized;
 }
 
+export interface PersonalNotifySettings {
+  notifyLabels: Label[];
+  notifyMinConfidence: number;
+  notifyWebhookUrl: string;
+  notifyWebhookBearer: string;
+}
+
+/** Per-person webhook. Keys follow userKey, separate from the global notify policy. */
+export function readPersonalNotifySettings(db: Db, userId: string): PersonalNotifySettings {
+  return {
+    notifyLabels: readPersonalNotifyLabels(db, userId),
+    notifyMinConfidence: readPersonalNotifyMinConfidence(db, userId),
+    notifyWebhookUrl: (readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_URL)) ?? "").trim(),
+    notifyWebhookBearer: (readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_BEARER)) ?? "").trim(),
+  };
+}
+
+export function savePersonalNotifySettings(
+  db: Db,
+  userId: string,
+  input: {
+    labels: readonly string[];
+    minConfidence: number;
+    webhookUrl: string;
+    webhookBearer?: string;
+  },
+  now: number,
+): PersonalNotifySettings {
+  const labels = normalizeLabels(input.labels, true);
+  if (!Number.isFinite(input.minConfidence) || input.minConfidence < 0 || input.minConfidence > 1) {
+    throw new SettingsError("notify confidence must be between 0 and 1");
+  }
+  const webhookUrl = cleanWebhookUrl(input.webhookUrl);
+  const current = readPersonalNotifySettings(db, userId);
+  const webhookBearer = input.webhookBearer === undefined
+    ? current.notifyWebhookBearer
+    : input.webhookBearer.trim().slice(0, 512);
+  const write = db.transaction(() => {
+    writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_LABELS), JSON.stringify(labels), now);
+    writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_MIN_CONFIDENCE), String(input.minConfidence), now);
+    writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_URL), webhookUrl, now);
+    writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_BEARER), webhookBearer, now);
+  });
+  write();
+  return readPersonalNotifySettings(db, userId);
+}
+
 export function saveAcceptDomains(db: Db, domains: readonly string[], now: number): string[] {
   const normalized = parseAcceptDomains(domains.join(","));
   writeRaw(db, SETTING_ACCEPT_DOMAINS, JSON.stringify(normalized), now);
   return normalized;
 }
 
-export function readBlockedSenders(db: Db): string[] {
-  const raw = readRaw(db, SETTING_BLOCKED_SENDERS);
+export function readBlockedSenders(db: Db, userId = OWNER_USER_ID): string[] {
+  const raw = readRaw(db, userKey(userId, SETTING_BLOCKED_SENDERS));
   if (raw === null) return [];
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -191,16 +288,16 @@ export function readBlockedSenders(db: Db): string[] {
   }
 }
 
-export function saveBlockedSenders(db: Db, addresses: readonly string[], now: number): string[] {
+export function saveBlockedSenders(db: Db, addresses: readonly string[], now: number, userId = OWNER_USER_ID): string[] {
   const normalized = normalizeBlockedSenders(addresses, true);
-  writeRaw(db, SETTING_BLOCKED_SENDERS, JSON.stringify(normalized), now);
+  writeRaw(db, userKey(userId, SETTING_BLOCKED_SENDERS), JSON.stringify(normalized), now);
   return normalized;
 }
 
-export function isBlockedSender(db: Db, address: string | null | undefined): boolean {
+export function isBlockedSender(db: Db, address: string | null | undefined, userId = OWNER_USER_ID): boolean {
   if (!address) return false;
   try {
-    return readBlockedSenders(db).includes(normalizeAddress(address));
+    return readBlockedSenders(db, userId).includes(normalizeAddress(address));
   } catch {
     return false;
   }
@@ -378,13 +475,11 @@ function cleanSecret(value: string): string {
   return value;
 }
 
-function readPanelTitle(db: Db): string {
-  const raw = readRaw(db, SETTING_PANEL_TITLE);
+function readPanelTitle(db: Db, userId = OWNER_USER_ID): string {
+  const raw = readRaw(db, userKey(userId, SETTING_PANEL_TITLE)) ?? (userId !== OWNER_USER_ID ? readRaw(db, SETTING_PANEL_TITLE) : null);
   if (raw === null) return DEFAULT_PANEL_TITLE;
   try {
     const title = cleanName(raw, 1, MAX_PANEL_TITLE, "panel title");
-    // The old default brand name: databases that stored it before the de-brand
-    // read as unset, so the old name never surfaces again.
     if (title === "Flytrap") return DEFAULT_PANEL_TITLE;
     return title;
   } catch {
@@ -392,8 +487,9 @@ function readPanelTitle(db: Db): string {
   }
 }
 
-function readLabelNames(db: Db): Record<Label, string> {
-  const stored = readJsonObject(db, SETTING_LABEL_NAMES);
+function readLabelNames(db: Db, userId = OWNER_USER_ID): Record<Label, string> {
+  const stored = readJsonObject(db, userKey(userId, SETTING_LABEL_NAMES))
+    ?? (userId !== OWNER_USER_ID ? readJsonObject(db, SETTING_LABEL_NAMES) : null);
   if (!stored) return { ...DEFAULT_LABEL_NAMES };
   const overrides: Partial<Record<Label, string>> = {};
   for (const label of LABELS) {
@@ -425,8 +521,8 @@ function readDomainNames(db: Db): Record<string, string> {
   return out;
 }
 
-function readSenderNames(db: Db): SenderName[] {
-  const raw = readRaw(db, SETTING_SENDER_NAMES);
+function readSenderNames(db: Db, userId = OWNER_USER_ID): SenderName[] {
+  const raw = readRaw(db, userKey(userId, SETTING_SENDER_NAMES));
   if (raw === null) return [];
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -526,11 +622,13 @@ function oneDomain(raw: string): string {
 
 function normalizeAddress(raw: string): string {
   const text = raw.trim().toLowerCase();
-  const match = ADDRESS_RE.exec(text);
+  const angled = text.match(/<([^>]+)>/);
+  const candidate = (angled ? angled[1] ?? "" : text).trim();
+  const match = ADDRESS_RE.exec(candidate);
   if (!match) throw new SettingsError(`invalid sender address (${raw})`);
   const domain = oneDomain(match[1] ?? "");
-  const at = text.lastIndexOf("@");
-  const local = text.slice(0, at);
+  const at = candidate.lastIndexOf("@");
+  const local = candidate.slice(0, at);
   return `${local}@${domain}`;
 }
 
@@ -557,6 +655,40 @@ function readJsonObject(db: Db, key: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function readPersonalNotifyLabels(db: Db, userId: string): Label[] {
+  const raw = readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_LABELS));
+  if (raw === null) return ["phish", "malware"];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return ["phish", "malware"];
+    return normalizeLabels(parsed.filter((item): item is string => typeof item === "string"), false);
+  } catch {
+    return ["phish", "malware"];
+  }
+}
+
+function readPersonalNotifyMinConfidence(db: Db, userId: string): number {
+  const raw = readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_MIN_CONFIDENCE));
+  if (raw === null) return 0.6;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 1) return 0.6;
+  return value;
+}
+
+function cleanWebhookUrl(raw: string): string {
+  const url = raw.trim();
+  if (!url) return "";
+  if (url.length > 500) throw new SettingsError("invalid webhook url");
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new SettingsError("invalid webhook url");
+  } catch (err) {
+    if (err instanceof SettingsError) throw err;
+    throw new SettingsError("invalid webhook url");
+  }
+  return url;
 }
 
 function readNotifyLabels(db: Db, fallback: readonly string[]): Label[] {
@@ -628,8 +760,9 @@ export function savePasswordHash(db: Db, hash: string, now: number): void {
   writeRaw(db, SETTING_PASSWORD_HASH, hash, now);
 }
 
-export function readResetSeal(db: Db): ResetSeal | null {
-  const raw = readRaw(db, SETTING_PASSWORD_RESET);
+export function readResetSeal(db: Db, targetKey = OWNER_USER_ID): ResetSeal | null {
+  const key = targetKey === OWNER_USER_ID ? SETTING_PASSWORD_RESET : `u:${targetKey}:${SETTING_PASSWORD_RESET}`;
+  const raw = readRaw(db, key);
   if (!raw) return null;
   let parsed: unknown;
   try {
@@ -647,15 +780,18 @@ export function readResetSeal(db: Db): ResetSeal | null {
     expiresAt: row.expiresAt as number,
     attempts: row.attempts as number,
     sentAt: row.sentAt as number,
+    target: typeof row.target === "string" ? row.target : undefined,
   };
 }
 
-export function saveResetSeal(db: Db, seal: ResetSeal, now: number): void {
-  writeRaw(db, SETTING_PASSWORD_RESET, JSON.stringify(seal), now);
+export function saveResetSeal(db: Db, seal: ResetSeal, now: number, targetKey = OWNER_USER_ID): void {
+  const key = targetKey === OWNER_USER_ID ? SETTING_PASSWORD_RESET : `u:${targetKey}:${SETTING_PASSWORD_RESET}`;
+  writeRaw(db, key, JSON.stringify(seal), now);
 }
 
-export function clearResetSeal(db: Db): void {
-  db.prepare("DELETE FROM settings WHERE key = ?").run(SETTING_PASSWORD_RESET);
+export function clearResetSeal(db: Db, targetKey = OWNER_USER_ID): void {
+  const key = targetKey === OWNER_USER_ID ? SETTING_PASSWORD_RESET : `u:${targetKey}:${SETTING_PASSWORD_RESET}`;
+  db.prepare("DELETE FROM settings WHERE key = ?").run(key);
 }
 
 function readRaw(db: Db, key: string): string | null {

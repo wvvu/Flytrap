@@ -15,12 +15,29 @@ test("migration is idempotent and jobs are claimed atomically", () => {
   try {
     const first = migrate(db, migrationsDir(), () => 1);
     const second = migrate(db, migrationsDir(), () => 2);
-    assert.deepEqual(first, ["001_init", "002_trash", "003_indexes", "004_settings", "005_display_names", "006_read", "007_sessions", "008_outbox", "009_dkim_alg", "010_thread"]);
+    assert.deepEqual(first, [
+      "001_init",
+      "002_trash",
+      "003_indexes",
+      "004_settings",
+      "005_display_names",
+      "006_read",
+      "007_sessions",
+      "008_outbox",
+      "009_dkim_alg",
+      "010_thread",
+      "011_multi_user",
+      "012_user_stars",
+    ]);
     assert.deepEqual(second, []);
-    assert.equal(db.pragma("user_version", { simple: true }), 10);
+    assert.equal(db.pragma("user_version", { simple: true }), 12);
     db.pragma("user_version = 999");
     assert.throws(() => migrate(db, migrationsDir()), /newer than supported/);
-    db.pragma("user_version = 10");
+    db.pragma("user_version = 12");
+    const messageCols = db.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+    assert.equal(messageCols.some((col) => col.name === "starred_at"), false);
+    const stateCols = db.prepare("PRAGMA table_info(user_message_state)").all() as Array<{ name: string }>;
+    assert.equal(stateCols.some((col) => col.name === "starred_at"), true);
     const journal = db.pragma("journal_mode", { simple: true });
     assert.equal(String(journal).toLowerCase(), "wal");
 
@@ -28,14 +45,36 @@ test("migration is idempotent and jobs are claimed atomically", () => {
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all() as Array<{ name: string }>;
     const names = tables.map((row) => row.name);
-    for (const required of ["messages", "deliveries", "attachments", "jobs", "mailbox_history", "audit_log", "purged_messages", "settings", "sessions", "outbox", "dkim_keys"]) {
+    for (const required of [
+      "messages",
+      "deliveries",
+      "attachments",
+      "jobs",
+      "mailbox_history",
+      "audit_log",
+      "purged_messages",
+      "settings",
+      "sessions",
+      "outbox",
+      "dkim_keys",
+      "users",
+      "user_mailboxes",
+      "user_message_state",
+    ]) {
       assert.ok(names.includes(required), required);
     }
     const indexes = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
       .all() as Array<{ name: string }>;
     const indexNames = new Set(indexes.map((row) => row.name));
-    for (const required of ["idx_messages_from_lower", "idx_jobs_message_id", "idx_jobs_queued_created", "idx_mailbox_history_lower"]) {
+    for (const required of [
+      "idx_messages_from_lower",
+      "idx_jobs_message_id",
+      "idx_jobs_queued_created",
+      "idx_mailbox_history_lower",
+      "idx_users_username_lower",
+      "idx_user_mailboxes_domain",
+    ]) {
       assert.ok(indexNames.has(required), required);
     }
 

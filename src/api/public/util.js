@@ -1,4 +1,4 @@
-// 纯工具函数：转义、格式化、地址解析、回复推导，不碰 DOM 状态以外的东西。
+// 纯工具函数：地址规范化、时间字节格式化、验证码识别、密码生成。
 import { state } from "./state.js";
 
 export function hashMailId() {
@@ -39,7 +39,7 @@ export function capReplyRefs(ids) {
 
 export function quoteLetter(detail) {
   const when = formatFullTime(detail.receivedAt) || "";
-  const who = replyAddress(detail) || "对方";
+  const who = replyAddress(detail) || "发件方";
   const source = String((detail.parsed && detail.parsed.text) || "").replace(/\r\n/g, "\n").slice(0, 8000);
   const lines = source.split("\n").map((line) => "> " + line);
   return "\n\n" + when + "，" + who + " 写道：\n" + lines.join("\n");
@@ -118,10 +118,99 @@ export function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
 
+export function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(new Error("read_failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function debounce(fn, ms) {
   let timer;
   return function (...args) {
     clearTimeout(timer);
     timer = setTimeout(() => fn.apply(this, args), ms);
   };
+}
+
+const OTP_HINT_RE = /验证码|校验码|动态码|确认码|安全码|登录码|verification\s*code|security\s*code|passcode|one[-\s]?time|otp|login\s*code|auth\s*code/i;
+const OTP_NEAR_RE = /(?:验证码|校验码|动态码|确认码|安全码|code|otp|passcode)(?:\s*(?:is|was)\s*)?[^\dA-Za-z]{0,8}([0-9]{4,8})\b/i;
+const OTP_STANDALONE_RE = /\b([0-9]{6})\b/g;
+
+/** 从主题与纯文本正文中识别验证码，排除普通年份。 */
+export function extractOtpCode(subject, text) {
+  const combined = `${subject || ""}\n${(text || "").slice(0, 2400)}`;
+  if (!OTP_HINT_RE.test(combined)) return "";
+  const near = OTP_NEAR_RE.exec(combined);
+  if (near && near[1] && !isLikelyYear(near[1])) return near[1];
+  const matches = [...combined.matchAll(OTP_STANDALONE_RE)];
+  for (const match of matches) {
+    if (match[1] && !isLikelyYear(match[1])) return match[1];
+  }
+  return "";
+}
+
+function isLikelyYear(code) {
+  return /^(?:19|20)\d{2}$/.test(code);
+}
+
+/** 生成易读无歧义的 14 位随机初始密码。 */
+export function generateRandomPassword(length = 14) {
+  const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*";
+  const bytes = new Uint32Array(length);
+  if (window.crypto && window.crypto.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < length; i += 1) bytes[i] = Math.floor(Math.random() * 100000);
+  }
+  let out = "";
+  for (let i = 0; i < length; i += 1) {
+    out += alphabet[bytes[i] % alphabet.length];
+  }
+  return out;
+}
+
+function allocationRank(box, local, base) {
+  if (box.localpart === local) return 1;
+  if (box.localpart === base && local !== base) return 2;
+  if (
+    typeof box.localpart === "string" &&
+    box.localpart.endsWith("*") &&
+    box.localpart !== "*" &&
+    local.startsWith(box.localpart.slice(0, -1))
+  ) {
+    return 3;
+  }
+  if (box.localpart === "*") return 4;
+  return 9;
+}
+
+/** 判断当前账号是否被授权使用该发件地址。owner 直通，协同管理员和成员走同一套裁决。 */
+export function memberCanSendFrom(address) {
+  if (!state.sessionUserId || state.sessionUserId === "owner") return true;
+  const norm = normalizeAddress(address);
+  if (!norm) return false;
+  const at = norm.lastIndexOf("@");
+  const local = norm.slice(0, at);
+  const plus = local.indexOf("+");
+  const base = plus > 0 ? local.slice(0, plus) : local;
+  const domain = norm.slice(at + 1);
+  const candidates = state.allocatedMailboxes.filter(
+    (b) => b.domain === domain && allocationRank(b, local, base) < 9,
+  );
+  if (candidates.length === 0) return false;
+  candidates.sort((a, b) => {
+    const rankA = allocationRank(a, local, base);
+    const rankB = allocationRank(b, local, base);
+    if (rankA !== rankB) return rankA - rankB;
+    if (rankA === 3) return b.localpart.length - a.localpart.length;
+    return 0;
+  });
+  return Boolean(candidates[0] && candidates[0].canSend);
 }

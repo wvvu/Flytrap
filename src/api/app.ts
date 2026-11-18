@@ -1,47 +1,157 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { ulid } from "ulid";
 import cookie from "@fastify/cookie";
 import csrf from "@fastify/csrf-protection";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import session from "@fastify/session";
-import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyRequest, type FastifyServerOptions } from "fastify";
-import { z } from "zod";
-import { LABELS } from "../ai/types.js";
-import { listPrompts, readPrompt, savePrompt } from "../ai/prompt.js";
-import { ConfigError, type Config } from "../config.js";
-import type { Codec } from "../compress.js";
-import type { Db } from "../db/index.js";
+import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyRequest } from "fastify";
 import PostalMime from "postal-mime";
-import { findAttachment, listMessageAttachments } from "../db/repos/attachments.js";
-import { writeAudit } from "../db/repos/audit.js";
-import { deleteDkimKey, listDkimPublic, saveDkimKey } from "../db/repos/dkim-keys.js";
-import { countJobsByStatus, dismissJob, enqueueJob, failureSummary, hasOpenJob, listJobsWithDetails, outboxIdOf, retryAllDeadJobs, retryJob, retryMessageJobs, retryOutboxJob, wakeClassifyJobs, type JobStatus } from "../db/repos/jobs.js";
-import { getOutbox, listOutbox, listOutboxByIds } from "../db/repos/outbox.js";
-import { listThread } from "../db/repos/thread.js";
+import { z } from "zod";
 import { fallbackAiPool } from "../ai/pool.js";
-import { presentAiPool, readAiEnabled, readAiThinking, readBlockedSenders, readEffectiveAiPool, readPasswordHash, readResetSeal, saveAcceptDomains, saveAiControls, saveAiPool, saveBlockedSenders, saveJobMaxAttempts, saveNameSettings, saveNotifySettings, savePasswordHash, saveResetSeal, clearResetSeal, readRuntimeSettings, SettingsError } from "../db/repos/settings.js";
+import { probeAiKey } from "../ai/probe.js";
+import { listPrompts, readPrompt, savePrompt } from "../ai/prompt.js";
+import { LABELS } from "../ai/types.js";
+import type { Codec } from "../compress.js";
+import { ConfigError, type Config } from "../config.js";
+import type { Db } from "../db/index.js";
+import { canViewerReadAttachment, findAttachment, listMessageAttachments } from "../db/repos/attachments.js";
+import { listAuditLogs, writeAudit } from "../db/repos/audit.js";
+import { deleteDkimKey, listDkimPublic, saveDkimKey } from "../db/repos/dkim-keys.js";
+import {
+  countJobsByStatus,
+  dismissJob,
+  enqueueJob,
+  failureSummary,
+  listJobsWithDetails,
+  outboxIdOf,
+  retryAllDeadJobs,
+  retryJob,
+  retryMessageJobs,
+  retryOutboxJob,
+  wakeClassifyJobs,
+  type JobStatus,
+} from "../db/repos/jobs.js";
 import { findMailboxHistory, listMailboxHistory, upsertMailboxHistory } from "../db/repos/mailbox-history.js";
-import { countTrash, countUnread, deleteMessage, emptyTrash, getMessage, listMessages, markMessageRead, restoreMessage, trashMessage } from "../db/repos/messages.js";
+import {
+  canViewerAccessMessage,
+  countTrash,
+  countUnreadForViewer,
+  deleteMessageForViewer,
+  emptyTrashForViewer,
+  getMessageForViewer,
+  listMessages,
+  markAllReadForViewer,
+  markMessageReadForViewer,
+  markMessageUnreadForViewer,
+  restoreMessageForViewer,
+  setManualLabelForViewer,
+  setMessageStarredForViewer,
+  trashMessageForViewer,
+  type StoredMessage,
+  type ViewerContext,
+} from "../db/repos/messages.js";
+import {
+  canViewerAccessOutbox,
+  countUserOutboxSince,
+  getOutbox,
+  listOutbox,
+  listOutboxByIds,
+} from "../db/repos/outbox.js";
+import {
+  clearResetSeal,
+  presentAiPool,
+  readAcceptDomains,
+  readAiEnabled,
+  readAiThinking,
+  readBlockedSenders,
+  readEffectiveAiPool,
+  readNameSettings,
+  readOwnerProfile,
+  readPasswordHash,
+  readPersonalNotifySettings,
+  readResetSeal,
+  readRuntimeSettings,
+  saveAcceptDomains,
+  saveAiControls,
+  saveAiPool,
+  saveBlockedSenders,
+  saveJobMaxAttempts,
+  saveNameSettings,
+  saveNotifySettings,
+  saveOwnerProfile,
+  savePersonalNotifySettings,
+  savePasswordHash,
+  saveResetSeal,
+  SettingsError,
+} from "../db/repos/settings.js";
+import { listThread } from "../db/repos/thread.js";
+import {
+  allocateMailbox,
+  canMemberSendFrom,
+  createUser,
+  deleteUser,
+  findSenderDisplayNameForUser,
+  findUserByUsername,
+  findUserForPasswordReset,
+  findWinningAllocation,
+  getUserById,
+  hasAnyUsers,
+  listUserMailboxes,
+  listUsersWithDetails,
+  OWNER_USER_ID,
+  revokeMailbox,
+  touchUserLogin,
+  updateUser,
+  updateUserMailbox,
+  updateUserPassword,
+  UserError,
+} from "../db/repos/users.js";
 import { sha256 } from "../hash.js";
 import { readRaw } from "../ingest/read-raw.js";
 import { removeStoredFiles } from "../ingest/remove-stored.js";
+import { recentLogs } from "../log.js";
 import { normalizeAddress, OutboundError } from "../mail/address.js";
 import { rfc822HeaderBlock } from "../mail/headers.js";
 import { submitOutbox } from "../mail/submit.js";
-import { PathEscapeError, resolveInside } from "../paths.js";
-import { actorName, contentDisposition, decodeCursor, encodeCursor, errorName, HttpError, iso, parseJson, publicError, safeMime } from "./http.js";
-import { hashPassword, loginOk, makeResetCode, RESET_MAX_ATTEMPTS, RESET_RESEND_MS, resetCodeOk, sameAccount, sealResetCode } from "./password.js";
-import { recentLogs } from "../log.js";
-import { clearSessions, sqliteSessionStore } from "./session-store.js";
+import { appRoot, PathEscapeError, resolveInside } from "../paths.js";
+import {
+  actorName,
+  contentDisposition,
+  decodeCursor,
+  encodeCursor,
+  errorName,
+  HttpError,
+  iso,
+  parseJson,
+  publicError,
+  safeMime,
+} from "./http.js";
+import {
+  hashPassword,
+  loginOk,
+  makeResetCode,
+  passwordMatches,
+  RESET_MAX_ATTEMPTS,
+  RESET_RESEND_MS,
+  resetCodeOk,
+  sameAccount,
+  sealResetCode,
+} from "./password.js";
+import { clearSessions, clearUserSessions, clearUserSessionsExcept, sqliteSessionStore } from "./session-store.js";
 import { isPanelAsset, registerPanel } from "./static.js";
 
 declare module "fastify" {
   interface Session {
     user?: string;
+    userId?: string;
+    role?: "admin" | "member";
   }
 }
 
+const APP_VERSION = readAppVersion();
 const STATUSES = ["received", "authed", "parsed", "classified", "notified", "error"] as const;
 const JOB_STATUSES = ["queued", "running", "done", "failed", "dead", "dismissed"] as const;
 const DOMAIN_RE =
@@ -52,9 +162,21 @@ const loginBody = z.object({
   password: z.string().min(1).max(512),
 }).strict();
 
+const profileBody = z.object({
+  displayName: z.string().max(40).nullable().optional(),
+  recoveryEmail: z.string().max(254).nullable().optional(),
+}).strict();
+
 const notifySettingsBody = z.object({
   labels: z.array(z.string()).max(LABELS.length),
   minConfidence: z.number().min(0).max(1),
+}).strict();
+
+const personalNotifyBody = z.object({
+  labels: z.array(z.string()).max(LABELS.length),
+  minConfidence: z.number().min(0).max(1),
+  webhookUrl: z.string().max(500),
+  webhookBearer: z.string().max(512).optional(),
 }).strict();
 
 const domainSettingsBody = z.object({
@@ -89,6 +211,17 @@ const aiSettingsBody = z.object({
   thinking: z.enum(["off", "low", "medium", "high"]).optional(),
 }).strict();
 
+const testKeyBody = z.object({
+  id: z.string().min(1).max(80),
+  model: z.string().max(80).optional(),
+}).strict();
+
+const readAllBody = z.object({
+  label: z.string().max(32).optional(),
+  domain: z.string().max(253).optional(),
+  scope: z.string().max(80).optional(),
+}).strict();
+
 const passwordBody = z.object({
   current: z.string().min(1).max(200),
   next: z.string().min(8).max(200),
@@ -108,6 +241,12 @@ const blocklistBody = z.object({
   addresses: z.array(z.string().min(1).max(254)).max(500),
 }).strict();
 
+const sendAttachmentSchema = z.object({
+  filename: z.string().min(1).max(200),
+  contentType: z.string().max(120).optional(),
+  contentBase64: z.string().min(1).max(15_000_000),
+}).strict();
+
 const sendBody = z.object({
   from: z.string().min(3).max(254),
   to: z.array(z.string().min(3).max(254)).min(1).max(20),
@@ -117,6 +256,7 @@ const sendBody = z.object({
   text: z.string().max(100_000).optional(),
   inReplyTo: z.string().max(300).optional(),
   references: z.array(z.string().max(300)).max(20).optional(),
+  attachments: z.array(sendAttachmentSchema).max(5).optional(),
 }).strict();
 
 const dkimBody = z.object({
@@ -140,12 +280,57 @@ const historyBody = z.object({
   displayName: z.string().max(40).nullable().optional(),
 }).strict();
 
+const createUserBody = z.object({
+  username: z.string().min(2).max(128),
+  password: z.string().min(8).max(200),
+  displayName: z.string().max(40).nullable().optional(),
+  recoveryEmail: z.string().max(254).nullable().optional(),
+  role: z.enum(["admin", "member"]).optional(),
+  quotaSendPerDay: z.number().int().min(0).max(10_000).optional(),
+  notes: z.string().max(500).nullable().optional(),
+  initialMailbox: z.object({
+    localpart: z.string().min(1).max(64),
+    domain: z.string().min(1).max(253),
+    displayName: z.string().max(40).nullable().optional(),
+    notes: z.string().max(500).nullable().optional(),
+    canSend: z.boolean().optional(),
+  }).strict().nullable().optional(),
+}).strict();
+
+const updateUserBody = z.object({
+  displayName: z.string().max(40).nullable().optional(),
+  recoveryEmail: z.string().max(254).nullable().optional(),
+  role: z.enum(["admin", "member"]).optional(),
+  status: z.enum(["active", "disabled"]).optional(),
+  quotaSendPerDay: z.number().int().min(0).max(10_000).optional(),
+  notes: z.string().max(500).nullable().optional(),
+}).strict();
+
+const adminSetPasswordBody = z.object({
+  next: z.string().min(8).max(200),
+}).strict();
+
+const allocateMailboxBody = z.object({
+  localpart: z.string().min(1).max(64),
+  domain: z.string().min(1).max(253),
+  displayName: z.string().max(40).nullable().optional(),
+  notes: z.string().max(500).nullable().optional(),
+  canSend: z.boolean().optional(),
+}).strict();
+
+const updateMailboxBody = z.object({
+  displayName: z.string().max(40).nullable().optional(),
+  notes: z.string().max(500).nullable().optional(),
+  canSend: z.boolean().optional(),
+}).strict();
+
 export interface ApiOptions {
   config: Config;
   db: Db;
   codec: Codec;
   log?: FastifyBaseLogger | boolean;
   now?: () => number;
+  probeFetch?: typeof fetch;
 }
 
 export interface RunningApi {
@@ -160,7 +345,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       ? { logger: options.log, trustProxy: true }
       : options.log
         ? { loggerInstance: options.log, trustProxy: true }
-        : { logger: false, trustProxy: true }
+        : { logger: false, trustProxy: true },
   );
   const { config, db, codec } = options;
 
@@ -175,6 +360,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
         fontSrc: ["'self'", "data:"],
         connectSrc: ["'self'"],
         frameSrc: ["'self'"],
+        manifestSrc: ["'self'"],
         objectSrc: ["'none'"],
         baseUri: ["'none'"],
         formAction: ["'self'"],
@@ -210,13 +396,20 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
   app.setErrorHandler((err: unknown, request, reply) => {
     const error = err instanceof Error ? err : new Error("request failed");
-    const statusCode = typeof err === "object" && err !== null && "statusCode" in err && typeof err.statusCode === "number" ? err.statusCode : 500;
+    const statusCode =
+      typeof err === "object" && err !== null && "statusCode" in err && typeof err.statusCode === "number"
+        ? err.statusCode
+        : 500;
     const status = statusCode >= 400 && statusCode < 600 ? statusCode : 500;
     if (status >= 500) {
       request.log.error({ err: error.name }, "request failed");
       return reply.code(500).send({ error: "internal_error" });
     }
-    return reply.code(status).send({ error: errorName(status) });
+    const payload: Record<string, string> = { error: errorName(status) };
+    if (err instanceof HttpError && err.message && err.message !== errorName(status) && err.message !== "bad_request") {
+      payload.reason = err.message;
+    }
+    return reply.code(status).send(payload);
   });
 
   app.addHook("onRequest", (request, reply, done) => {
@@ -226,9 +419,35 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     }
     app.csrfProtection(request, reply, done);
   });
+
   app.addHook("onRequest", async (request, reply) => {
     if (reply.sent || isPublic(request.url)) return;
     if (!request.session.user) return reply.code(401).send({ error: "unauthorized" });
+
+    if (!request.session.userId) {
+      if (request.session.user === config.apiUsername) {
+        request.session.userId = OWNER_USER_ID;
+        request.session.role = "admin";
+      } else {
+        const found = findUserByUsername(db, request.session.user);
+        if (!found || found.status !== "active") {
+          await request.session.destroy();
+          return reply.code(401).send({ error: "unauthorized" });
+        }
+        request.session.userId = found.id;
+        request.session.role = found.role;
+      }
+    } else if (request.session.userId !== OWNER_USER_ID) {
+      const found = getUserById(db, request.session.userId);
+      if (!found || found.status !== "active") {
+        await request.session.destroy();
+        return reply.code(401).send({ error: "unauthorized" });
+      }
+      request.session.user = found.username;
+      request.session.role = found.role;
+    } else {
+      request.session.role = "admin";
+    }
   });
 
   app.get("/healthz", async () => {
@@ -236,61 +455,92 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return { ok: true, roles: config.roles, db: "ok" };
   });
 
-  app.get("/v1/csrf", async (request, reply) => {
+  app.get("/v1/csrf", async (_request, reply) => {
     return { token: reply.generateCsrf() };
   });
 
   app.post("/v1/login", { config: { rateLimit: { max: 5, timeWindow: "5 minutes" } } }, async (request, reply) => {
     const body = loginBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
-    const ok = loginOk(
-      body.data.username,
-      body.data.password,
-      config.apiUsername,
-      config.apiPassword ?? "",
-      readPasswordHash(db),
-    );
-    const actor = actorName(body.data.username);
-    if (!ok) {
-      writeAudit(db, { id: ulid(), at: now(), actor, action: "login_failed" });
+
+    const typedUser = body.data.username.trim();
+    const isOwnerMatch =
+      typedUser === config.apiUsername ||
+      (config.apiUsername.includes("@") && typedUser.toLowerCase() === config.apiUsername.toLowerCase());
+
+    if (isOwnerMatch) {
+      const ok = loginOk(
+        config.apiUsername,
+        body.data.password,
+        config.apiUsername,
+        config.apiPassword ?? "",
+        readPasswordHash(db),
+      );
+      if (!ok) {
+        writeAudit(db, { id: ulid(), at: now(), actor: actorName(typedUser), action: "login_failed" });
+        throw new HttpError(401, "unauthorized");
+      }
+      await request.session.regenerate();
+      request.session.user = config.apiUsername;
+      request.session.userId = OWNER_USER_ID;
+      request.session.role = "admin";
+      writeAudit(db, { id: ulid(), at: now(), actor: config.apiUsername, action: "login" });
+      return reply.send({ user: config.apiUsername });
+    }
+
+    const member = findUserByUsername(db, typedUser);
+    if (!member || member.status !== "active" || !passwordMatches(body.data.password, member.password_hash)) {
+      writeAudit(db, { id: ulid(), at: now(), actor: actorName(typedUser), action: "login_failed" });
       throw new HttpError(401, "unauthorized");
     }
+
+    const at = now();
+    touchUserLogin(db, member.id, at);
     await request.session.regenerate();
-    request.session.user = config.apiUsername;
-    writeAudit(db, { id: ulid(), at: now(), actor: config.apiUsername, action: "login" });
-    return reply.send({ user: config.apiUsername });
+    request.session.user = member.username;
+    request.session.userId = member.id;
+    request.session.role = member.role;
+    writeAudit(db, { id: ulid(), at, actor: member.username, action: "login" });
+    return reply.send({ user: member.username });
   });
 
   app.post("/v1/password/forgot", { config: { rateLimit: { max: 5, timeWindow: "15 minutes" } } }, async (request, reply) => {
     const body = resetRequestBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     const email = normalizeAddress(body.data.email);
-    const account = normalizeAddress(config.apiUsername);
-    if (email && account && sameAccount(email, account)) {
-      const at = now();
-      const current = readResetSeal(db);
-      const cooling = current
-        && current.attempts < RESET_MAX_ATTEMPTS
-        && at < current.expiresAt
-        && at < current.sentAt + RESET_RESEND_MS;
-      if (!cooling) {
-        const code = makeResetCode();
-        const from = normalizeAddress(`noreply@${config.acceptDomains[0] ?? ""}`);
-        if (from) {
-          try {
-            await submitOutbox(
-              { db, dataDir: config.mailDataDir, codec, acceptDomains: config.acceptDomains, now },
-              {
-                from,
-                to: [email],
-                subject: "登录验证码",
-                text: `验证码 ${code}\n\n10 分钟内有效。\n`,
-              },
-            );
-            saveResetSeal(db, sealResetCode(code, at), at);
-            writeAudit(db, { id: ulid(), at, actor: email, action: "password_reset_sent" });
-          } catch (err) {
-            request.log.error({ err: err instanceof Error ? err.name : "password reset send failed" }, "password reset send failed");
+    if (email) {
+      const targetId = resolveResetTargetId(db, config, email);
+      if (targetId) {
+        const at = now();
+        const current = readResetSeal(db, targetId);
+        const cooling =
+          current &&
+          current.attempts < RESET_MAX_ATTEMPTS &&
+          at < current.expiresAt &&
+          at < current.sentAt + RESET_RESEND_MS;
+        if (!cooling) {
+          const code = makeResetCode();
+          const acceptList = readAcceptDomains(db, config.acceptDomains);
+          const from = normalizeAddress(`noreply@${acceptList[0] ?? config.acceptDomains[0] ?? ""}`);
+          if (from) {
+            try {
+              await submitOutbox(
+                { db, dataDir: config.mailDataDir, codec, acceptDomains: config.acceptDomains, now },
+                {
+                  from,
+                  to: [email],
+                  subject: "登录验证码",
+                  text: `验证码 ${code}\n\n10 分钟内有效。\n`,
+                },
+              );
+              saveResetSeal(db, { ...sealResetCode(code, at), target: targetId }, at, targetId);
+              writeAudit(db, { id: ulid(), at, actor: email, action: "password_reset_sent" });
+            } catch (err) {
+              request.log.error(
+                { err: err instanceof Error ? err.name : "password reset send failed" },
+                "password reset send failed",
+              );
+            }
           }
         }
       }
@@ -303,23 +553,36 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     if (!body.success) throw new HttpError(400);
     if (body.data.next === "admin") throw new HttpError(400);
     const email = normalizeAddress(body.data.email);
-    const account = normalizeAddress(config.apiUsername);
     const at = now();
-    const matched = Boolean(email && account && sameAccount(email, account));
-    const seal = matched ? readResetSeal(db) : null;
+    const targetId = email ? resolveResetTargetId(db, config, email) : null;
+    const seal = targetId ? readResetSeal(db, targetId) : null;
     const verdict = seal ? resetCodeOk(body.data.code, seal, at) : { ok: false as const, seal: null };
-    if (!verdict.ok) {
-      if (verdict.seal) saveResetSeal(db, verdict.seal, at);
-      else if (seal) clearResetSeal(db);
-      if (matched) writeAudit(db, { id: ulid(), at, actor: actorName(email ?? ""), action: "password_reset_failed" });
+    if (!verdict.ok || !targetId) {
+      if (targetId && !verdict.ok) {
+        if (verdict.seal) saveResetSeal(db, verdict.seal, at, targetId);
+        else if (seal) clearResetSeal(db, targetId);
+        writeAudit(db, { id: ulid(), at, actor: actorName(email ?? ""), action: "password_reset_failed" });
+      }
       throw new HttpError(401, "unauthorized");
     }
-    db.transaction(() => {
-      savePasswordHash(db, hashPassword(body.data.next), at);
-      clearResetSeal(db);
-      clearSessions(db);
-      writeAudit(db, { id: ulid(), at, actor: email ?? account ?? "unknown", action: "password_reset" });
-    })();
+
+    if (targetId === OWNER_USER_ID) {
+      db.transaction(() => {
+        savePasswordHash(db, hashPassword(body.data.next), at);
+        clearResetSeal(db, OWNER_USER_ID);
+        clearSessions(db);
+        writeAudit(db, { id: ulid(), at, actor: email ?? config.apiUsername, action: "password_reset" });
+      })();
+    } else {
+      const user = getUserById(db, targetId);
+      if (!user || user.status !== "active") throw new HttpError(401, "unauthorized");
+      db.transaction(() => {
+        updateUserPassword(db, targetId, hashPassword(body.data.next), at);
+        clearResetSeal(db, targetId);
+        clearUserSessions(db, targetId, user.username);
+        writeAudit(db, { id: ulid(), at, actor: user.username, action: "password_reset" });
+      })();
+    }
     return reply.send({ ok: true });
   });
 
@@ -332,11 +595,88 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.get("/v1/me", async (request) => ({ user: request.session.user }));
 
-  app.get("/v1/unread", async () => countUnread(db));
+  app.get("/v1/session", async (request) => {
+    const userId = request.session.userId ?? OWNER_USER_ID;
+    const role = request.session.role ?? "admin";
+    const todayStart = utcDayStart(now());
+    const acceptDomains = readAcceptDomains(db, config.acceptDomains);
+    const dkimDomains = [...new Set(listDkimPublic(db).map((item) => item.domain))];
+
+    if (userId === OWNER_USER_ID) {
+      const profile = readOwnerProfile(db);
+      return {
+        user: config.apiUsername,
+        userId: OWNER_USER_ID,
+        role: "admin",
+        displayName: profile.displayName,
+        recoveryEmail: profile.recoveryEmail,
+        quotaSendPerDay: null,
+        sentToday: countUserOutboxSince(db, OWNER_USER_ID, todayStart),
+        mailboxes: [],
+        acceptDomains,
+        dkimDomains,
+        hasMembers: hasAnyUsers(db),
+        version: APP_VERSION,
+      };
+    }
+
+    const member = getUserById(db, userId);
+    if (!member) throw new HttpError(401, "unauthorized");
+    const mailboxes = listUserMailboxes(db, userId);
+    const memberDomains = [...new Set(mailboxes.map((b) => b.domain))];
+
+    return {
+      user: member.username,
+      userId: member.id,
+      role: member.role,
+      displayName: member.display_name,
+      recoveryEmail: member.recovery_email,
+      quotaSendPerDay: role === "admin" ? null : member.quota_send_per_day,
+      sentToday: countUserOutboxSince(db, member.id, todayStart),
+      mailboxes,
+      acceptDomains: role === "admin" ? acceptDomains : memberDomains,
+      dkimDomains: role === "admin" ? dkimDomains : dkimDomains.filter((d) => memberDomains.includes(d)),
+      hasMembers: role === "admin" ? hasAnyUsers(db) : false,
+      version: APP_VERSION,
+    };
+  });
+
+  app.patch("/v1/account/profile", async (request, reply) => {
+    const body = profileBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    const userId = request.session.userId ?? OWNER_USER_ID;
+    const at = now();
+    try {
+      if (userId === OWNER_USER_ID) {
+        const saved = saveOwnerProfile(db, body.data, at);
+        writeAudit(db, { id: ulid(), at, actor: request.session.user ?? "admin", action: "profile_update" });
+        return reply.send({ ok: true, ...saved });
+      }
+      const updated = updateUser(
+        db,
+        userId,
+        { displayName: body.data.displayName, recoveryEmail: body.data.recoveryEmail },
+        at,
+      );
+      writeAudit(db, { id: ulid(), at, actor: updated.username, action: "profile_update" });
+      return reply.send({ ok: true, displayName: updated.displayName, recoveryEmail: updated.recoveryEmail });
+    } catch (err) {
+      if (err instanceof SettingsError || err instanceof UserError) throw new HttpError(400);
+      throw err;
+    }
+  });
+
+  app.get("/v1/unread", async (request) => {
+    const q = request.query as Record<string, unknown>;
+    const scope = optionalString(q?.scope);
+    const viewer = viewerOf(db, request, scope);
+    return countUnreadForViewer(db, viewer);
+  });
 
   app.get("/v1/messages", async (request) => {
     const query = readListQuery(request.query);
-    const rows = listMessages(db, { ...query, limit: query.limit + 1 });
+    const viewer = viewerOf(db, request, query.scope);
+    const rows = listMessages(db, { ...query, limit: query.limit + 1, viewer });
     const page = rows.slice(0, query.limit);
     const last = page[page.length - 1];
     return {
@@ -345,11 +685,37 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     };
   });
 
-  app.get("/v1/messages/:id", async (request) => toDetail(db, messageId(request)));
+  app.post("/v1/messages/read-all", async (request, reply) => {
+    const body = readAllBody.safeParse(request.body ?? {});
+    if (!body.success) throw new HttpError(400);
+    if (
+      body.data.label &&
+      body.data.label !== "not-legit" &&
+      !LABELS.includes(body.data.label as (typeof LABELS)[number])
+    ) {
+      throw new HttpError(400);
+    }
+    const viewer = viewerOf(db, request, body.data.scope);
+    const count = markAllReadForViewer(
+      db,
+      viewer,
+      { label: body.data.label, domain: body.data.domain },
+      now(),
+    );
+    return reply.send({ ok: true, count });
+  });
+
+  app.get("/v1/messages/:id", async (request) => {
+    const q = request.query as Record<string, unknown>;
+    const viewer = viewerOf(db, request, optionalString(q?.scope));
+    return toDetail(db, messageId(request), viewer);
+  });
 
   app.get("/v1/messages/:id/thread", async (request) => {
     const id = messageId(request);
-    const letters = listThread(db, id);
+    const q = request.query as Record<string, unknown>;
+    const viewer = viewerOf(db, request, optionalString(q?.scope));
+    const letters = listThread(db, id, viewer);
     if (!letters) throw new HttpError(404, "not_found");
     return {
       items: letters.map((item) => ({
@@ -364,15 +730,20 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.get("/v1/messages/:id/text", async (request) => {
-    const message = requireMessage(db, messageId(request));
+    const viewer = viewerOf(db, request, "allIfAdmin");
+    const message = requireMessage(db, messageId(request), viewer);
     const parsed = parseJson(message.parsed);
-    const text = parsed && typeof parsed === "object" && "text" in parsed && typeof parsed.text === "string" ? parsed.text : null;
+    const text =
+      parsed && typeof parsed === "object" && "text" in parsed && typeof parsed.text === "string"
+        ? parsed.text
+        : null;
     if (text === null) throw new HttpError(404, "not_found");
     return { text };
   });
 
   app.get("/v1/messages/:id/html", async (request) => {
-    const message = requireMessage(db, messageId(request));
+    const viewer = viewerOf(db, request, "allIfAdmin");
+    const message = requireMessage(db, messageId(request), viewer);
     let bytes: Buffer;
     try {
       bytes = await readRaw(config.mailDataDir, message.raw_path, codec, message.sha256);
@@ -385,7 +756,8 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.get("/v1/messages/:id/raw", async (request, reply) => {
-    const message = requireMessage(db, messageId(request));
+    const viewer = viewerOf(db, request, "allIfAdmin");
+    const message = requireMessage(db, messageId(request), viewer);
     let bytes: Buffer;
     try {
       bytes = await readRaw(config.mailDataDir, message.raw_path, codec, message.sha256);
@@ -400,7 +772,8 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.get("/v1/messages/:id/headers", async (request) => {
-    const message = requireMessage(db, messageId(request));
+    const viewer = viewerOf(db, request, "allIfAdmin");
+    const message = requireMessage(db, messageId(request), viewer);
     let bytes: Buffer;
     try {
       bytes = await readRaw(config.mailDataDir, message.raw_path, codec, message.sha256);
@@ -413,7 +786,8 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.post("/v1/messages/:id/reclassify", async (request, reply) => {
     const id = messageId(request);
-    requireMessage(db, id);
+    const viewer = viewerOf(db, request, "allIfAdmin");
+    requireMessage(db, id, viewer);
     const at = now();
     const open = db
       .prepare(
@@ -423,7 +797,8 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       .all(id) as Array<{ id: string; status: string }>;
     const queued = open.find((row) => row.status === "queued");
     if (queued) {
-      db.prepare("UPDATE jobs SET payload = ?, updated_at = ? WHERE id = ?").run(JSON.stringify({ force: true }), at, queued.id);
+      db.prepare("UPDATE jobs SET payload = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify({ force: true }), at, queued.id);
     } else {
       enqueueJob(db, { id: ulid(), type: "classify", messageId: id, payload: { force: true }, now: at });
     }
@@ -437,70 +812,78 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.patch("/v1/messages/:id/label", async (request, reply) => {
     const id = messageId(request);
-    const message = requireMessage(db, id);
+    const viewer = viewerOf(db, request);
+    requireMessage(db, id, request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer);
     const body = labelOverrideBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
 
     const at = now();
-    const existingAi = parseJson(message.ai_result) as Record<string, unknown> | null;
-    const ai: Record<string, unknown> =
-      existingAi && typeof existingAi === "object" && !Array.isArray(existingAi)
-        ? { ...existingAi }
-        : {};
-
-    if (typeof ai.originalLabel !== "string" && typeof ai.label === "string") {
-      ai.originalLabel = ai.label;
-      ai.originalConfidence = typeof ai.confidence === "number" ? ai.confidence : null;
-    }
-
-    const prevLabel = typeof ai.label === "string" ? ai.label : "none";
-    ai.schema = 1;
-    if (typeof ai.prompt_id !== "string" || !ai.prompt_id) ai.prompt_id = "manual";
-    if (typeof ai.model !== "string" || !ai.model) ai.model = "manual";
-    if (typeof ai.provider !== "string" || !ai.provider) ai.provider = "manual";
-    if (typeof ai.at !== "string" || !ai.at) ai.at = new Date(at).toISOString();
-    if (typeof ai.confidence !== "number") ai.confidence = 1;
-    if (typeof ai.summary !== "string" || !ai.summary) ai.summary = "已手动修改分类";
-    if (!Array.isArray(ai.tags)) ai.tags = [];
-    if (!Array.isArray(ai.signals)) ai.signals = [];
-    ai.label = body.data.label;
-    ai.manualOverride = true;
-    ai.overrideActor = request.session.user ?? "admin";
-    ai.overrideAt = at;
-
-    const updatedJson = JSON.stringify(ai);
-    db.prepare("UPDATE messages SET ai_result = ?, status = 'classified', updated_at = ? WHERE id = ?")
-      .run(updatedJson, at, id);
+    const actor = request.session.user ?? "admin";
+    const result = setManualLabelForViewer(db, id, body.data.label, actor, viewer, at);
 
     writeAudit(db, {
       id: ulid(),
-      at: now(),
-      actor: request.session.user ?? "unknown",
+      at,
+      actor,
       action: "override_label",
       target: id,
-      detail: `from=${prevLabel},to=${body.data.label}`,
+      detail: `from=${result.prevLabel},to=${body.data.label}`,
     });
 
     return reply.send({
       ok: true,
       id,
       label: body.data.label,
-      originalLabel: ai.originalLabel ?? null,
-      originalConfidence: ai.originalConfidence ?? null,
+      originalLabel: result.originalLabel,
+      originalConfidence: result.originalConfidence,
     });
   });
 
   app.post("/v1/messages/:id/read", async (request, reply) => {
     const id = messageId(request);
-    requireMessage(db, id);
-    markMessageRead(db, id, now());
+    const q = request.query as Record<string, unknown>;
+    const viewer = viewerOf(db, request, optionalString(q?.scope));
+    requireMessage(db, id, request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer);
+    markMessageReadForViewer(db, id, viewer, now());
     return reply.send({ ok: true });
+  });
+
+  app.post("/v1/messages/:id/unread", async (request, reply) => {
+    const id = messageId(request);
+    const q = request.query as Record<string, unknown>;
+    const viewer = viewerOf(db, request, optionalString(q?.scope));
+    requireMessage(db, id, request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer);
+    markMessageUnreadForViewer(db, id, viewer, now());
+    return reply.send({ ok: true, id, read: false });
+  });
+
+  const starBody = z.object({ starred: z.boolean() }).strict();
+
+  app.post("/v1/messages/:id/star", async (request, reply) => {
+    const id = messageId(request);
+    const viewer = viewerOf(db, request);
+    const message = requireMessage(
+      db,
+      id,
+      request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer,
+    );
+    const parsed = starBody.safeParse(request.body ?? {});
+    const nextStarred = parsed.success ? parsed.data.starred : message.starred_at == null;
+    setMessageStarredForViewer(db, id, nextStarred, viewer, now());
+    return reply.send({ ok: true, id, starred: nextStarred });
   });
 
   app.post("/v1/messages/:id/trash", async (request, reply) => {
     const id = messageId(request);
-    requireMessage(db, id);
-    trashMessage(db, id, now());
+    const q = request.query as Record<string, unknown>;
+    const viewer = viewerOf(db, request, optionalString(q?.scope));
+    const message = requireMessage(
+      db,
+      id,
+      request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer,
+    );
+    if (!canViewerAccessMessage(db, message, viewer)) throw new HttpError(404, "not_found");
+    trashMessageForViewer(db, id, viewer, now());
     writeAudit(db, {
       id: ulid(),
       at: now(),
@@ -513,17 +896,23 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.post("/v1/messages/:id/block", async (request, reply) => {
     const id = messageId(request);
-    const message = requireMessage(db, id);
+    const userId = request.session.userId ?? OWNER_USER_ID;
+    const viewer = viewerOf(db, request);
+    const message = requireMessage(
+      db,
+      id,
+      request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer,
+    );
     const sender = message.from_addr || message.envelope_from;
     if (!sender) throw new HttpError(400);
-    let blockedSenders;
+    let blockedSenders: string[];
     try {
-      blockedSenders = saveBlockedSenders(db, readBlockedSenders(db).concat(sender), now());
+      blockedSenders = saveBlockedSenders(db, readBlockedSenders(db, userId).concat(sender), now(), userId);
     } catch (err) {
       if (err instanceof SettingsError) throw new HttpError(400);
       throw err;
     }
-    trashMessage(db, id, now());
+    trashMessageForViewer(db, id, viewer, now());
     writeAudit(db, {
       id: ulid(),
       at: now(),
@@ -537,8 +926,15 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.post("/v1/messages/:id/restore", async (request, reply) => {
     const id = messageId(request);
-    requireMessage(db, id);
-    restoreMessage(db, id, now());
+    const q = request.query as Record<string, unknown>;
+    const viewer = viewerOf(db, request, optionalString(q?.scope));
+    const message = requireMessage(
+      db,
+      id,
+      request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer,
+    );
+    if (!canViewerAccessMessage(db, message, viewer)) throw new HttpError(404, "not_found");
+    restoreMessageForViewer(db, id, viewer, now());
     writeAudit(db, {
       id: ulid(),
       at: now(),
@@ -551,8 +947,10 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.delete("/v1/messages/:id", async (request, reply) => {
     const id = messageId(request);
-    requireMessage(db, id);
-    const purged = deleteMessage(db, id, now());
+    const q = request.query as Record<string, unknown>;
+    const viewer = viewerOf(db, request, optionalString(q?.scope));
+    requireMessage(db, id, request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer);
+    const purged = deleteMessageForViewer(db, id, viewer, now());
     if (!purged) throw new HttpError(404, "not_found");
     const failed = await removeStoredFiles(config.mailDataDir, purged.paths);
     if (failed.length > 0) request.log.warn({ failed: failed.length }, "stored files left on disk");
@@ -567,7 +965,9 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.post("/v1/messages/empty-trash", async (request, reply) => {
-    const purged = emptyTrash(db, now());
+    const q = request.query as Record<string, unknown>;
+    const viewer = viewerOf(db, request, optionalString(q?.scope));
+    const purged = emptyTrashForViewer(db, viewer, now());
     const failed = await removeStoredFiles(config.mailDataDir, purged.paths);
     if (failed.length > 0) request.log.warn({ failed: failed.length }, "stored files left on disk");
     const count = purged.count;
@@ -581,10 +981,15 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, count });
   });
 
-  app.get("/v1/trash/count", async () => ({ count: countTrash(db) }));
+  app.get("/v1/trash/count", async (request) => {
+    const viewer = viewerOf(db, request);
+    return { count: countTrash(db, viewer) };
+  });
 
   app.get("/v1/attachments/:sha256", async (request, reply) => {
     const sha = attachmentId(request);
+    const viewer = viewerOf(db, request);
+    if (!canViewerReadAttachment(db, sha, viewer)) throw new HttpError(404, "not_found");
     const row = findAttachment(db, sha);
     if (!row) throw new HttpError(404, "not_found");
     let abs: string;
@@ -604,9 +1009,13 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       .send(bytes);
   });
 
-  app.get("/v1/jobs/summary", async () => failureSummary(db));
+  app.get("/v1/jobs/summary", async (request) => {
+    requireAdmin(request);
+    return failureSummary(db);
+  });
 
   app.get("/v1/jobs/count", async (request) => {
+    requireAdmin(request);
     const query = request.query as Record<string, unknown>;
     const status = optionalString(query.status) ?? "dead";
     if (!JOB_STATUSES.includes(status as JobStatus)) throw new HttpError(400);
@@ -614,6 +1023,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.get("/v1/jobs", async (request) => {
+    requireAdmin(request);
     const query = request.query as Record<string, unknown>;
     const status = optionalString(query.status);
     const scope = optionalString(query.scope);
@@ -658,6 +1068,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.post("/v1/jobs/retry-message", async (request, reply) => {
+    requireAdmin(request);
     const body = retryMessageBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     const count = retryMessageJobs(db, body.data.messageId, now());
@@ -673,6 +1084,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.post("/v1/jobs/:id/retry", async (request, reply) => {
+    requireAdmin(request);
     const params = request.params as Record<string, string>;
     const id = params.id;
     if (!id) throw new HttpError(400);
@@ -683,6 +1095,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.post("/v1/jobs/:id/dismiss", async (request, reply) => {
+    requireAdmin(request);
     const params = request.params as Record<string, string>;
     const id = params.id;
     if (!id) throw new HttpError(400);
@@ -693,12 +1106,14 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.post("/v1/jobs/retry-all", async (request, reply) => {
+    requireAdmin(request);
     const count = retryAllDeadJobs(db, now());
     writeAudit(db, { id: ulid(), at: now(), actor: request.session.user ?? "unknown", action: "retry_all_dead", detail: `count=${count}` });
     return reply.send({ ok: true, count });
   });
 
-  app.get("/v1/prompts", async () => {
+  app.get("/v1/prompts", async (request) => {
+    requireAdmin(request);
     const list = listPrompts(config.promptsDir, db);
     return {
       items: list.map((item) => ({
@@ -710,6 +1125,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.get("/v1/prompts/:id", async (request) => {
+    requireAdmin(request);
     const params = request.params as Record<string, string>;
     const id = params.id;
     if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) throw new HttpError(400);
@@ -722,6 +1138,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.put("/v1/prompts/:id", async (request, reply) => {
+    requireAdmin(request);
     const params = request.params as Record<string, string>;
     const id = params.id;
     if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) throw new HttpError(400);
@@ -734,15 +1151,43 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, id });
   });
 
-  app.get("/v1/ai/status", async () => aiStatus(db, config));
+  app.get("/v1/ai/status", async (request) => {
+    requireAdmin(request);
+    return aiStatus(db, config);
+  });
 
-  app.get("/v1/settings", async () => {
-    const runtime = readRuntimeSettings(db, {
-      notifyLabels: config.notifyLabels,
-      notifyMinConfidence: config.notifyMinConfidence,
-      acceptDomains: config.acceptDomains,
-    });
+  app.get("/v1/settings", async (request) => {
+    const userId = request.session.userId ?? OWNER_USER_ID;
+    const role = request.session.role ?? "admin";
+    if (role !== "admin") {
+      const names = readNameSettings(db, userId);
+      const boxes = listUserMailboxes(db, userId);
+      const memberDomains = [...new Set(boxes.map((b) => b.domain))];
+      return {
+        role: "member",
+        acceptDomains: memberDomains,
+        panelTitle: names.panelTitle,
+        labelNames: names.labelNames,
+        domainNames: names.domainNames,
+        senderNames: names.senderNames,
+        blockedSenders: readBlockedSenders(db, userId),
+        passwordSet: true,
+        personalNotify: personalNotifyView(db, userId),
+        version: APP_VERSION,
+      };
+    }
+
+    const runtime = readRuntimeSettings(
+      db,
+      {
+        notifyLabels: config.notifyLabels,
+        notifyMinConfidence: config.notifyMinConfidence,
+        acceptDomains: config.acceptDomains,
+      },
+      userId,
+    );
     return {
+      role: "admin",
       notifyLabels: runtime.notifyLabels,
       notifyMinConfidence: runtime.notifyMinConfidence,
       acceptDomains: runtime.acceptDomains,
@@ -759,12 +1204,15 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       aiPool: presentAiPool(readEffectiveAiPool(db, fallbackAiPool(config))),
       aiEnabled: readAiEnabled(db),
       aiThinking: readAiThinking(db),
-      blockedSenders: readBlockedSenders(db),
-      passwordSet: readPasswordHash(db) !== null,
+      blockedSenders: readBlockedSenders(db, userId),
+      passwordSet: userId === OWNER_USER_ID ? readPasswordHash(db) !== null : true,
+      personalNotify: personalNotifyView(db, userId),
+      version: APP_VERSION,
     };
   });
 
   app.put("/v1/settings/ai", async (request, reply) => {
+    requireAdmin(request);
     const body = aiSettingsBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     let saved;
@@ -777,7 +1225,6 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     if (body.data.enabled !== undefined && body.data.thinking !== undefined) {
       saveAiControls(db, body.data.enabled, body.data.thinking, now());
     }
-    // Keys alone also wake deferred classify jobs when AI is on.
     if (readAiEnabled(db)) wakeClassifyJobs(db, now());
     writeAudit(db, {
       id: ulid(),
@@ -794,12 +1241,33 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     });
   });
 
+  app.post("/v1/settings/ai/test-key", async (request, reply) => {
+    requireAdmin(request);
+    const body = testKeyBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    const pool = readEffectiveAiPool(db, fallbackAiPool(config));
+    const targetKey = pool.keys.find((item) => item.id === body.data.id);
+    if (!targetKey) throw new HttpError(404, "not_found");
+    const defaultModel = config.classifier === "gemini" ? config.geminiModel : config.openaiModel ?? "";
+    const chosenModel = body.data.model?.trim() || pool.models[0] || defaultModel;
+    const probe = await probeAiKey({
+      classifier: config.classifier,
+      secret: targetKey.secret,
+      model: chosenModel,
+      geminiBaseUrl: config.geminiBaseUrl,
+      openaiBaseUrl: config.openaiBaseUrl,
+      fetchImpl: options.probeFetch,
+    });
+    return reply.send(probe);
+  });
+
   app.put("/v1/settings/blocklist", async (request, reply) => {
     const body = blocklistBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
-    let blockedSenders;
+    const userId = request.session.userId ?? OWNER_USER_ID;
+    let blockedSenders: string[];
     try {
-      blockedSenders = saveBlockedSenders(db, body.data.addresses, now());
+      blockedSenders = saveBlockedSenders(db, body.data.addresses, now(), userId);
     } catch (err) {
       if (err instanceof SettingsError) throw new HttpError(400);
       throw err;
@@ -818,30 +1286,70 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const body = passwordBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     if (body.data.next === "admin") throw new HttpError(400);
-    const currentOk = loginOk(
-      config.apiUsername,
-      body.data.current,
-      config.apiUsername,
-      config.apiPassword ?? "",
-      readPasswordHash(db),
-    );
-    if (!currentOk) throw new HttpError(401, "unauthorized");
-    savePasswordHash(db, hashPassword(body.data.next), now());
-    clearResetSeal(db);
+    const userId = request.session.userId ?? OWNER_USER_ID;
+    const at = now();
+
+    if (userId === OWNER_USER_ID) {
+      const currentOk = loginOk(
+        config.apiUsername,
+        body.data.current,
+        config.apiUsername,
+        config.apiPassword ?? "",
+        readPasswordHash(db),
+      );
+      if (!currentOk) throw new HttpError(401, "unauthorized");
+      savePasswordHash(db, hashPassword(body.data.next), at);
+      clearResetSeal(db, OWNER_USER_ID);
+      clearUserSessionsExcept(db, OWNER_USER_ID, request.session.sessionId, config.apiUsername);
+    } else {
+      const user = getUserById(db, userId);
+      if (!user || !passwordMatches(body.data.current, user.password_hash)) {
+        throw new HttpError(401, "unauthorized");
+      }
+      updateUserPassword(db, userId, hashPassword(body.data.next), at);
+      clearResetSeal(db, userId);
+      clearUserSessionsExcept(db, userId, request.session.sessionId, user.username);
+    }
+
     writeAudit(db, {
       id: ulid(),
-      at: now(),
+      at,
       actor: request.session.user ?? "unknown",
       action: "password_change",
     });
     return reply.send({ ok: true });
   });
 
-  app.get("/v1/logs", async () => {
+  app.get("/v1/logs", async (request) => {
+    requireAdmin(request);
     return { lines: recentLogs().map(redactLogLine) };
   });
 
+  app.get("/v1/audit", async (request) => {
+    requireAdmin(request);
+    const query = request.query as Record<string, unknown>;
+    const actor = optionalString(query.actor);
+    const action = optionalString(query.action);
+    const limitRaw = optionalString(query.limit);
+    let limit = 80;
+    if (limitRaw !== undefined) {
+      if (!/^\d+$/.test(limitRaw)) throw new HttpError(400);
+      limit = Number(limitRaw);
+    }
+    return {
+      items: listAuditLogs(db, { limit, actor, action }).map((row) => ({
+        id: row.id,
+        at: iso(row.at),
+        actor: row.actor,
+        action: row.action,
+        target: row.target,
+        detail: row.detail ? redactLogLine(row.detail) : null,
+      })),
+    };
+  });
+
   app.put("/v1/settings/notify", async (request, reply) => {
+    requireAdmin(request);
     const body = notifySettingsBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     let labels;
@@ -861,7 +1369,43 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, notifyLabels: labels, notifyMinConfidence: body.data.minConfidence });
   });
 
+  app.put("/v1/settings/notify/personal", async (request, reply) => {
+    const body = personalNotifyBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    const userId = request.session.userId ?? OWNER_USER_ID;
+    let saved;
+    try {
+      saved = savePersonalNotifySettings(db, userId, {
+        labels: body.data.labels,
+        minConfidence: body.data.minConfidence,
+        webhookUrl: body.data.webhookUrl,
+        webhookBearer: body.data.webhookBearer,
+      }, now());
+    } catch (err) {
+      if (err instanceof SettingsError && err.message === "invalid webhook url") {
+        throw new HttpError(400, "invalid webhook url");
+      }
+      if (err instanceof SettingsError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "settings_notify_personal",
+      detail: saved.notifyLabels.join(",") || "none",
+    });
+    return reply.send({
+      ok: true,
+      notifyLabels: saved.notifyLabels,
+      notifyMinConfidence: saved.notifyMinConfidence,
+      notifyWebhookUrl: saved.notifyWebhookUrl,
+      notifyWebhookBearerSet: saved.notifyWebhookBearer.length > 0,
+    });
+  });
+
   app.put("/v1/settings/domains", async (request, reply) => {
+    requireAdmin(request);
     const body = domainSettingsBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     let domains;
@@ -881,9 +1425,13 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, acceptDomains: domains });
   });
 
-  app.get("/v1/dkim", async () => ({ items: listDkimPublic(db) }));
+  app.get("/v1/dkim", async (request) => {
+    requireAdmin(request);
+    return { items: listDkimPublic(db) };
+  });
 
   app.post("/v1/dkim", async (request, reply) => {
+    requireAdmin(request);
     const body = dkimBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     let saved;
@@ -905,6 +1453,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.post("/v1/dkim/remove", async (request, reply) => {
+    requireAdmin(request);
     const body = dkimRemoveBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     let removed = false;
@@ -928,18 +1477,22 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   app.get("/v1/outbox", async (request) => {
     const query = request.query as Record<string, unknown>;
     const limitRaw = optionalString(query.limit);
+    const scope = optionalString(query.scope);
     let limit = 30;
     if (limitRaw !== undefined) {
       if (!/^\d+$/.test(limitRaw)) throw new HttpError(400);
       limit = Number(limitRaw);
       if (limit < 1 || limit > 100) throw new HttpError(400);
     }
-    return { items: listOutbox(db, limit).map(presentOutbox) };
+    const viewer = viewerOf(db, request, scope);
+    return { items: listOutbox(db, limit, viewer).map(presentOutbox) };
   });
 
   app.get("/v1/outbox/:id/raw", async (request, reply) => {
     const row = getOutbox(db, messageId(request));
-    if (!row) throw new HttpError(404, "not_found");
+    if (!row || !canViewerAccessOutbox(row, viewerOf(db, request, "allIfAdmin"))) {
+      throw new HttpError(404, "not_found");
+    }
     let bytes: Buffer;
     try {
       bytes = await readRaw(config.mailDataDir, row.raw_path, codec, row.sha256);
@@ -955,7 +1508,9 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.get("/v1/outbox/:id", async (request) => {
     const row = getOutbox(db, messageId(request));
-    if (!row) throw new HttpError(404, "not_found");
+    if (!row || !canViewerAccessOutbox(row, viewerOf(db, request, "allIfAdmin"))) {
+      throw new HttpError(404, "not_found");
+    }
     let text = "";
     let headers = "";
     try {
@@ -972,6 +1527,10 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.post("/v1/outbox/:id/retry", async (request, reply) => {
     const id = messageId(request);
+    const row = getOutbox(db, id);
+    if (!row || !canViewerAccessOutbox(row, viewerOf(db, request, "allIfAdmin"))) {
+      throw new HttpError(404, "not_found");
+    }
     const ok = retryOutboxJob(db, id, now());
     if (!ok) throw new HttpError(404, "not_found");
     writeAudit(db, {
@@ -984,21 +1543,50 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true });
   });
 
-  app.post("/v1/outbox", { config: { rateLimit: { max: 30, timeWindow: "10 minutes" } } }, async (request, reply) => {
+  app.post("/v1/outbox", {
+    bodyLimit: 16 * 1024 * 1024,
+    config: { rateLimit: { max: 30, timeWindow: "10 minutes" } },
+  }, async (request, reply) => {
     const body = sendBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
+
+    const normalizedFrom = normalizeAddress(body.data.from);
+    if (!normalizedFrom) throw new HttpError(400);
+
+    const userId = request.session.userId ?? OWNER_USER_ID;
+    const role = request.session.role ?? "admin";
+    const currentNow = now();
+
+    if (userId !== OWNER_USER_ID && !canMemberSendFrom(db, userId, normalizedFrom)) {
+      throw new HttpError(403, "forbidden");
+    }
+    if (role !== "admin") {
+      const member = getUserById(db, userId);
+      const dailyLimit = member?.quota_send_per_day ?? 100;
+      const sentToday = countUserOutboxSince(db, userId, utcDayStart(currentNow));
+      if (sentToday >= dailyLimit) {
+        throw new HttpError(429, "rate_limited");
+      }
+    }
+
     try {
-      // A name set for this sending address in mailbox history goes on the From line.
-      const at = body.data.from.lastIndexOf("@");
-      const history =
-        at > 0 ? findMailboxHistory(db, body.data.from.slice(at + 1), body.data.from.slice(0, at)) : undefined;
+      let fromName = findSenderDisplayNameForUser(db, userId, normalizedFrom);
+      if (!fromName && role === "admin") {
+        const atIdx = normalizedFrom.lastIndexOf("@");
+        const history =
+          atIdx > 0
+            ? findMailboxHistory(db, normalizedFrom.slice(atIdx + 1), normalizedFrom.slice(0, atIdx))
+            : undefined;
+        fromName = history?.display_name ?? readOwnerProfile(db).displayName ?? undefined;
+      }
+
       const queued = await submitOutbox(
         { db, dataDir: config.mailDataDir, codec, acceptDomains: config.acceptDomains, now },
-        { ...body.data, fromName: history?.display_name ?? undefined },
+        { ...body.data, from: normalizedFrom, fromName, userId },
       );
       writeAudit(db, {
         id: ulid(),
-        at: now(),
+        at: currentNow,
         actor: request.session.user ?? "unknown",
         action: "send_queue",
         target: queued.id,
@@ -1012,6 +1600,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.put("/v1/settings/jobs", async (request, reply) => {
+    requireAdmin(request);
     const body = jobSettingsBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     let maxAttempts;
@@ -1034,9 +1623,10 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   app.put("/v1/settings/names", async (request, reply) => {
     const body = nameSettingsBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
+    const userId = request.session.userId ?? OWNER_USER_ID;
     let saved;
     try {
-      saved = saveNameSettings(db, body.data, now());
+      saved = saveNameSettings(db, body.data, now(), userId);
     } catch (err) {
       if (err instanceof SettingsError || err instanceof ConfigError) throw new HttpError(400);
       throw err;
@@ -1051,7 +1641,8 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true, ...saved });
   });
 
-  app.get("/v1/stats", async () => {
+  app.get("/v1/stats", async (request) => {
+    requireAdmin(request);
     const start = utcDayStart(now());
     return {
       today: countLabels(db, start),
@@ -1061,6 +1652,24 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   });
 
   app.get("/v1/mailbox-history", async (request) => {
+    const role = request.session.role ?? "admin";
+    const userId = request.session.userId ?? OWNER_USER_ID;
+    if (role !== "admin") {
+      const boxes = listUserMailboxes(db, userId);
+      return {
+        items: boxes.map((box) => ({
+          id: box.id,
+          domain: box.domain,
+          localpart: box.localpart,
+          firstSeen: iso(box.createdAt),
+          lastSeen: null,
+          source: "allocated",
+          notes: box.notes,
+          displayName: box.displayName,
+        })),
+      };
+    }
+
     const query = request.query as Record<string, unknown>;
     const domain = optionalString(query.domain);
     const localpart = optionalString(query.localpart);
@@ -1077,6 +1686,26 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     if (!body.success) throw new HttpError(400);
     const domain = body.data.domain.trim().toLowerCase().replace(/\.$/, "");
     const localpart = body.data.localpart.trim().toLowerCase();
+    const role = request.session.role ?? "admin";
+    const userId = request.session.userId ?? OWNER_USER_ID;
+
+    if (role !== "admin") {
+      const matched = findWinningAllocation(db, `${localpart}@${domain}`);
+      if (!matched || matched.user_id !== userId) {
+        throw new HttpError(403, "forbidden");
+      }
+      try {
+        updateUserMailbox(db, userId, matched.id, {
+          displayName: body.data.displayName,
+          notes: body.data.notes,
+        });
+      } catch (err) {
+        if (err instanceof UserError) throw new HttpError(400);
+        throw err;
+      }
+      return reply.code(201).send({ ok: true });
+    }
+
     if (!DOMAIN_RE.test(domain) || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}$/.test(localpart)) {
       throw new HttpError(400);
     }
@@ -1099,6 +1728,260 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.code(201).send({ ok: true });
   });
 
+  // --- Multi-User & Mailbox Allocation Admin Routes ---
+
+  app.get("/v1/users", async (request) => {
+    requireAdmin(request);
+    return {
+      items: listUsersWithDetails(db, utcDayStart(now())).map(presentPublicUser),
+    };
+  });
+
+  app.post("/v1/users", async (request, reply) => {
+    requireAdmin(request);
+    const body = createUserBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    if (body.data.password === "admin") throw new HttpError(400);
+    if (body.data.role === "admin" && !sessionIsOwner(request)) {
+      throw new HttpError(403, "only_owner_can_grant_admin");
+    }
+    const at = now();
+    if (body.data.initialMailbox) requireAcceptDomain(db, config, body.data.initialMailbox.domain);
+    try {
+      const created = createUser(
+        db,
+        {
+          username: body.data.username,
+          passwordHash: hashPassword(body.data.password),
+          displayName: body.data.displayName,
+          recoveryEmail: body.data.recoveryEmail,
+          role: body.data.role,
+          quotaSendPerDay: body.data.quotaSendPerDay,
+          notes: body.data.notes,
+          reservedUsername: config.apiUsername,
+          initialMailbox: body.data.initialMailbox ?? null,
+        },
+        at,
+        utcDayStart(at),
+      );
+      writeAudit(db, {
+        id: ulid(),
+        at,
+        actor: request.session.user ?? "admin",
+        action: "user_create",
+        target: created.username,
+        detail: `role=${created.role} boxes=${created.mailboxes.length}`,
+      });
+      return reply.code(201).send({ ok: true, user: presentPublicUser(created) });
+    } catch (err) {
+      if (err instanceof UserError) {
+        if (err.code === "conflict") throw new HttpError(409, err.message);
+        throw new HttpError(400);
+      }
+      throw err;
+    }
+  });
+
+  app.patch("/v1/users/:id", async (request, reply) => {
+    requireAdmin(request);
+    const targetId = messageId(request);
+    if (targetId === OWNER_USER_ID) throw new HttpError(400);
+    const existing = getUserById(db, targetId);
+    if (!existing) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, existing, true);
+    const body = updateUserBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    if (body.data.role === "admin" && existing.role !== "admin" && !sessionIsOwner(request)) {
+      throw new HttpError(403, "only_owner_can_grant_admin");
+    }
+    if (body.data.status === "disabled" && request.session.userId === existing.id) {
+      throw new HttpError(400, "cannot_disable_self");
+    }
+    const at = now();
+    try {
+      const updated = updateUser(db, targetId, body.data, at, utcDayStart(at));
+      if (body.data.status === "disabled" || (body.data.role !== undefined && body.data.role !== existing.role)) {
+        clearUserSessions(db, targetId, updated.username);
+      }
+      writeAudit(db, {
+        id: ulid(),
+        at,
+        actor: request.session.user ?? "admin",
+        action: "user_update",
+        target: updated.username,
+        detail: `role=${updated.role} status=${updated.status}`,
+      });
+      return reply.send({ ok: true, user: presentPublicUser(updated) });
+    } catch (err) {
+      if (err instanceof UserError) {
+        throw new HttpError(err.code === "not_found" ? 404 : 400);
+      }
+      throw err;
+    }
+  });
+
+  app.put("/v1/users/:id/password", async (request, reply) => {
+    requireAdmin(request);
+    const targetId = messageId(request);
+    const user = getUserById(db, targetId);
+    if (!user) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, user, true);
+    const body = adminSetPasswordBody.safeParse(request.body);
+    if (!body.success || body.data.next === "admin") throw new HttpError(400);
+    const at = now();
+    updateUserPassword(db, targetId, hashPassword(body.data.next), at);
+    clearResetSeal(db, targetId);
+    clearUserSessions(db, targetId, user.username);
+    writeAudit(db, {
+      id: ulid(),
+      at,
+      actor: request.session.user ?? "admin",
+      action: "user_password_reset",
+      target: user.username,
+    });
+    return reply.send({ ok: true });
+  });
+
+  app.post("/v1/users/:id/sessions/revoke", async (request, reply) => {
+    requireAdmin(request);
+    const targetId = messageId(request);
+    if (targetId === OWNER_USER_ID) throw new HttpError(400);
+    const user = getUserById(db, targetId);
+    if (!user) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, user, false);
+    const count = clearUserSessions(db, targetId, user.username);
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "admin",
+      action: "user_sessions_revoke",
+      target: user.username,
+      detail: `count=${count}`,
+    });
+    return reply.send({ ok: true, count });
+  });
+
+  app.delete("/v1/users/:id", async (request, reply) => {
+    requireAdmin(request);
+    const targetId = messageId(request);
+    if (targetId === OWNER_USER_ID) throw new HttpError(400);
+    if (targetId === request.session.userId) throw new HttpError(400, "cannot_delete_self");
+    const user = getUserById(db, targetId);
+    if (!user) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, user, false);
+    deleteUser(db, targetId);
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "admin",
+      action: "user_delete",
+      target: user.username,
+    });
+    return reply.send({ ok: true });
+  });
+
+  app.post("/v1/users/:id/mailboxes", async (request, reply) => {
+    requireAdmin(request);
+    const targetId = messageId(request);
+    const target = getUserById(db, targetId);
+    if (!target) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, target, true);
+    const body = allocateMailboxBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    requireAcceptDomain(db, config, body.data.domain);
+    const at = now();
+    try {
+      const box = allocateMailbox(
+        db,
+        {
+          userId: targetId,
+          localpart: body.data.localpart,
+          domain: body.data.domain,
+          displayName: body.data.displayName,
+          notes: body.data.notes,
+          canSend: body.data.canSend,
+        },
+        at,
+      );
+      writeAudit(db, {
+        id: ulid(),
+        at,
+        actor: request.session.user ?? "admin",
+        action: "mailbox_allocate",
+        target: box.address,
+        detail: `user=${targetId}`,
+      });
+      return reply.code(201).send({ ok: true, mailbox: presentMailbox(box) });
+    } catch (err) {
+      if (err instanceof UserError) {
+        if (err.code === "not_found") throw new HttpError(404, "not_found");
+        if (err.code === "conflict") throw new HttpError(409, err.message);
+        throw new HttpError(400);
+      }
+      throw err;
+    }
+  });
+
+  app.patch("/v1/users/:id/mailboxes/:mailboxId", async (request, reply) => {
+    const params = request.params as { id?: string; mailboxId?: string };
+    const targetId = params.id ?? "";
+    const mailboxId = params.mailboxId ?? "";
+    if (!/^[\w-]+$/.test(targetId) || !/^[\w-]+$/.test(mailboxId)) {
+      throw new HttpError(404, "not_found");
+    }
+    const body = updateMailboxBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    const isAdmin = request.session.role === "admin";
+    const isSelf = request.session.userId === targetId;
+    if (!isAdmin && (!isSelf || body.data.canSend !== undefined)) {
+      throw new HttpError(403, "forbidden");
+    }
+    if (isAdmin && !isSelf) {
+      const target = getUserById(db, targetId);
+      if (target) rejectAdminTarget(request, target, false);
+    }
+    try {
+      const updated = updateUserMailbox(db, targetId, mailboxId, body.data);
+      writeAudit(db, {
+        id: ulid(),
+        at: now(),
+        actor: request.session.user ?? "unknown",
+        action: "mailbox_update",
+        target: updated.address,
+      });
+      return reply.send({ ok: true, mailbox: presentMailbox(updated) });
+    } catch (err) {
+      if (err instanceof UserError) {
+        throw new HttpError(err.code === "not_found" ? 404 : 400);
+      }
+      throw err;
+    }
+  });
+
+  app.delete("/v1/users/:id/mailboxes/:mailboxId", async (request, reply) => {
+    requireAdmin(request);
+    const params = request.params as { id?: string; mailboxId?: string };
+    const targetId = params.id ?? "";
+    const mailboxId = params.mailboxId ?? "";
+    if (!/^[\w-]+$/.test(targetId) || !/^[\w-]+$/.test(mailboxId)) {
+      throw new HttpError(404, "not_found");
+    }
+    const target = getUserById(db, targetId);
+    if (!target) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, target, true);
+    const ok = revokeMailbox(db, targetId, mailboxId);
+    if (!ok) throw new HttpError(404, "not_found");
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "admin",
+      action: "mailbox_revoke",
+      target: mailboxId,
+      detail: `user=${targetId}`,
+    });
+    return reply.send({ ok: true });
+  });
+
   registerPanel(app);
   return app;
 }
@@ -1109,6 +1992,112 @@ export async function startApi(options: ApiOptions): Promise<RunningApi> {
   const address = app.server.address();
   const port = typeof address === "object" && address ? address.port : options.config.apiPort;
   return { port, close: () => app.close() };
+}
+
+function requireAdmin(request: FastifyRequest): void {
+  if (request.session.role !== "admin") {
+    throw new HttpError(403, "forbidden");
+  }
+}
+
+function personalNotifyView(db: Db, userId: string) {
+  const personal = readPersonalNotifySettings(db, userId);
+  return {
+    notifyLabels: personal.notifyLabels,
+    notifyMinConfidence: personal.notifyMinConfidence,
+    notifyWebhookUrl: personal.notifyWebhookUrl,
+    notifyWebhookBearerSet: personal.notifyWebhookBearer.length > 0,
+  };
+}
+
+function requireAcceptDomain(db: Db, config: Config, domain: string): void {
+  const known = readAcceptDomains(db, config.acceptDomains);
+  if (!known.includes(domain.trim().toLowerCase())) {
+    throw new HttpError(400, "domain is not accepted");
+  }
+}
+
+function sessionIsOwner(request: FastifyRequest): boolean {
+  return request.session.userId === OWNER_USER_ID;
+}
+
+function rejectAdminTarget(
+  request: FastifyRequest,
+  target: { id: string; role: string },
+  allowSelf: boolean,
+): void {
+  if (target.role !== "admin" || sessionIsOwner(request)) return;
+  if (allowSelf && request.session.userId === target.id) return;
+  throw new HttpError(403, "only_owner_can_manage_admin");
+}
+
+function viewerOf(db: Db, request: FastifyRequest, scopeHint?: string): ViewerContext {
+  const userId = request.session.userId ?? OWNER_USER_ID;
+  const role = request.session.role ?? "admin";
+  if (role !== "admin") {
+    return { userId, role: "member" };
+  }
+  if (scopeHint === "allIfAdmin" || scopeHint === "all") {
+    return { userId, role: "admin", scope: "all" };
+  }
+  if (scopeHint && scopeHint.startsWith("user:")) {
+    return { userId, role: "admin", scope: scopeHint };
+  }
+  return { userId, role: "admin", scope: "mine" };
+}
+
+function resolveResetTargetId(db: Db, config: Config, email: string): string | null {
+  const ownerAccount = normalizeAddress(config.apiUsername);
+  const ownerRecovery = readOwnerProfile(db).recoveryEmail;
+  if ((ownerAccount && sameAccount(email, ownerAccount)) || (ownerRecovery && sameAccount(email, ownerRecovery))) {
+    return OWNER_USER_ID;
+  }
+  const member = findUserForPasswordReset(db, email);
+  return member ? member.id : null;
+}
+
+function presentMailbox(box: ReturnType<typeof listUserMailboxes>[number]) {
+  return {
+    id: box.id,
+    userId: box.userId,
+    localpart: box.localpart,
+    domain: box.domain,
+    address: box.address,
+    displayName: box.displayName,
+    notes: box.notes,
+    canSend: box.canSend,
+    dkimSigned: box.dkimSigned,
+    createdAt: iso(box.createdAt),
+  };
+}
+
+function presentPublicUser(user: ReturnType<typeof listUsersWithDetails>[number]) {
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName,
+    recoveryEmail: user.recoveryEmail,
+    role: user.role,
+    status: user.status,
+    quotaSendPerDay: user.quotaSendPerDay,
+    notes: user.notes,
+    lastLoginAt: user.lastLoginAt === null ? null : iso(user.lastLoginAt),
+    createdAt: iso(user.createdAt),
+    updatedAt: iso(user.updatedAt),
+    mailboxes: user.mailboxes.map(presentMailbox),
+    stats: user.stats,
+  };
+}
+
+function readAppVersion(): string {
+  const fromEnv = process.env.APP_VERSION?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(appRoot(), "package.json"), "utf8")) as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : "0.8.0";
+  } catch {
+    return "0.8.0";
+  }
 }
 
 function redactLogLine(line: string): string {
@@ -1140,6 +2129,7 @@ function presentOutbox(row: NonNullable<ReturnType<typeof getOutbox>>) {
     dkim: row.dkim_selector ? "signed" : "none",
     selector: row.dkim_selector,
     error: row.error,
+    userId: row.user_id,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
@@ -1159,8 +2149,15 @@ function envelopeList(raw: string | null): string {
 }
 
 function isPublic(url: string): boolean {
-  const path = url.split("?")[0] ?? url;
-  return path === "/healthz" || path === "/v1/login" || path === "/v1/csrf" || path === "/v1/password/forgot" || path === "/v1/password/reset" || isPanelAsset(path);
+  const p = url.split("?")[0] ?? url;
+  return (
+    p === "/healthz" ||
+    p === "/v1/login" ||
+    p === "/v1/csrf" ||
+    p === "/v1/password/forgot" ||
+    p === "/v1/password/reset" ||
+    isPanelAsset(p)
+  );
 }
 
 function messageId(request: FastifyRequest): string {
@@ -1175,8 +2172,8 @@ function attachmentId(request: FastifyRequest): string {
   return sha;
 }
 
-function requireMessage(db: Db, id: string) {
-  const message = getMessage(db, id);
+function requireMessage(db: Db, id: string, viewer?: ViewerContext): StoredMessage {
+  const message = getMessageForViewer(db, id, viewer);
   if (!message) throw new HttpError(404, "not_found");
   return message;
 }
@@ -1188,6 +2185,8 @@ function readListQuery(query: unknown): {
   q?: string;
   from?: string;
   domain?: string;
+  starred?: boolean;
+  scope?: string;
   since?: number;
   until?: number;
   limit: number;
@@ -1209,6 +2208,9 @@ function readListQuery(query: unknown): {
   const q = optionalString(source.q);
   const from = optionalString(source.from);
   const domain = optionalString(source.domain);
+  const starredRaw = optionalString(source.starred);
+  const starred = starredRaw === "true" || starredRaw === "1" ? true : undefined;
+  const scope = optionalString(source.scope);
   const since = optionalString(source.since);
   const until = optionalString(source.until);
   const limitRaw = optionalString(source.limit);
@@ -1237,6 +2239,8 @@ function readListQuery(query: unknown): {
     q,
     from,
     domain,
+    starred,
+    scope,
     since: since === undefined ? undefined : parseTime(since),
     until: until === undefined ? undefined : parseTime(until),
     limit,
@@ -1280,6 +2284,7 @@ function toListItem(row: ReturnType<typeof listMessages>[number]) {
     status: row.status,
     label: ai.label,
     read: row.read_at != null,
+    starred: row.starred_at != null,
     confidence: ai.confidence,
     summary: ai.summary,
     tags: ai.tags,
@@ -1296,8 +2301,8 @@ function idList(raw: string | null): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.length > 0).slice(0, 20);
 }
 
-function toDetail(db: Db, id: string) {
-  const message = requireMessage(db, id);
+function toDetail(db: Db, id: string, viewer?: ViewerContext) {
+  const message = requireMessage(db, id, viewer);
   return {
     id: message.id,
     sha256: message.sha256,
@@ -1318,6 +2323,8 @@ function toDetail(db: Db, id: string) {
     authResult: parseJson(message.auth_result),
     parsed: parseJson(message.parsed),
     aiResult: parseJson(message.ai_result),
+    read: message.read_at != null,
+    starred: message.starred_at != null,
     trashedAt: message.trashed_at ? iso(message.trashed_at) : null,
     attachments: listMessageAttachments(db, id).map((row) => ({
       sha256: row.sha256,
@@ -1361,7 +2368,11 @@ function aiSummary(raw: string | null): {
   };
 }
 
-function dailySeries(db: Db, startMs: number, days: number): Array<{ day: string; total: number; labels: Record<string, number> }> {
+function dailySeries(
+  db: Db,
+  startMs: number,
+  days: number,
+): Array<{ day: string; total: number; labels: Record<string, number> }> {
   const rows = db
     .prepare(
       `SELECT (received_at / 86400000) AS day_index,
@@ -1393,14 +2404,24 @@ function countLabels(db: Db, since: number | null): Record<string, number> {
   const rows = (
     since === null
       ? db.prepare("SELECT json_extract(ai_result, '$.label') AS label, COUNT(*) AS n FROM messages GROUP BY 1").all()
-      : db.prepare("SELECT json_extract(ai_result, '$.label') AS label, COUNT(*) AS n FROM messages WHERE received_at >= ? GROUP BY 1").all(since)
+      : db
+          .prepare("SELECT json_extract(ai_result, '$.label') AS label, COUNT(*) AS n FROM messages WHERE received_at >= ? GROUP BY 1")
+          .all(since)
   ) as Array<{ label: string | null; n: number }>;
   const out: Record<string, number> = {};
   for (const row of rows) out[row.label ?? "unlabeled"] = row.n;
   return out;
 }
 
-function toHistory(row: { domain: string; localpart: string; first_seen: number | null; last_seen: number | null; source: string | null; notes: string | null; display_name: string | null }) {
+function toHistory(row: {
+  domain: string;
+  localpart: string;
+  first_seen: number | null;
+  last_seen: number | null;
+  source: string | null;
+  notes: string | null;
+  display_name: string | null;
+}) {
   return {
     domain: row.domain,
     localpart: row.localpart,

@@ -24,6 +24,8 @@ import { backfillThreadHeaders } from "../src/mail/thread-scan.js";
 import { deliverToMx, type MailSender } from "../src/mail/deliver.js";
 import { submitOutbox } from "../src/mail/submit.js";
 import { migrationsDir } from "../src/paths.js";
+// @ts-expect-error the browser panel module is plain JavaScript and stays that way.
+import { extractOtpCode } from "../src/api/public/util.js";
 import { fakeClassifier } from "../src/ai/classifier.js";
 import type { AppLog } from "../src/log.js";
 import { processNext, type WorkerOptions } from "../src/worker/loop.js";
@@ -247,6 +249,78 @@ test("the panel can queue a letter for a domain that was not added", async () =>
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("outbound attachments allow five files and reject a sixth or more than 10MB", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-send-attachments-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: password,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+  });
+  const client = cookieJar();
+  const letter = {
+    from: "a@example.com",
+    to: ["b@example.net"],
+    subject: "attachments",
+    text: "with files",
+  };
+  const attachment = (name: string, content: Buffer) => ({
+    filename: name,
+    contentType: "application/octet-stream",
+    contentBase64: content.toString("base64"),
+  });
+  try {
+    await client.login(app);
+    const queued = await client.post(app, "/v1/outbox", {
+      ...letter,
+      attachments: Array.from({ length: 5 }, (_, index) => attachment(`file-${index}.bin`, Buffer.from([index]))),
+    });
+    assert.equal(queued.statusCode, 202);
+    const raw = await client.get(app, `/v1/outbox/${queued.json().id}/raw`);
+    const parsed = await PostalMime.parse(raw.body);
+    assert.equal(parsed.attachments.length, 5);
+    const firstContent = parsed.attachments[0]!.content;
+    assert.ok(typeof firstContent !== "string");
+    const firstBytes = firstContent instanceof ArrayBuffer ? new Uint8Array(firstContent) : firstContent;
+    assert.deepEqual([...firstBytes], [0]);
+
+    const sixth = await client.post(app, "/v1/outbox", {
+      ...letter,
+      attachments: Array.from({ length: 6 }, (_, index) => attachment(`file-${index}.bin`, Buffer.from([index]))),
+    });
+    assert.equal(sixth.statusCode, 400);
+
+    const oversized = await client.post(app, "/v1/outbox", {
+      ...letter,
+      attachments: [attachment("too-large.bin", Buffer.alloc(10 * 1024 * 1024 + 1))],
+    });
+    assert.equal(oversized.statusCode, 400);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM outbox").get() as { count: number }).count, 1);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the OTP extractor reads nearby codes and skips years", () => {
+  assert.equal(extractOtpCode("登录验证码", "verification code: 482913"), "482913");
+  assert.equal(extractOtpCode("安全验证", "2024 年的验证码是 456789"), "456789");
+  assert.equal(extractOtpCode("验证码", "one time code 73624"), "73624");
+  assert.equal(extractOtpCode("验证码", "code 2024"), "");
 });
 
 test("composeText puts a display name on From and keeps Bcc off the header", () => {

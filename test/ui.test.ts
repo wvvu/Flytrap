@@ -58,9 +58,20 @@ test("the panel is static and the mail API stays behind the session", async () =
     // Panel JS is split into ES modules; every module must serve, and the
     // safety baselines below apply to all of them, not just the entry.
     const panelModules = [
-      "constants.js", "state.js", "dom.js", "util.js", "net.js", "ui.js",
-      "nav.js", "shell.js", "auth.js", "mail-view.js", "dlq-view.js",
-      "settings-view.js", "send-view.js",
+      "constants.js",
+      "state.js",
+      "dom.js",
+      "util.js",
+      "net.js",
+      "ui.js",
+      "nav.js",
+      "shell.js",
+      "auth.js",
+      "mail-view.js",
+      "dlq-view.js",
+      "settings-view.js",
+      "users-view.js",
+      "send-view.js",
     ];
     let panelJs = script.body;
     for (const mod of panelModules) {
@@ -76,6 +87,14 @@ test("the panel is static and the mail API stays behind the session", async () =
 
     const boot = await app.inject({ method: "GET", url: "/boot.js" });
     assert.equal(boot.statusCode, 200);
+
+    const manifest = await app.inject({ method: "GET", url: "/manifest.webmanifest" });
+    assert.equal(manifest.statusCode, 200);
+    assert.match(manifest.headers["content-type"] ?? "", /manifest\+json/);
+
+    const icon = await app.inject({ method: "GET", url: "/icon.svg" });
+    assert.equal(icon.statusCode, 200);
+    assert.match(icon.headers["content-type"] ?? "", /image\/svg\+xml/);
 
     // --- security: iframe sandbox must never allow same-origin or scripts ---
     assert.equal(page.body.includes("allow-same-origin"), false);

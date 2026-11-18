@@ -39,3 +39,5 @@ Windows 上 `MAIL_DATA_DIR` 用 `./data`。本地 `.env` 的 `admin` / `admin` �
 启动时读 `PRAGMA user_version`。库比这份代码认识的新，就拒绝启动，不要倒着迁。库更旧时，仍用 `migrations/*.sql` 往前迁。
 
 文档里不写会过期的数字，比如测试有多少个。
+
+**少用极限词，项目里不要出现"你我他"，严防先射箭后画靶**

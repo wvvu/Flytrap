@@ -7,9 +7,15 @@ import { insertOutbox } from "../db/repos/outbox.js";
 import { readAcceptDomains } from "../db/repos/settings.js";
 import { storeRaw } from "../ingest/store-raw.js";
 import { addressDomain, cleanSubject, cleanText, normalizeAddress, OutboundError, uniqueAddresses } from "./address.js";
-import { composeText } from "./compose.js";
+import { composeMail, type ComposeAttachment } from "./compose.js";
 import { signMessage } from "./dkim.js";
 import { normalizeMessageId, threadKeyOf } from "./thread.js";
+
+export interface SubmitAttachmentInput {
+  filename: string;
+  contentType?: string;
+  contentBase64: string;
+}
 
 export interface SubmitInput {
   from: string;
@@ -21,6 +27,8 @@ export interface SubmitInput {
   text?: string;
   inReplyTo?: string;
   references?: readonly string[];
+  attachments?: readonly SubmitAttachmentInput[];
+  userId?: string | null;
 }
 
 export interface SubmitResult {
@@ -41,6 +49,9 @@ export interface SubmitDeps {
 
 const MAX_RECIPIENTS = 20;
 const MAX_REFS = 20;
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_TOTAL_BYTES = 10 * 1024 * 1024;
+const BASE64_CLEAN_RE = /^[A-Za-z0-9+/=\s]*$/;
 
 function cleanReply(input: SubmitInput): { inReplyTo: string | null; refs: string[] } {
   const rawReply = input.inReplyTo?.trim() ?? "";
@@ -56,6 +67,29 @@ function cleanReply(input: SubmitInput): { inReplyTo: string | null; refs: strin
     refs.push(id);
   }
   return { inReplyTo, refs };
+}
+
+function cleanAttachments(raw: readonly SubmitAttachmentInput[] | undefined): ComposeAttachment[] {
+  if (!raw || raw.length === 0) return [];
+  if (raw.length > MAX_ATTACHMENTS) throw new OutboundError("too many attachments");
+  const out: ComposeAttachment[] = [];
+  let totalBytes = 0;
+  for (const item of raw) {
+    const filename = (item.filename ?? "").trim();
+    if (!filename) throw new OutboundError("attachment filename missing");
+    const stripped = (item.contentBase64 ?? "").replace(/^data:[^;]+;base64,/i, "").trim();
+    if (!stripped || !BASE64_CLEAN_RE.test(stripped)) {
+      throw new OutboundError("invalid attachment encoding");
+    }
+    const content = Buffer.from(stripped, "base64");
+    if (content.length === 0) throw new OutboundError("empty attachment");
+    totalBytes += content.length;
+    if (totalBytes > MAX_ATTACHMENT_TOTAL_BYTES) {
+      throw new OutboundError("attachments exceed 10MB limit");
+    }
+    out.push({ filename, contentType: item.contentType || "application/octet-stream", content });
+  }
+  return out;
 }
 
 /**
@@ -74,12 +108,13 @@ export async function submitOutbox(deps: SubmitDeps, input: SubmitInput): Promis
   const subject = cleanSubject(input.subject);
   const text = cleanText(input.text);
   const reply = cleanReply(input);
+  const attachments = cleanAttachments(input.attachments);
   const domain = addressDomain(from);
   const domainKnown = readAcceptDomains(deps.db, deps.acceptDomains).includes(domain);
   const now = (deps.now ?? Date.now)();
   const id = ulid();
   const messageId = `${id}@${domain}`.toLowerCase();
-  let raw = composeText({
+  let raw = composeMail({
     from,
     fromName: input.fromName,
     to,
@@ -90,6 +125,7 @@ export async function submitOutbox(deps: SubmitDeps, input: SubmitInput): Promis
     date: new Date(now),
     inReplyTo: reply.inReplyTo,
     references: reply.refs,
+    attachments,
   });
   const key = findDkimKey(deps.db, domain);
   const selector = key?.selector ?? null;
@@ -124,6 +160,7 @@ export async function submitOutbox(deps: SubmitDeps, input: SubmitInput): Promis
       inReplyTo: reply.inReplyTo,
       refIds: reply.refs.length > 0 ? JSON.stringify(reply.refs) : null,
       threadKey: threadKeyOf(messageId, reply.inReplyTo, reply.refs),
+      userId: input.userId ?? null,
     });
     enqueueJob(deps.db, {
       id: ulid(),

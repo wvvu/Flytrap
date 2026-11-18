@@ -1,5 +1,7 @@
 import type { Db } from "../index.js";
 import { threadKeyOf } from "../../mail/thread.js";
+import { canViewerAccessMessage, getMessage, type ViewerContext } from "./messages.js";
+import { canViewerAccessOutbox, getOutbox } from "./outbox.js";
 
 export interface ThreadLetter {
   kind: "in" | "sent";
@@ -17,10 +19,13 @@ const MAX_HOPS = 6;
 const MAX_LETTERS = 30;
 const MAX_IDS = 40;
 
-/** Letters that answer each other, inbound and sent together. */
-export function listThread(db: Db, anchorId: string): ThreadLetter[] | null {
+/** Letters that answer each other, inbound and sent together, filtered by viewer access. */
+export function listThread(db: Db, anchorId: string, viewer?: ViewerContext): ThreadLetter[] | null {
+  const anchorMsg = getMessage(db, anchorId);
+  if (!anchorMsg || !canViewerAccessMessage(db, anchorMsg, viewer)) return null;
   const anchor = messageLetter(db, anchorId);
   if (!anchor) return null;
+
   const rows = new Map<string, ThreadLetter>();
   rows.set(keyOf(anchor), anchor);
   let ids = seedIds(anchor);
@@ -28,6 +33,7 @@ export function listThread(db: Db, anchorId: string): ThreadLetter[] | null {
     let grew = false;
     for (const row of findByIds(db, ids)) {
       if (rows.has(keyOf(row))) continue;
+      if (!canViewerSeeThreadItem(db, row, viewer)) continue;
       rows.set(keyOf(row), row);
       grew = true;
       if (rows.size >= MAX_LETTERS) break;
@@ -44,6 +50,16 @@ export function listThread(db: Db, anchorId: string): ThreadLetter[] | null {
     ids = [...next];
   }
   return [...rows.values()].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+}
+
+function canViewerSeeThreadItem(db: Db, item: ThreadLetter, viewer?: ViewerContext): boolean {
+  if (!viewer) return true;
+  if (item.kind === "in") {
+    const msg = getMessage(db, item.id);
+    return Boolean(msg && canViewerAccessMessage(db, msg, viewer));
+  }
+  const sent = getOutbox(db, item.id);
+  return Boolean(sent && canViewerAccessOutbox(sent, viewer));
 }
 
 function keyOf(row: ThreadLetter): string {

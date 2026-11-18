@@ -21,10 +21,13 @@ const PANEL_FILES: Record<string, { name: string; type: string }> = {
   "/mail-view.js": { name: "mail-view.js", type: "text/javascript; charset=utf-8" },
   "/dlq-view.js": { name: "dlq-view.js", type: "text/javascript; charset=utf-8" },
   "/settings-view.js": { name: "settings-view.js", type: "text/javascript; charset=utf-8" },
+  "/users-view.js": { name: "users-view.js", type: "text/javascript; charset=utf-8" },
   "/send-view.js": { name: "send-view.js", type: "text/javascript; charset=utf-8" },
+  "/manifest.webmanifest": { name: "manifest.webmanifest", type: "application/manifest+json; charset=utf-8" },
+  "/icon.svg": { name: "icon.svg", type: "image/svg+xml" },
 };
 
-/** Paths the login page needs before a session exists. */
+/** Paths the login page and PWA shell need before a session exists. */
 export function isPanelAsset(urlPath: string): boolean {
   return Object.prototype.hasOwnProperty.call(PANEL_FILES, urlPath);
 }
