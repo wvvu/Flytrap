@@ -48,6 +48,7 @@ export const state = {
   replyContext: null,
   replySubjectHint: "",
   replyArmed: false,
+  composeAttachments: [],
   draftSaveTimer: 0,
   currentSettingsSection: "domains",
   settingsReturnSection: "domains",

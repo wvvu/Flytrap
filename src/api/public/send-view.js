@@ -1,12 +1,13 @@
 // 发信与草稿：按账号隔离的自动草稿保存、发件身份与 DKIM 状态反馈、回复关联与已发信浏览。
 import { DRAFT_KEY_PREFIX, LAST_FROM_KEY } from "./constants.js";
 import { state } from "./state.js";
-import { listEl, noticeEl, threadBox, viewMail, viewSend } from "./dom.js";
+import { composeAttachmentsEl, listEl, noticeEl, sendFilesInput, threadBox, viewMail, viewSend } from "./dom.js";
 import { request } from "./net.js";
 import { askConfirm, explain, setMobilePane, toast } from "./ui.js";
 import {
   capReplyRefs,
   extractEmail,
+  formatBytes,
   formatRecipient,
   formatShortTime,
   memberCanSendFrom,
@@ -14,6 +15,7 @@ import {
   normalizeClientId,
   outboxStatus,
   quoteLetter,
+  readFileAsBase64,
   replyAddress,
   replySubject,
 } from "./util.js";
@@ -172,6 +174,8 @@ export async function discardComposeDraft() {
 export function clearComposeFields() {
   state.replyContext = null;
   state.replySubjectHint = "";
+  state.composeAttachments = [];
+  renderComposeAttachments();
   try {
     localStorage.removeItem(draftStorageKey());
   } catch {
@@ -186,6 +190,62 @@ export function clearComposeFields() {
   if (statusEl) statusEl.hidden = true;
   if (discardBtn) discardBtn.hidden = true;
   syncReplyBanner();
+}
+
+export async function handleAttachmentFiles(fileList) {
+  if (!fileList || fileList.length === 0) return;
+  for (const file of fileList) {
+    if (state.composeAttachments.length >= 5) {
+      toast("单封邮件最多添加 5 个附件");
+      break;
+    }
+    const currentTotal = state.composeAttachments.reduce((total, item) => total + item.size, 0);
+    if (currentTotal + file.size > 10 * 1024 * 1024) {
+      toast("附件总大小不能超过 10MB");
+      break;
+    }
+    try {
+      const contentBase64 = await readFileAsBase64(file);
+      state.composeAttachments.push({
+        filename: file.name || "attachment.bin",
+        contentType: file.type || "application/octet-stream",
+        size: file.size,
+        contentBase64,
+      });
+    } catch {
+      toast("读取附件失败");
+    }
+  }
+  if (sendFilesInput) sendFilesInput.value = "";
+  renderComposeAttachments();
+}
+
+export function renderComposeAttachments() {
+  if (!composeAttachmentsEl) return;
+  composeAttachmentsEl.replaceChildren();
+  if (state.composeAttachments.length === 0) {
+    composeAttachmentsEl.hidden = true;
+    return;
+  }
+  composeAttachmentsEl.hidden = false;
+  state.composeAttachments.forEach((attachment, index) => {
+    const chip = document.createElement("span");
+    chip.className = "compose-att-chip";
+    const label = document.createElement("span");
+    label.textContent = `${attachment.filename} (${formatBytes(attachment.size)})`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "compose-att-remove";
+    remove.textContent = "×";
+    remove.title = "移除附件";
+    remove.setAttribute("aria-label", `移除附件 ${attachment.filename}`);
+    remove.addEventListener("click", () => {
+      state.composeAttachments.splice(index, 1);
+      renderComposeAttachments();
+    });
+    chip.append(label, remove);
+    composeAttachmentsEl.append(chip);
+  });
 }
 
 export function cancelReplyLink() {
@@ -468,6 +528,13 @@ export async function submitSend() {
     if (state.replyContext && state.replyContext.inReplyTo) {
       payload.inReplyTo = state.replyContext.inReplyTo;
       payload.references = state.replyContext.references;
+    }
+    if (state.composeAttachments.length > 0) {
+      payload.attachments = state.composeAttachments.map((attachment) => ({
+        filename: attachment.filename,
+        contentType: attachment.contentType,
+        contentBase64: attachment.contentBase64,
+      }));
     }
     const queued = await request("/v1/outbox", {
       method: "POST",

@@ -58,6 +58,8 @@ export const viewMail = document.querySelector("#view-mail");
 export const viewDlq = document.querySelector("#view-dlq");
 export const viewSend = document.querySelector("#view-send");
 export const viewSettings = document.querySelector("#view-settings");
+export const composeAttachmentsEl = document.querySelector("#compose-attachments");
+export const sendFilesInput = document.querySelector("#send-files");
 
 export const failureDetailEl = document.querySelector("#failure-detail");
 export const dlqEmptyEl = document.querySelector("#dlq-empty");

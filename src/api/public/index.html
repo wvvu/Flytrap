@@ -461,8 +461,11 @@
                   <input id="send-subject" maxlength="200" autocomplete="off" placeholder="邮件主题">
                 </label>
                 <textarea id="send-text" rows="14" class="code-editor" maxlength="100000" placeholder="正文（支持 Ctrl+Enter 快捷发出）"></textarea>
+                <div id="compose-attachments" class="compose-att-list" hidden></div>
                 <div class="inline-row">
                   <button type="submit" id="btn-send" class="btn-fit">发出</button>
+                  <input id="send-files" type="file" multiple hidden>
+                  <button type="button" id="btn-attach-file" class="btn-sm" title="添加附件（最多 5 个，共 10MB）">附件</button>
                 </div>
               </form>
             </section>

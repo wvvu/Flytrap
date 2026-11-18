@@ -240,6 +240,12 @@ const blocklistBody = z.object({
   addresses: z.array(z.string().min(1).max(254)).max(500),
 }).strict();
 
+const sendAttachmentSchema = z.object({
+  filename: z.string().min(1).max(200),
+  contentType: z.string().max(120).optional(),
+  contentBase64: z.string().min(1).max(15_000_000),
+}).strict();
+
 const sendBody = z.object({
   from: z.string().min(3).max(254),
   to: z.array(z.string().min(3).max(254)).min(1).max(20),
@@ -249,6 +255,7 @@ const sendBody = z.object({
   text: z.string().max(100_000).optional(),
   inReplyTo: z.string().max(300).optional(),
   references: z.array(z.string().max(300)).max(20).optional(),
+  attachments: z.array(sendAttachmentSchema).max(5).optional(),
 }).strict();
 
 const dkimBody = z.object({
@@ -1525,7 +1532,10 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true });
   });
 
-  app.post("/v1/outbox", { config: { rateLimit: { max: 30, timeWindow: "10 minutes" } } }, async (request, reply) => {
+  app.post("/v1/outbox", {
+    bodyLimit: 16 * 1024 * 1024,
+    config: { rateLimit: { max: 30, timeWindow: "10 minutes" } },
+  }, async (request, reply) => {
     const body = sendBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
 

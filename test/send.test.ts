@@ -249,6 +249,71 @@ test("the panel can queue a letter for a domain that was not added", async () =>
   }
 });
 
+test("outbound attachments allow five files and reject a sixth or more than 10MB", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-send-attachments-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: password,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+  });
+  const client = cookieJar();
+  const letter = {
+    from: "a@example.com",
+    to: ["b@example.net"],
+    subject: "attachments",
+    text: "with files",
+  };
+  const attachment = (name: string, content: Buffer) => ({
+    filename: name,
+    contentType: "application/octet-stream",
+    contentBase64: content.toString("base64"),
+  });
+  try {
+    await client.login(app);
+    const queued = await client.post(app, "/v1/outbox", {
+      ...letter,
+      attachments: Array.from({ length: 5 }, (_, index) => attachment(`file-${index}.bin`, Buffer.from([index]))),
+    });
+    assert.equal(queued.statusCode, 202);
+    const raw = await client.get(app, `/v1/outbox/${queued.json().id}/raw`);
+    const parsed = await PostalMime.parse(raw.body);
+    assert.equal(parsed.attachments.length, 5);
+    const firstContent = parsed.attachments[0]!.content;
+    assert.ok(typeof firstContent !== "string");
+    const firstBytes = firstContent instanceof ArrayBuffer ? new Uint8Array(firstContent) : firstContent;
+    assert.deepEqual([...firstBytes], [0]);
+
+    const sixth = await client.post(app, "/v1/outbox", {
+      ...letter,
+      attachments: Array.from({ length: 6 }, (_, index) => attachment(`file-${index}.bin`, Buffer.from([index]))),
+    });
+    assert.equal(sixth.statusCode, 400);
+
+    const oversized = await client.post(app, "/v1/outbox", {
+      ...letter,
+      attachments: [attachment("too-large.bin", Buffer.alloc(10 * 1024 * 1024 + 1))],
+    });
+    assert.equal(oversized.statusCode, 400);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM outbox").get() as { count: number }).count, 1);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("composeText puts a display name on From and keeps Bcc off the header", () => {
   const raw = composeText({
     from: "a@example.com",

@@ -138,6 +138,7 @@ import {
 import {
   cancelReplyLink,
   discardComposeDraft,
+  handleAttachmentFiles,
   loadSendPage,
   navigateSent,
   openComposer,
@@ -324,6 +325,12 @@ document.querySelector("#send-q")?.addEventListener("input", () => {
 document.querySelector("#send-form")?.addEventListener("submit", (event) => {
   event.preventDefault();
   void submitSend();
+});
+document.querySelector("#btn-attach-file")?.addEventListener("click", () => {
+  document.querySelector("#send-files")?.click();
+});
+document.querySelector("#send-files")?.addEventListener("change", (event) => {
+  void handleAttachmentFiles(event.target.files);
 });
 
 for (const fieldId of ["#send-from", "#send-to", "#send-cc", "#send-bcc", "#send-subject", "#send-text"]) {
