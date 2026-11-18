@@ -13,7 +13,7 @@ import {
 } from "./dom.js";
 import { request } from "./net.js";
 import { explain, toast } from "./ui.js";
-import { revealApp } from "./nav.js";
+import { revealApp, resetCompose } from "./nav.js";
 
 export async function signIn() {
   loginError.textContent = "";
@@ -56,6 +56,7 @@ export async function signOut() {
 }
 
 export function showLogin() {
+  resetCompose();
   document.title = "登录";
   if (appEl) appEl.classList.remove("is-booting");
   loginEl.hidden = false;

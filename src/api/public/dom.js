@@ -5,6 +5,7 @@ export const loginForm = document.querySelector("#login-form");
 export const loginError = document.querySelector("#login-error");
 export const logoutBtn = document.querySelector("#logout");
 export const themeBtn = document.querySelector("#btn-theme");
+export const railComposeBtn = document.querySelector("#btn-rail-compose");
 export const themeIcon = document.querySelector("#theme-icon");
 export const shortcutsBtn = document.querySelector("#btn-shortcuts");
 export const shortcutModal = document.querySelector("#shortcut-modal");
@@ -56,8 +57,10 @@ export const usersQueryInput = document.querySelector("#users-q");
 
 export const viewMail = document.querySelector("#view-mail");
 export const viewDlq = document.querySelector("#view-dlq");
-export const viewSend = document.querySelector("#view-send");
 export const viewSettings = document.querySelector("#view-settings");
+export const composeSheet = document.querySelector("#compose-sheet");
+export const composeSheetTitle = document.querySelector("#compose-sheet-title");
+export const composeIdentitySelect = document.querySelector("#send-identity-pick");
 export const composeAttachmentsEl = document.querySelector("#compose-attachments");
 export const sendFilesInput = document.querySelector("#send-files");
 
@@ -65,6 +68,7 @@ export const failureDetailEl = document.querySelector("#failure-detail");
 export const dlqEmptyEl = document.querySelector("#dlq-empty");
 export const dlqNoticeEl = document.querySelector("#dlq-notice");
 export const mailEmptyEl = document.querySelector("#mail-empty");
+export const btnEmptyCompose = document.querySelector("#btn-empty-compose");
 export const mailLoadingEl = document.querySelector("#mail-loading");
 export const mailDetailEl = document.querySelector("#mail-detail");
 export const backListBtn = document.querySelector("#btn-back-list");

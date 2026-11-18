@@ -4,6 +4,7 @@ import { state } from "./state.js";
 import {
   adminScopeSelect,
   appEl,
+  btnEmptyCompose,
   dlqNoticeEl,
   domainFilterSelect,
   filtersForm,
@@ -32,7 +33,6 @@ import {
   themeIcon,
   viewDlq,
   viewMail,
-  viewSend,
   viewSettings,
 } from "./dom.js";
 import { request } from "./net.js";
@@ -41,7 +41,7 @@ import { refreshShownNames, reloadMessages, reloadTrash, renderSandboxHtml, sele
 import { loadDlqJobs, updateDlqBadge } from "./dlq-view.js";
 import { loadAppearance, loadSettingsPage, renderSettingsNav, showSettingsSection } from "./settings-view.js";
 import { syncAdminScopeOptions } from "./users-view.js";
-import { loadSendPage, openComposer } from "./send-view.js";
+import { loadSendPage } from "./send-view.js";
 import { hashMailId } from "./util.js";
 
 export function initTheme() {
@@ -116,8 +116,10 @@ export function placeMailSearch(view) {
 }
 
 export function setEmptyCopy(view) {
+  if (btnEmptyCompose) btnEmptyCompose.hidden = view !== "send";
   if (!mailEmptyCopy) return;
-  if (view === "spam") mailEmptyCopy.textContent = "这里是已拦截。选全部才会看到正常来信。";
+  if (view === "send") mailEmptyCopy.textContent = "选择一封已发信，或写新邮件。";
+  else if (view === "spam") mailEmptyCopy.textContent = "这里是已拦截。选全部才会看到正常来信。";
   else if (view === "trash") mailEmptyCopy.textContent = "这里是垃圾桶。";
   else if (view === "inbox" && state.starredOnly) mailEmptyCopy.textContent = "这里是星标，当前没有星标信。";
   else if (view === "inbox" && state.inboxPromoOnly) mailEmptyCopy.textContent = "这里是推广，当前没有推广信。";
@@ -169,8 +171,6 @@ export async function switchNav(view) {
     }
   }
   if (view === "dlq" && !state.isAdmin) view = "inbox";
-  const keepReply = state.replyArmed;
-  state.replyArmed = false;
   if (state.inboxPromoOnly) {
     state.inboxPromoOnly = false;
     paintPromoBtn();
@@ -185,7 +185,7 @@ export async function switchNav(view) {
 
   const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navUsersBtn, navSettingsBtn, navDlqBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
-  const viewPanels = [viewMail, viewDlq, viewSend, viewSettings];
+  const viewPanels = [viewMail, viewDlq, viewSettings];
   viewPanels.forEach((p) => {
     if (p) p.hidden = true;
   });
@@ -226,11 +226,13 @@ export async function switchNav(view) {
   } else if (view === "send") {
     navSendBtn?.classList.add("active");
     if (streamSendHeader) streamSendHeader.hidden = false;
-    if (viewSend) viewSend.hidden = false;
-    state.replyArmed = keepReply;
+    viewMail.hidden = false;
+    state.readingSentId = null;
+    state.openDetail = null;
+    if (mailDetailEl) mailDetailEl.hidden = true;
+    if (mailLoadingEl) mailLoadingEl.hidden = true;
+    if (mailEmptyEl) mailEmptyEl.hidden = false;
     await loadSendPage();
-    state.replyArmed = false;
-    openComposer();
   } else if (view === "spam") {
     navSpamBtn?.classList.add("active");
     if (streamSpamHeader) streamSpamHeader.hidden = false;

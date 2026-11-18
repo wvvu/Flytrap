@@ -269,8 +269,8 @@ export function createMailListItem(item) {
     const otpBtn = document.createElement("button");
     otpBtn.type = "button";
     otpBtn.className = "otp-pill";
-    otpBtn.textContent = "验证码 " + otpCode;
-    otpBtn.title = "点击复制验证码";
+    otpBtn.textContent = "疑似验证码 " + otpCode;
+    otpBtn.title = "点击复制疑似验证码";
     otpBtn.addEventListener("click", (ev) => {
       ev.stopPropagation();
       void copyText(otpCode, "验证码已复制");
@@ -457,7 +457,7 @@ export async function selectMail(id, options = {}) {
     if (detailOtpBtn) {
       if (detectedOtp) {
         detailOtpBtn.hidden = false;
-        detailOtpBtn.textContent = "验证码 " + detectedOtp + " · 复制";
+        detailOtpBtn.textContent = "疑似验证码 " + detectedOtp + " · 复制";
         detailOtpBtn.dataset.code = detectedOtp;
       } else {
         detailOtpBtn.hidden = true;

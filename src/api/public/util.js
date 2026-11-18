@@ -139,23 +139,25 @@ export function debounce(fn, ms) {
   };
 }
 
-const OTP_HINT_RE = /验证码|校验码|安全码|确认码|动态码|登录码|verification|passcode|security\s*code|login\s*code|one-time|\botp\b/i;
-const OTP_DIRECT_RE = /(?:验证码|校验码|安全码|确认码|动态码|code|otp|passcode)[^\dA-Za-z]{0,14}(\d{4,8})\b/i;
+const OTP_HINT_RE = /验证码|校验码|动态码|确认码|安全码|登录码|verification\s*code|security\s*code|passcode|one[-\s]?time|otp|login\s*code|auth\s*code/i;
+const OTP_NEAR_RE = /(?:验证码|校验码|动态码|确认码|安全码|code|otp|passcode)[^\dA-Za-z]{0,18}([0-9]{4,8})\b/i;
+const OTP_STANDALONE_RE = /\b([0-9]{6})\b/g;
 
-/** 从主题与纯文本正文中识别 4~8 位数字验证码，排除普通年份与链接干扰。 */
-export function extractOtpCode(subject, plainText) {
-  const combined = `${subject || ""}\n${String(plainText || "").slice(0, 1600)}`;
+/** 从主题与纯文本正文中识别验证码，排除普通年份。 */
+export function extractOtpCode(subject, text) {
+  const combined = `${subject || ""}\n${(text || "").slice(0, 2400)}`;
   if (!OTP_HINT_RE.test(combined)) return "";
-  const cleaned = combined.replace(/https?:\/\/\S+/gi, " ");
-  const direct = OTP_DIRECT_RE.exec(cleaned);
-  if (direct && direct[1]) return direct[1];
-  const candidates = cleaned.match(/\b\d{6}\b/g) || [];
-  for (const code of candidates) {
-    const num = Number(code);
-    if (num >= 199000 && num <= 209912) continue;
-    return code;
+  const near = OTP_NEAR_RE.exec(combined);
+  if (near && near[1] && !isLikelyYear(near[1])) return near[1];
+  const matches = [...combined.matchAll(OTP_STANDALONE_RE)];
+  for (const match of matches) {
+    if (match[1] && !isLikelyYear(match[1])) return match[1];
   }
   return "";
+}
+
+function isLikelyYear(code) {
+  return /^(?:19|20)\d{2}$/.test(code);
 }
 
 /** 生成易读无歧义的 14 位随机初始密码。 */

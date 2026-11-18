@@ -4,6 +4,7 @@ import {
   adminScopeSelect,
   appEl,
   backListBtn,
+  btnEmptyCompose,
   btnBlockMail,
   btnDeleteMail,
   btnExpandPreview,
@@ -14,6 +15,7 @@ import {
   btnRestoreMail,
   btnTrashMail,
   confirmModal,
+  composeSheet,
   detailModelVerdict,
   detailOtpBtn,
   detailVerdictSelect,
@@ -41,6 +43,7 @@ import {
   btnStarDetail,
   starredFilterBtn,
   queryInput,
+  railComposeBtn,
   readAllBtn,
   refreshBtn,
   resetModal,
@@ -137,6 +140,8 @@ import {
 } from "./users-view.js";
 import {
   cancelReplyLink,
+  closeComposer,
+  collapseExpandedComposer,
   discardComposeDraft,
   handleAttachmentFiles,
   loadSendPage,
@@ -148,6 +153,8 @@ import {
   scheduleDraftSave,
   startReply,
   submitSend,
+  toggleExpandComposer,
+  toggleMinimizeComposer,
 } from "./send-view.js";
 
 // 登录与全局轨道事件
@@ -166,6 +173,8 @@ shortcutModal?.addEventListener("click", (e) => {
 
 navInboxBtn?.addEventListener("click", () => void switchNav("inbox"));
 navSendBtn?.addEventListener("click", () => void switchNav("send"));
+railComposeBtn?.addEventListener("click", () => openComposer());
+btnEmptyCompose?.addEventListener("click", () => openComposer());
 navSpamBtn?.addEventListener("click", () => void switchNav("spam"));
 navTrashBtn?.addEventListener("click", () => void switchNav("trash"));
 navUsersBtn?.addEventListener("click", () => void switchNav("users"));
@@ -227,13 +236,12 @@ btnDeleteMail?.addEventListener("click", () => void handleDeleteMail());
 btnExpandPreview?.addEventListener("click", () => toggleSandboxExpand());
 detailOtpBtn?.addEventListener("click", () => {
   const code = detailOtpBtn.dataset.code || "";
-  if (code) void copyText(code, "验证码已复制");
+  if (code) void copyText(code, "疑似验证码已复制");
 });
 
 backListBtn?.addEventListener("click", () => setMobilePane("list"));
 document.querySelector("#btn-back-dlq")?.addEventListener("click", () => setMobilePane("list"));
 document.querySelector("#btn-back-settings")?.addEventListener("click", () => setMobilePane("list"));
-document.querySelector("#btn-back-send")?.addEventListener("click", () => setMobilePane("list"));
 
 // 成员管理页事件
 newUserBtn?.addEventListener("click", () => openCreateUserCard());
@@ -313,6 +321,19 @@ document.querySelector("#btn-add-domain")?.addEventListener("click", () => void 
 // 发信与写信草稿事件
 document.querySelector("#btn-send-refresh")?.addEventListener("click", () => void loadSendPage());
 document.querySelector("#btn-compose")?.addEventListener("click", () => openComposer());
+document.querySelector("#btn-compose-min")?.addEventListener("click", () => toggleMinimizeComposer());
+document.querySelector("#btn-compose-expand")?.addEventListener("click", () => toggleExpandComposer());
+document.querySelector("#btn-compose-close")?.addEventListener("click", () => closeComposer());
+document.querySelector("#compose-head")?.addEventListener("click", (event) => {
+  if (event.target instanceof Element && event.target.closest("button")) return;
+  if (composeSheet?.classList.contains("is-minimized")) toggleMinimizeComposer();
+});
+document.querySelector("#send-identity-pick")?.addEventListener("change", (event) => {
+  const fromInput = document.querySelector("#send-from");
+  if (fromInput) fromInput.value = event.target.value;
+  refreshSendNote();
+  scheduleDraftSave();
+});
 document.querySelector("#btn-discard-draft")?.addEventListener("click", () => void discardComposeDraft());
 document.querySelector("#btn-cancel-reply")?.addEventListener("click", () => cancelReplyLink());
 document.querySelector("#send-filters")?.addEventListener("submit", (event) => event.preventDefault());
@@ -546,6 +567,10 @@ window.addEventListener("keydown", (e) => {
       closeReset(false);
       return;
     }
+    if (collapseExpandedComposer()) {
+      e.preventDefault();
+      return;
+    }
     if (handleEscapeInSearch(e.target)) {
       e.preventDefault();
     }
@@ -576,7 +601,7 @@ window.addEventListener("keydown", (e) => {
 
   if (e.key === "c") {
     e.preventDefault();
-    void switchNav("send");
+    openComposer();
     return;
   }
 

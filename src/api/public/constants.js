@@ -12,7 +12,7 @@ export const LABEL_NAMES = {
 
 export const VIEW_TITLES = {
   inbox: "收件箱",
-  send: "发信",
+  send: "已发信",
   spam: "已拦截",
   trash: "垃圾桶",
   users: "成员",
@@ -95,3 +95,4 @@ export const SETTING_SECTIONS = [
 
 export const LAST_FROM_KEY = "mail_last_from";
 export const DRAFT_KEY_PREFIX = "mail_compose_draft:";
+export const COMPOSE_WIDE_KEY = "mail_compose_wide";

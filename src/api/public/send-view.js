@@ -1,7 +1,17 @@
 // 发信与草稿：按账号隔离的自动草稿保存、发件身份与 DKIM 状态反馈、回复关联与已发信浏览。
-import { DRAFT_KEY_PREFIX, LAST_FROM_KEY } from "./constants.js";
+import { COMPOSE_WIDE_KEY, DRAFT_KEY_PREFIX, LAST_FROM_KEY } from "./constants.js";
 import { state } from "./state.js";
-import { composeAttachmentsEl, listEl, noticeEl, sendFilesInput, threadBox, viewMail, viewSend } from "./dom.js";
+import {
+  composeAttachmentsEl,
+  composeIdentitySelect,
+  composeSheet,
+  composeSheetTitle,
+  listEl,
+  noticeEl,
+  sendFilesInput,
+  threadBox,
+  viewMail,
+} from "./dom.js";
 import { request } from "./net.js";
 import { askConfirm, explain, setMobilePane, toast } from "./ui.js";
 import {
@@ -19,8 +29,8 @@ import {
   replyAddress,
   replySubject,
 } from "./util.js";
-import { switchNav } from "./nav.js";
-import { openSentLetter } from "./mail-view.js";
+import { setResetCompose } from "./nav.js";
+import { loadThread, openSentLetter } from "./mail-view.js";
 
 function draftStorageKey() {
   return DRAFT_KEY_PREFIX + (state.sessionUserId || "owner");
@@ -78,6 +88,7 @@ export function readStoredDraft() {
 }
 
 export function saveComposeDraftNow() {
+  updateComposeTitle();
   const from = document.querySelector("#send-from")?.value || "";
   const to = document.querySelector("#send-to")?.value || "";
   const cc = document.querySelector("#send-cc")?.value || "";
@@ -140,12 +151,22 @@ export function restoreDraftIfPresent() {
   const statusEl = document.querySelector("#draft-status");
   const discardBtn = document.querySelector("#btn-discard-draft");
 
+  const hasCurrentContent = [toInput, ccInput, bccInput, subjectInput, textInput].some((input) => input?.value.trim()) ||
+    state.composeAttachments.length > 0 || Boolean(state.replyContext);
+  if (hasCurrentContent) {
+    syncReplyBanner();
+    refreshSendNote();
+    updateComposeTitle();
+    return;
+  }
+
   if (!draft) {
     if (fromInput && !fromInput.value.trim()) fromInput.value = defaultSenderAddress();
     if (statusEl) statusEl.hidden = true;
     if (discardBtn) discardBtn.hidden = true;
     syncReplyBanner();
     refreshSendNote();
+    updateComposeTitle();
     return;
   }
 
@@ -163,6 +184,7 @@ export function restoreDraftIfPresent() {
   if (discardBtn) discardBtn.hidden = false;
   syncReplyBanner();
   refreshSendNote();
+  updateComposeTitle();
 }
 
 export async function discardComposeDraft() {
@@ -190,6 +212,7 @@ export function clearComposeFields() {
   if (statusEl) statusEl.hidden = true;
   if (discardBtn) discardBtn.hidden = true;
   syncReplyBanner();
+  updateComposeTitle();
 }
 
 export async function handleAttachmentFiles(fileList) {
@@ -268,23 +291,77 @@ export function syncReplyBanner() {
   }
 }
 
-export function openComposer() {
-  state.readingSentId = null;
-  if (viewMail) viewMail.hidden = true;
-  if (viewSend) viewSend.hidden = false;
-  document.querySelectorAll("#list .mail-item").forEach((el) => el.classList.remove("selected"));
-  setMobilePane("detail");
+export function openComposer(options = {}) {
+  if (!composeSheet) return;
+  composeSheet.hidden = false;
+  composeSheet.classList.remove("is-minimized");
+  try {
+    composeSheet.classList.toggle("is-expanded", localStorage.getItem(COMPOSE_WIDE_KEY) === "1");
+  } catch {
+    // 隐私窗口忽略存储异常
+  }
+  if (!options.keepReply) restoreDraftIfPresent();
   const fromInput = document.querySelector("#send-from");
   if (fromInput && !fromInput.value.trim()) fromInput.value = defaultSenderAddress();
+  if (composeIdentitySelect && !composeIdentitySelect.hidden && fromInput) {
+    const value = fromInput.value.trim().toLowerCase();
+    if ([...composeIdentitySelect.options].some((option) => option.value === value)) {
+      composeIdentitySelect.value = value;
+    }
+  }
+  renderComposeQuotaHint();
   syncReplyBanner();
   refreshSendNote();
+  updateComposeTitle();
   const toInput = document.querySelector("#send-to");
-  if (toInput && !toInput.value.trim()) toInput.focus();
-  else document.querySelector("#send-text")?.focus();
+  const textInput = document.querySelector("#send-text");
+  if (options.focusBody && textInput) {
+    textInput.focus();
+    textInput.setSelectionRange(0, 0);
+  } else if (toInput && !toInput.value.trim()) {
+    toInput.focus();
+  } else if (textInput) {
+    textInput.focus();
+  }
+}
+
+export function toggleMinimizeComposer() {
+  if (!composeSheet || composeSheet.hidden) return;
+  composeSheet.classList.remove("is-expanded");
+  composeSheet.classList.toggle("is-minimized");
+}
+
+export function toggleExpandComposer() {
+  if (!composeSheet || composeSheet.hidden) return;
+  composeSheet.classList.remove("is-minimized");
+  composeSheet.classList.toggle("is-expanded");
+  try {
+    localStorage.setItem(COMPOSE_WIDE_KEY, composeSheet.classList.contains("is-expanded") ? "1" : "0");
+  } catch {
+    // 隐私窗口忽略存储异常
+  }
+}
+
+export function closeComposer() {
+  if (!composeSheet) return;
+  saveComposeDraftNow();
+  composeSheet.hidden = true;
+  composeSheet.classList.remove("is-minimized", "is-expanded");
+}
+
+export function collapseExpandedComposer() {
+  if (!composeSheet || composeSheet.hidden || !composeSheet.classList.contains("is-expanded")) return false;
+  composeSheet.classList.remove("is-expanded");
+  return true;
+}
+
+export function updateComposeTitle() {
+  if (!composeSheetTitle) return;
+  const subject = document.querySelector("#send-subject")?.value.trim() || "";
+  composeSheetTitle.textContent = subject || (state.replyContext ? "回复邮件" : "新邮件");
 }
 
 export async function selectSentFromList(id) {
-  if (viewSend) viewSend.hidden = true;
   if (viewMail) viewMail.hidden = false;
   if (threadBox) threadBox.hidden = true;
   document.querySelectorAll("#list .mail-item").forEach((el) => {
@@ -314,7 +391,6 @@ export async function startReply() {
   const references = capReplyRefs(parent ? (prior.includes(parent) ? prior : prior.concat(parent)) : prior);
   state.replyContext = parent ? { inReplyTo: parent, references } : null;
   state.replySubjectHint = detail.subject || "(无主题)";
-  state.replyArmed = true;
 
   const fromInput = document.querySelector("#send-from");
   const toInput = document.querySelector("#send-to");
@@ -326,11 +402,16 @@ export async function startReply() {
   if (textInput) textInput.value = quoteLetter(detail);
   saveComposeDraftNow();
 
-  await switchNav("send");
-  openComposer();
-  if (textInput) {
-    textInput.focus();
-    textInput.setSelectionRange(0, 0);
+  openComposer({ keepReply: true, focusBody: true });
+}
+
+function renderComposeQuotaHint() {
+  const quotaHint = document.querySelector("#send-quota-hint");
+  if (!quotaHint) return;
+  if (!state.isAdmin && state.quotaSendPerDay != null) {
+    quotaHint.textContent = `今日发信额度 ${state.sentToday}/${state.quotaSendPerDay}。草稿自动暂存在当前浏览器，发出后清除。`;
+  } else {
+    quotaHint.textContent = "先存原文，再排队发出。输入内容自动暂存在当前浏览器，发出后清除。";
   }
 }
 
@@ -354,17 +435,9 @@ export async function loadSendPage() {
     state.sentToday = Number(sessionInfo.sentToday) || 0;
     state.quotaSendPerDay = sessionInfo.quotaSendPerDay;
 
-    const quotaHint = document.querySelector("#send-quota-hint");
-    if (quotaHint) {
-      if (!state.isAdmin && state.quotaSendPerDay != null) {
-        quotaHint.textContent = `今日发信额度 ${state.sentToday}/${state.quotaSendPerDay}。草稿自动暂存在当前浏览器，发出后清除。`;
-      } else {
-        quotaHint.textContent = "先存原文，再排队发出。输入内容自动暂存在当前浏览器，发出后清除。";
-      }
-    }
-
+    renderComposeQuotaHint();
     renderFromSuggestions(Array.isArray(history.items) ? history.items : []);
-    if (!state.replyArmed) restoreDraftIfPresent();
+    restoreDraftIfPresent();
     renderSentList();
     refreshSendNote();
   } catch (err) {
@@ -398,32 +471,43 @@ export async function refreshSentList() {
 export function renderFromSuggestions(items) {
   const list = document.querySelector("#send-from-list");
   if (!list) return;
-  list.replaceChildren();
+  const candidates = [];
   const seen = new Set();
+  const add = (address) => {
+    if (!address || seen.has(address)) return;
+    seen.add(address);
+    candidates.push(address);
+  };
 
   if (state.sessionUserId && state.sessionUserId !== "owner") {
     for (const box of state.allocatedMailboxes) {
-      if (!box.canSend) continue;
-      const addr = box.localpart === "*" ? `mail@${box.domain}` : box.address;
-      if (seen.has(addr)) continue;
-      seen.add(addr);
-      const opt = document.createElement("option");
-      opt.value = addr;
-      list.append(opt);
+      if (box.canSend) add(box.localpart === "*" ? `mail@${box.domain}` : box.address);
     }
-    return;
+  } else {
+    for (const item of items) {
+      const domain = String(item.domain || "").trim().toLowerCase();
+      const local = String(item.localpart || "").trim().toLowerCase();
+      if (domain && local && local !== "*") add(local + "@" + domain);
+    }
   }
 
-  for (const item of items) {
-    const domain = String(item.domain || "").trim().toLowerCase();
-    const local = String(item.localpart || "").trim().toLowerCase();
-    if (!domain || !local || local === "*") continue;
-    const address = local + "@" + domain;
-    if (seen.has(address)) continue;
-    seen.add(address);
+  list.replaceChildren();
+  if (composeIdentitySelect) composeIdentitySelect.replaceChildren();
+  for (const address of candidates) {
     const option = document.createElement("option");
     option.value = address;
     list.append(option);
+    if (composeIdentitySelect) {
+      const choice = document.createElement("option");
+      choice.value = address;
+      choice.textContent = address;
+      composeIdentitySelect.append(choice);
+    }
+  }
+  if (composeIdentitySelect) {
+    composeIdentitySelect.hidden = candidates.length < 2;
+    const current = document.querySelector("#send-from")?.value.trim().toLowerCase() || "";
+    if (candidates.includes(current)) composeIdentitySelect.value = current;
   }
 }
 
@@ -542,8 +626,18 @@ export async function submitSend() {
     });
     rememberFrom(from);
     clearComposeFields();
+    closeComposer();
     toast(queued.dkim === "signed" ? "已排队，并签了 DKIM" : "已排队，没有签名");
-    await loadSendPage();
+    if (state.currentView === "send") {
+      await loadSendPage();
+    } else {
+      if (state.selectedMailId) void loadThread(state.selectedMailId, state.mailLoadToken);
+      request("/v1/session").then((sessionInfo) => {
+        state.sentToday = Number(sessionInfo.sentToday) || 0;
+        state.quotaSendPerDay = sessionInfo.quotaSendPerDay;
+        renderComposeQuotaHint();
+      }).catch(() => {});
+    }
   } catch (err) {
     toast("发出失败: " + explain(err));
   } finally {
@@ -636,3 +730,30 @@ export async function retrySent(id) {
     toast("重试失败: " + explain(err));
   }
 }
+
+export function resetComposeForAccount() {
+  window.clearTimeout(state.draftSaveTimer);
+  state.draftSaveTimer = 0;
+  if (composeSheet && !composeSheet.hidden) saveComposeDraftNow();
+  if (composeSheet) {
+    composeSheet.hidden = true;
+    composeSheet.classList.remove("is-minimized", "is-expanded");
+  }
+  state.replyContext = null;
+  state.replySubjectHint = "";
+  state.replyArmed = false;
+  state.composeAttachments = [];
+  for (const selector of ["#send-from", "#send-to", "#send-cc", "#send-bcc", "#send-subject", "#send-text"]) {
+    const input = document.querySelector(selector);
+    if (input) input.value = "";
+  }
+  const status = document.querySelector("#draft-status");
+  const discard = document.querySelector("#btn-discard-draft");
+  if (status) status.hidden = true;
+  if (discard) discard.hidden = true;
+  renderComposeAttachments();
+  syncReplyBanner();
+  updateComposeTitle();
+}
+
+setResetCompose(resetComposeForAccount);

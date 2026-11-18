@@ -24,6 +24,8 @@ import { backfillThreadHeaders } from "../src/mail/thread-scan.js";
 import { deliverToMx, type MailSender } from "../src/mail/deliver.js";
 import { submitOutbox } from "../src/mail/submit.js";
 import { migrationsDir } from "../src/paths.js";
+// @ts-expect-error the browser panel module is plain JavaScript and stays that way.
+import { extractOtpCode } from "../src/api/public/util.js";
 import { fakeClassifier } from "../src/ai/classifier.js";
 import type { AppLog } from "../src/log.js";
 import { processNext, type WorkerOptions } from "../src/worker/loop.js";
@@ -312,6 +314,13 @@ test("outbound attachments allow five files and reject a sixth or more than 10MB
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("the OTP extractor reads nearby codes and skips years", () => {
+  assert.equal(extractOtpCode("登录验证码", "verification code: 482913"), "482913");
+  assert.equal(extractOtpCode("安全验证", "2024 年的验证码是 456789"), "456789");
+  assert.equal(extractOtpCode("验证码", "one time code 73624"), "73624");
+  assert.equal(extractOtpCode("验证码", "code 2024"), "");
 });
 
 test("composeText puts a display name on From and keeps Bcc off the header", () => {
