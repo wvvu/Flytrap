@@ -272,6 +272,13 @@ export function updateUserPassword(db: Db, id: string, passwordHash: string, now
 export function deleteUser(db: Db, id: string): boolean {
   if (!id || id === OWNER_USER_ID) return false;
   return db.transaction(() => {
+    const user = getUserById(db, id);
+    if (!user) return false;
+    db.prepare(
+      `DELETE FROM sessions
+       WHERE json_extract(data, '$.userId') = ?
+          OR lower(COALESCE(json_extract(data, '$.user'), '')) = lower(?)`,
+    ).run(id, user.username);
     db.prepare("DELETE FROM user_message_state WHERE user_id = ?").run(id);
     db.prepare("DELETE FROM user_mailboxes WHERE user_id = ?").run(id);
     const res = db.prepare("DELETE FROM users WHERE id = ?").run(id);

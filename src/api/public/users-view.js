@@ -563,7 +563,7 @@ function createAllocationRow(user, box) {
   revokeBtn.className = "btn-sm btn-danger-ghost";
   revokeBtn.textContent = "收回";
   revokeBtn.addEventListener("click", async () => {
-    if (!(await askConfirm(`收回 ${box.address} 的归属权？`))) return;
+    if (!(await askConfirm(`收回 ${box.address} 的归属权？已看见的历史信留在库里。`))) return;
     try {
       await request(
         `/v1/users/${encodeURIComponent(user.id)}/mailboxes/${encodeURIComponent(box.id)}`,
@@ -605,7 +605,7 @@ async function toggleUserStatus(user) {
 }
 
 async function handleRemoveUser(user) {
-  if (!(await askConfirm(`永久删除账号 ${user.username} 并释放其全部邮箱分配？`))) return;
+  if (!(await askConfirm(`删除账号 ${user.username}。删号不删信，分配会释放，已经看见的历史信留在库里。`))) return;
   try {
     await request("/v1/users/" + encodeURIComponent(user.id), { method: "DELETE" });
     toast("已删除账号 " + user.username);

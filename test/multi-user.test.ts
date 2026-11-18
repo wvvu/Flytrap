@@ -559,6 +559,111 @@ test("admin delete follows the requested scope and emptying all-scope trash keep
   }
 });
 
+test("a collaborative admin cannot manage other admins, and a member scope=all stays on their own mail", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-owner-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 18, 16, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+  const carol = jar();
+  const alice = jar();
+  const aliceOther = jar();
+  const bob = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    const createAlice = await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com" },
+    });
+    assert.equal(createAlice.statusCode, 201);
+    const createCarol = await owner.post(app, "/v1/users", {
+      username: "carol",
+      password: "carol-password-123",
+      role: "admin",
+    });
+    assert.equal(createCarol.statusCode, 201);
+    const carolId = createCarol.json().user.id as string;
+    const createBob = await owner.post(app, "/v1/users", {
+      username: "bob",
+      password: "bob-password-123",
+      role: "admin",
+    });
+    assert.equal(createBob.statusCode, 201);
+    const bobId = createBob.json().user.id as string;
+
+    await carol.login(app, "carol", "carol-password-123");
+    await bob.login(app, "bob", "bob-password-123");
+    const granted = await carol.post(app, "/v1/users", {
+      username: "extra",
+      password: "extra-password-123",
+      role: "admin",
+    });
+    assert.equal(granted.statusCode, 403);
+    assert.equal(granted.json().reason, "only_owner_can_grant_admin");
+    const memberOk = await carol.post(app, "/v1/users", {
+      username: "dave",
+      password: "dave-password-123",
+    });
+    assert.equal(memberOk.statusCode, 201);
+
+    const disableAdmin = await carol.patch(app, `/v1/users/${bobId}`, { status: "disabled" });
+    assert.equal(disableAdmin.statusCode, 403);
+    assert.equal(disableAdmin.json().reason, "only_owner_can_manage_admin");
+    const resetAdmin = await carol.put(app, `/v1/users/${bobId}/password`, { next: "bob-password-456" });
+    assert.equal(resetAdmin.statusCode, 403);
+    assert.equal(resetAdmin.json().reason, "only_owner_can_manage_admin");
+    const deleteAdmin = await carol.delete(app, `/v1/users/${bobId}`);
+    assert.equal(deleteAdmin.statusCode, 403);
+    const disableSelf = await carol.patch(app, `/v1/users/${carolId}`, { status: "disabled" });
+    assert.equal(disableSelf.statusCode, 400);
+    assert.equal(disableSelf.json().reason, "cannot_disable_self");
+
+    const ownerDisable = await owner.patch(app, `/v1/users/${bobId}`, { status: "disabled" });
+    assert.equal(ownerDisable.statusCode, 200);
+    assert.equal((await bob.get(app, "/v1/me")).statusCode, 401);
+
+    await alice.login(app, "alice", "alice-password-123");
+    await aliceOther.login(app, "alice", "alice-password-123");
+    const changed = await alice.put(app, "/v1/settings/password", {
+      current: "alice-password-123",
+      next: "alice-password-456",
+    });
+    assert.equal(changed.statusCode, 200);
+    assert.equal((await alice.get(app, "/v1/me")).statusCode, 200);
+    assert.equal((await aliceOther.get(app, "/v1/me")).statusCode, 401);
+
+    const forAlice = await deliver(db, dir, ["alice@example.com"], "Subject: alice\r\n\r\nHi\r\n", ++clock);
+    const forOwner = await deliver(db, dir, ["ops@example.com"], "Subject: ops\r\n\r\nHi\r\n", ++clock);
+    const scoped = (await alice.get(app, "/v1/messages?scope=all")).json().items as Array<{ id: string }>;
+    assert.deepEqual(scoped.map((item) => item.id), [forAlice.id]);
+    assert.equal(scoped.some((item) => item.id === forOwner.id), false);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 async function deliver(db: Db, dir: string, rcptTo: string[], content: string, receivedAtMs: number) {
   return acceptMessage(
     { db, dataDir: dir, codec: gzipCodec() },

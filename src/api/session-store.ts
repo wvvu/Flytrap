@@ -84,6 +84,46 @@ export function clearUserSessions(db: Db, userId: string, username?: string): nu
   return res.changes;
 }
 
+/** Drop this user's other sessions and leave the one that just changed the password. */
+export function clearUserSessionsExcept(
+  db: Db,
+  userId: string,
+  keepSid: string | undefined,
+  username?: string,
+): number {
+  if (!keepSid) return clearUserSessions(db, userId, username);
+  if (userId === OWNER_USER_ID && username) {
+    const res = db
+      .prepare(
+        `DELETE FROM sessions
+         WHERE sid != ?
+           AND (
+             json_extract(data, '$.userId') = ?
+             OR (json_extract(data, '$.userId') IS NULL AND json_extract(data, '$.user') = ?)
+           )`,
+      )
+      .run(keepSid, OWNER_USER_ID, username);
+    return res.changes;
+  }
+  if (username) {
+    const res = db
+      .prepare(
+        `DELETE FROM sessions
+         WHERE sid != ?
+           AND (
+             json_extract(data, '$.userId') = ?
+             OR lower(COALESCE(json_extract(data, '$.user'), '')) = lower(?)
+           )`,
+      )
+      .run(keepSid, userId, username);
+    return res.changes;
+  }
+  const res = db
+    .prepare("DELETE FROM sessions WHERE sid != ? AND json_extract(data, '$.userId') = ?")
+    .run(keepSid, userId);
+  return res.changes;
+}
+
 function expiresAt(session: Session, now: number, defaultTtlMs = DEFAULT_SESSION_TTL_MS): number {
   const cookie = session.cookie;
   const expires = cookie?.expires;

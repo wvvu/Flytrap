@@ -136,7 +136,7 @@ import {
   sameAccount,
   sealResetCode,
 } from "./password.js";
-import { clearSessions, clearUserSessions, sqliteSessionStore } from "./session-store.js";
+import { clearSessions, clearUserSessions, clearUserSessionsExcept, sqliteSessionStore } from "./session-store.js";
 import { isPanelAsset, registerPanel } from "./static.js";
 
 declare module "fastify" {
@@ -387,7 +387,11 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       request.log.error({ err: error.name }, "request failed");
       return reply.code(500).send({ error: "internal_error" });
     }
-    return reply.code(status).send({ error: errorName(status) });
+    const payload: Record<string, string> = { error: errorName(status) };
+    if (err instanceof HttpError && err.message && err.message !== errorName(status) && err.message !== "bad_request") {
+      payload.reason = err.message;
+    }
+    return reply.code(status).send(payload);
   });
 
   app.addHook("onRequest", (request, reply, done) => {
@@ -1250,6 +1254,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       if (!currentOk) throw new HttpError(401, "unauthorized");
       savePasswordHash(db, hashPassword(body.data.next), at);
       clearResetSeal(db, OWNER_USER_ID);
+      clearUserSessionsExcept(db, OWNER_USER_ID, request.session.sessionId, config.apiUsername);
     } else {
       const user = getUserById(db, userId);
       if (!user || !passwordMatches(body.data.current, user.password_hash)) {
@@ -1257,6 +1262,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       }
       updateUserPassword(db, userId, hashPassword(body.data.next), at);
       clearResetSeal(db, userId);
+      clearUserSessionsExcept(db, userId, request.session.sessionId, user.username);
     }
 
     writeAudit(db, {
@@ -1629,6 +1635,9 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const body = createUserBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     if (body.data.password === "admin") throw new HttpError(400);
+    if (body.data.role === "admin" && !sessionIsOwner(request)) {
+      throw new HttpError(403, "only_owner_can_grant_admin");
+    }
     const at = now();
     try {
       const created = createUser(
@@ -1668,12 +1677,21 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     requireAdmin(request);
     const targetId = messageId(request);
     if (targetId === OWNER_USER_ID) throw new HttpError(400);
+    const existing = getUserById(db, targetId);
+    if (!existing) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, existing, true);
     const body = updateUserBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
+    if (body.data.role === "admin" && !sessionIsOwner(request)) {
+      throw new HttpError(403, "only_owner_can_grant_admin");
+    }
+    if (body.data.status === "disabled" && request.session.userId === existing.id) {
+      throw new HttpError(400, "cannot_disable_self");
+    }
     const at = now();
     try {
       const updated = updateUser(db, targetId, body.data, at, utcDayStart(at));
-      if (body.data.status === "disabled") {
+      if (body.data.status === "disabled" || (body.data.role !== undefined && body.data.role !== existing.role)) {
         clearUserSessions(db, targetId, updated.username);
       }
       writeAudit(db, {
@@ -1698,6 +1716,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const targetId = messageId(request);
     const user = getUserById(db, targetId);
     if (!user) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, user, true);
     const body = adminSetPasswordBody.safeParse(request.body);
     if (!body.success || body.data.next === "admin") throw new HttpError(400);
     const at = now();
@@ -1714,13 +1733,33 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     return reply.send({ ok: true });
   });
 
+  app.post("/v1/users/:id/sessions/revoke", async (request, reply) => {
+    requireAdmin(request);
+    const targetId = messageId(request);
+    if (targetId === OWNER_USER_ID) throw new HttpError(400);
+    const user = getUserById(db, targetId);
+    if (!user) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, user, false);
+    const count = clearUserSessions(db, targetId, user.username);
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "admin",
+      action: "user_sessions_revoke",
+      target: user.username,
+      detail: `count=${count}`,
+    });
+    return reply.send({ ok: true, count });
+  });
+
   app.delete("/v1/users/:id", async (request, reply) => {
     requireAdmin(request);
     const targetId = messageId(request);
-    if (targetId === request.session.userId) throw new HttpError(400);
+    if (targetId === OWNER_USER_ID) throw new HttpError(400);
+    if (targetId === request.session.userId) throw new HttpError(400, "cannot_delete_self");
     const user = getUserById(db, targetId);
     if (!user) throw new HttpError(404, "not_found");
-    clearUserSessions(db, targetId, user.username);
+    rejectAdminTarget(request, user, false);
     deleteUser(db, targetId);
     writeAudit(db, {
       id: ulid(),
@@ -1735,6 +1774,9 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
   app.post("/v1/users/:id/mailboxes", async (request, reply) => {
     requireAdmin(request);
     const targetId = messageId(request);
+    const target = getUserById(db, targetId);
+    if (!target) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, target, true);
     const body = allocateMailboxBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
     const at = now();
@@ -1784,6 +1826,10 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     if (!isAdmin && (!isSelf || body.data.canSend !== undefined)) {
       throw new HttpError(403, "forbidden");
     }
+    if (isAdmin && !isSelf) {
+      const target = getUserById(db, targetId);
+      if (target) rejectAdminTarget(request, target, false);
+    }
     try {
       const updated = updateUserMailbox(db, targetId, mailboxId, body.data);
       writeAudit(db, {
@@ -1810,6 +1856,9 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     if (!/^[\w-]+$/.test(targetId) || !/^[\w-]+$/.test(mailboxId)) {
       throw new HttpError(404, "not_found");
     }
+    const target = getUserById(db, targetId);
+    if (!target) throw new HttpError(404, "not_found");
+    rejectAdminTarget(request, target, true);
     const ok = revokeMailbox(db, targetId, mailboxId);
     if (!ok) throw new HttpError(404, "not_found");
     writeAudit(db, {
@@ -1839,6 +1888,20 @@ function requireAdmin(request: FastifyRequest): void {
   if (request.session.role !== "admin") {
     throw new HttpError(403, "forbidden");
   }
+}
+
+function sessionIsOwner(request: FastifyRequest): boolean {
+  return (request.session.userId ?? OWNER_USER_ID) === OWNER_USER_ID;
+}
+
+function rejectAdminTarget(
+  request: FastifyRequest,
+  target: { id: string; role: string },
+  allowSelf: boolean,
+): void {
+  if (target.role !== "admin" || sessionIsOwner(request)) return;
+  if (allowSelf && request.session.userId === target.id) return;
+  throw new HttpError(403, "only_owner_can_manage_admin");
 }
 
 function viewerOf(db: Db, request: FastifyRequest, scopeHint?: string): ViewerContext {
