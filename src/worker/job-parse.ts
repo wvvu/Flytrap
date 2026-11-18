@@ -3,6 +3,7 @@ import type { Db } from "../db/index.js";
 import { enqueueJob, hasOpenJob, type JobRow } from "../db/repos/jobs.js";
 import { getMessage, saveParsedMessage, trashMessage } from "../db/repos/messages.js";
 import { isBlockedSender } from "../db/repos/settings.js";
+import { applyMemberBlocklistsOnInbound } from "../db/repos/users.js";
 import type { Codec } from "../compress.js";
 import { readRaw } from "../ingest/read-raw.js";
 import type { AppLog } from "../log.js";
@@ -23,11 +24,12 @@ export async function runParseJob(deps: ParseJobDeps, job: JobRow): Promise<void
   const message = getMessage(deps.db, job.message_id);
   if (!message) throw new Error("message missing");
   const raw = await readRaw(deps.dataDir, message.raw_path, deps.codec, message.sha256);
+  const nowTs = deps.now();
   const result = await parseMessage(raw, {
     db: deps.db,
     dataDir: deps.dataDir,
     messageId: message.id,
-    now: deps.now(),
+    now: nowTs,
   });
   const fromAddr = result.parsed.from?.address ?? null;
   saveParsedMessage(deps.db, {
@@ -42,6 +44,12 @@ export async function runParseJob(deps: ParseJobDeps, job: JobRow): Promise<void
     parsed: JSON.stringify(result.parsed),
     now: deps.now(),
   });
+
+  // Apply per-member personal blocklists independently without globally trashing shared mail.
+  const envelopeRecipients = parseEnvelopeList(message.envelope_to);
+  const allRecipients = [...new Set([...envelopeRecipients, ...result.toAddrs])];
+  applyMemberBlocklistsOnInbound(deps.db, message.id, [fromAddr, message.envelope_from], allRecipients, deps.now());
+
   if (isBlockedSender(deps.db, fromAddr) || isBlockedSender(deps.db, message.envelope_from)) {
     trashMessage(deps.db, message.id, deps.now());
     deps.log.info({ messageId: message.id }, "blocked sender moved to trash");
@@ -55,4 +63,14 @@ export async function runParseJob(deps: ParseJobDeps, job: JobRow): Promise<void
     { messageId: message.id, attachments: result.parsed.attachmentCount, urls: result.parsed.urls.length },
     "parse done",
   );
+}
+
+function parseEnvelopeList(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === "string" && item.length > 0);
+  } catch {
+    return [];
+  }
 }

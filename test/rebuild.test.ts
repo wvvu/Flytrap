@@ -124,7 +124,11 @@ test("main --rebuild exits after the sha256 set matches raw", async () => {
     seeded.close();
     removeDb(dir);
 
-    const result = spawnSync(process.execPath, ["--import", "tsx", "src/main.ts", "--rebuild"], {
+    const root = appRoot();
+    const args = fs.existsSync(path.join(root, "src", "main.ts"))
+      ? ["--import", "tsx", "src/main.ts", "--rebuild"]
+      : ["dist/main.js", "--rebuild"];
+    const result = spawnSync(process.execPath, args, {
       cwd: appRoot(),
       env: {
         PATH: process.env.PATH,

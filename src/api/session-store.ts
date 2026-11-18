@@ -58,6 +58,24 @@ export function clearSessions(db: Db): void {
   db.prepare("DELETE FROM sessions").run();
 }
 
+export function clearUserSessions(db: Db, target: { userId?: string; username?: string }): number {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (target.userId) {
+    clauses.push("json_extract(data, '$.userId') = ?");
+    params.push(target.userId);
+  }
+  if (target.username) {
+    clauses.push("lower(json_extract(data, '$.user')) = lower(?)");
+    params.push(target.username);
+  }
+  if (clauses.length === 0) return 0;
+  const res = db
+    .prepare(`DELETE FROM sessions WHERE json_valid(data) AND (${clauses.join(" OR ")})`)
+    .run(...params);
+  return res.changes;
+}
+
 function expiresAt(session: Session, now: number, defaultTtlMs = DEFAULT_SESSION_TTL_MS): number {
   const cookie = session.cookie;
   const expires = cookie?.expires;

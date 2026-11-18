@@ -1,16 +1,44 @@
-// 设置页：各分区渲染与即时保存，外加 DKIM 与日志。
-import { LABELS, LABEL_NAMES, SETTING_SECTIONS } from "./constants.js";
+// 设置中心：支持管理员全功能配置与普通成员专属邮箱/偏好配置，附带 AI 密钥在线实测。
+import { ADMIN_SETTING_SECTIONS, LABELS, LABEL_NAMES, MEMBER_SETTING_SECTIONS } from "./constants.js";
 import { state } from "./state.js";
 import { appEl, detailVerdictSelect, filterSelect, listEl } from "./dom.js";
 import { request } from "./net.js";
 import { askConfirm, copyText, explain, setMobilePane, setViewTitle, toast } from "./ui.js";
 import { cssEscape, normalizeAddress } from "./util.js";
 
+export function activeSettingSections() {
+  return state.sessionRole === "member" ? MEMBER_SETTING_SECTIONS : ADMIN_SETTING_SECTIONS;
+}
+
 export async function loadSettingsPage() {
   try {
     const settings = await request("/v1/settings");
     applyAppearance(settings);
     state.settingsDomains = Array.isArray(settings.acceptDomains) ? settings.acceptDomains.slice() : [];
+    renderBlockList(settings.blockedSenders || []);
+    renderSenderRows(
+      Array.isArray(settings.senderNames)
+        ? settings.senderNames.map((item) => ({ address: item.address, name: item.name }))
+        : [],
+    );
+    state.savedSenders = Array.isArray(settings.senderNames)
+      ? settings.senderNames.map((item) => ({ address: item.address, name: item.name }))
+      : [];
+
+    const idLine = document.querySelector("#account-identity-line");
+    if (idLine) {
+      const roleText = state.sessionRole === "admin" ? (state.isOwner ? "根管理员" : "协同管理员") : "独立成员账号";
+      idLine.textContent = `当前账号：${state.sessionUser}（${roleText}）。修改登录口令需至少 8 位。`;
+    }
+
+    if (state.sessionRole === "member") {
+      if (Array.isArray(settings.allocations)) state.myAllocations = settings.allocations;
+      renderMemberAllocations(state.myAllocations);
+      await loadMailboxesView();
+      await loadMachineLine();
+      return;
+    }
+
     renderNameEditors(settings);
     renderNotify(settings);
     renderDomains(settings.acceptDomains || []);
@@ -41,17 +69,64 @@ export async function loadSettingsPage() {
     const thinking = document.querySelector("#ai-thinking");
     if (thinking) thinking.value = settings.aiThinking || "low";
     renderAiEditors(settings.aiPool || {});
-    renderBlockList(settings.blockedSenders || []);
     await loadDkimSection();
   } catch (err) {
     toast(explain(err));
   }
 }
 
+export function renderMemberAllocations(allocations) {
+  const host = document.querySelector("#member-alloc-list");
+  if (!host) return;
+  host.replaceChildren();
+  const list = Array.isArray(allocations) ? allocations : [];
+  if (list.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "暂未分配专属邮箱，请联系管理员添加邮箱授权。";
+    host.append(empty);
+    return;
+  }
+  for (const item of list) {
+    const card = document.createElement("div");
+    card.className = "domain-card";
+    const head = document.createElement("div");
+    head.className = "domain-card-head";
+    const title = document.createElement("strong");
+    title.textContent = item.pattern || `${item.localpart}@${item.domain}`;
+    const badges = document.createElement("div");
+    badges.className = "inline-row";
+    const kindBadge = document.createElement("span");
+    kindBadge.className = "pill pill-xs";
+    kindBadge.textContent =
+      item.kind === "domain" ? "整域接管" : item.kind === "prefix" ? "前缀通配" : "精确邮箱 + 子地址";
+    const sendBadge = document.createElement("span");
+    sendBadge.className = item.canSend ? "pill pill-xs pill-ok" : "pill pill-xs";
+    sendBadge.textContent = item.canSend ? "可收可发" : "仅收信";
+    badges.append(kindBadge, sendBadge);
+    head.append(title, badges);
+
+    const hint = document.createElement("p");
+    hint.className = "muted";
+    hint.textContent =
+      item.kind === "exact"
+        ? `支持直接收发 ${item.localpart}@${item.domain} 及任意 ${item.localpart}+标签@${item.domain}`
+        : item.kind === "prefix"
+          ? `支持接收并管理匹配 ${item.pattern} 的全部地址`
+          : `接管 @${item.domain} 域名下的全部收发地址`;
+    card.append(head, hint);
+    host.append(card);
+  }
+}
+
 export function renderSettingsNav() {
   if (state.currentView !== "settings") return;
+  const sections = activeSettingSections();
+  if (!sections.some(([id]) => id === state.currentSettingsSection)) {
+    state.currentSettingsSection = sections[0][0];
+  }
   listEl.replaceChildren();
-  for (const [id, label, hint] of SETTING_SECTIONS) {
+  for (const [id, label, hint] of sections) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "mail-item";
@@ -70,31 +145,40 @@ export function renderSettingsNav() {
 }
 
 export function showSettingsSection(id, options = {}) {
+  const isMember = state.sessionRole === "member";
   state.currentSettingsSection = id;
   for (const block of document.querySelectorAll("#view-settings .block")) {
-    block.hidden = block.dataset.group !== id;
+    let visible = block.dataset.group === id;
+    if (isMember) {
+      if (block.id === "set-names" || block.id === "set-jobs" || block.id === "set-logs" || block.id === "set-domains") {
+        visible = false;
+      }
+    } else if (block.id === "set-my-mailboxes") {
+      visible = false;
+    }
+    block.hidden = !visible;
   }
   for (const button of listEl.querySelectorAll(".mail-item")) {
     button.classList.toggle("selected", button.dataset.section === id);
   }
   if (!options.keepListOnNarrow) setMobilePane("detail");
   if (id === "status") {
-    void loadLogs();
+    if (!isMember) void loadLogs();
     void loadMachineLine();
   }
-  if (id === "domains") void loadDkimSection();
+  if (id === "domains" && !isMember) void loadDkimSection();
   if (id === "people") void loadMailboxesView();
 }
 
 export function describeAi(ai) {
-  if (!ai || ai.classifier === "fake" || !ai.model) return "尚未配置模型。提示词会在模型可用后用于新邮件。";
-  const keys = Number(ai.keyCount) === 1 ? "1 个密钥可用" : `${ai.keyCount || 0} 个密钥可用`;
+  if (!ai || ai.classifier === "fake" || !ai.model) return "当前为模拟分拣或未配模型，配置密钥后自动对新邮件生效。";
+  const keys = Number(ai.keyCount) === 1 ? "1 把密钥就绪" : `${ai.keyCount || 0} 把密钥轮换中`;
   return `${ai.model} · ${keys}`;
 }
 
 export function describeChannels(channels) {
-  const telegram = channels && channels.telegram ? "Telegram 已配置" : "Telegram 未配置";
-  const webhook = channels && channels.webhook ? "Webhook 已配置" : "Webhook 未配置";
+  const telegram = channels && channels.telegram ? "Telegram 已接入" : "Telegram 未配";
+  const webhook = channels && channels.webhook ? "Webhook 已接入" : "Webhook 未配";
   return `${telegram} · ${webhook}`;
 }
 
@@ -160,16 +244,16 @@ export async function saveNotifySettings() {
     if (input.checked) labels.push(input.value);
   });
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-    toast("置信度要在 0 到 1 之间");
+    toast("置信度需在 0 到 1 之间");
     return;
   }
   try {
     await request("/v1/settings/notify", { method: "PUT", body: { labels, minConfidence: confidence } });
     state.notifyBaseline = notifySnapshot();
     syncNotifySave();
-    toast("提醒已保存");
+    toast("推送策略已保存");
   } catch (err) {
-    toast("保存提醒失败: " + explain(err));
+    toast("保存失败: " + explain(err));
   }
 }
 
@@ -207,9 +291,9 @@ export async function addBlocked() {
     });
     if (input) input.value = "";
     renderBlockList(res.blockedSenders || []);
-    toast("已加入黑名单");
+    toast("已加入拦截名单");
   } catch {
-    toast("发件地址无效");
+    toast("发件地址格式无效");
   }
 }
 
@@ -222,7 +306,7 @@ export async function removeBlocked(address) {
     renderBlockList(res.blockedSenders || []);
     toast("已移出黑名单");
   } catch (err) {
-    toast("移出黑名单失败: " + explain(err));
+    toast("移除失败: " + explain(err));
   }
 }
 
@@ -241,7 +325,7 @@ export async function addDomainName(domain) {
       body: { domains: state.settingsDomains.concat([domain]) },
     });
     renderDomains(res.acceptDomains || []);
-    toast("域名已添加");
+    toast("收信域名已添加");
     return true;
   } catch (err) {
     toast("添加域名失败: " + explain(err));
@@ -251,10 +335,10 @@ export async function addDomainName(domain) {
 
 export async function removeDomain(domain) {
   if (state.settingsDomains.length <= 1) {
-    toast("至少保留一个域名");
+    toast("至少需保留一个收信域名");
     return;
   }
-  if (!(await askConfirm(`停止接收 ${domain}？`))) return;
+  if (!(await askConfirm(`确定停止接收 @${domain} 的新邮件吗？`))) return;
   try {
     const res = await request("/v1/settings/domains", {
       method: "PUT",
@@ -274,14 +358,14 @@ export async function saveAttemptSettings() {
   const raw = document.querySelector("#job-max-attempts")?.value.trim() || "";
   const maxAttempts = Number(raw);
   if (!/^\d+$/.test(raw) || maxAttempts < 1 || maxAttempts > 20) {
-    toast("次数要是 1 到 20 的整数");
+    toast("次数需为 1 到 20 的整数");
     return;
   }
   try {
     await request("/v1/settings/jobs", { method: "PUT", body: { maxAttempts } });
     state.attemptsBaseline = String(maxAttempts);
     syncAttemptSave();
-    toast("之后的新任务会在达到该次数后停止");
+    toast("重试上限已保存");
   } catch (err) {
     toast("保存失败: " + explain(err));
   }
@@ -307,7 +391,7 @@ export async function loadMailboxesView() {
       const edit = document.createElement("button");
       edit.type = "button";
       edit.className = "btn-fit ghost";
-      edit.textContent = "改";
+      edit.textContent = "编辑";
       edit.addEventListener("click", () => fillMailboxForm(item));
       tdEdit.append(edit);
       tr.append(tdAddr, tdName, tdNotes, tdEdit);
@@ -320,11 +404,11 @@ export async function loadMailboxesView() {
 
 export async function loadMachineLine() {
   try {
-    const health = await request("/healthz");
-    const stats = await request("/v1/stats");
+    const [health, stats] = await Promise.all([request("/healthz"), request("/v1/stats")]);
     const line = document.querySelector("#machine-line");
-    const dbText = health.db === "ok" ? "SQLite 正常" : "数据库异常";
-    if (line) line.textContent = `在线 · ${dbText}`;
+    const dbText = health.db === "ok" ? "SQLite WAL 正常" : "数据库异常";
+    const scopeHint = state.sessionRole === "member" ? "当前账号收件统计" : `在线 · ${dbText}`;
+    if (line) line.textContent = scopeHint;
     renderOverview(stats);
     renderTrend(Array.isArray(stats.daily) ? stats.daily : []);
   } catch (err) {
@@ -339,15 +423,15 @@ export function renderOverview(stats) {
   host.replaceChildren();
   const today = stats && stats.today ? stats.today : {};
   const total = stats && stats.total ? stats.total : {};
-  host.append(statCard("今天", String(countMapSum(today)), ""));
-  host.append(statCard("累计", String(countMapSum(total)), ""));
+  host.append(statCard("今日收件", String(countMapSum(today)), ""));
+  host.append(statCard("累计收件", String(countMapSum(total)), ""));
   const keys = ["legit", "spam", "phish", "malware", "unsolicited-admin", "gray", "unlabeled"];
   for (const key of keys) {
     const n = Number(today[key]) || 0;
     if (n < 1) continue;
-    const name = key === "unlabeled" ? "未分类" : labelName(key);
+    const name = key === "unlabeled" ? "待分拣" : labelName(key);
     const tone = key === "unlabeled" ? "" : key === "unsolicited-admin" ? "promo" : key;
-    host.append(statCard(name, String(n), tone ? "stat-" + tone : ""));
+    host.append(statCard("今日 · " + name, String(n), tone ? "stat-" + tone : ""));
   }
 }
 
@@ -379,11 +463,10 @@ export function renderTrend(days) {
     const bar = document.createElement("div");
     bar.className = "trend-bar";
     const total = day.total || 0;
-    bar.style.height = Math.max(2, Math.round((total / max) * 100)) + "%";
-    const labelNameOf = (key) => labelName(key);
+    bar.style.height = Math.max(3, Math.round((total / max) * 100)) + "%";
     const parts = Object.entries(day.labels || {})
       .filter(([, n]) => n > 0)
-      .map(([key, n]) => `${labelNameOf(key)} ${n}`);
+      .map(([key, n]) => `${labelName(key)} ${n}`);
     bar.title = `${day.day} 共 ${total} 封` + (parts.length ? " · " + parts.join("，") : "");
     const caption = document.createElement("span");
     caption.className = "trend-label";
@@ -402,7 +485,7 @@ export async function saveCurrentPrompt() {
     });
     state.promptBaseline = editor ? editor.value : "";
     syncPromptSave();
-    toast("提示词已保存，之后的新邮件会使用这份");
+    toast("分拣提示词已保存");
   } catch (err) {
     toast("保存提示词失败: " + explain(err));
   }
@@ -431,7 +514,7 @@ export async function saveMailbox() {
         displayName: document.querySelector("#mb-name")?.value || "",
       },
     });
-    toast("地址已保存");
+    toast("地址备注已保存");
     const form = document.querySelector("#mailbox-form");
     if (form) form.reset();
     await loadMailboxesView();
@@ -479,7 +562,7 @@ export function rememberMailboxes(items) {
 }
 
 export function labelName(id) {
-  if (!id) return "未分类";
+  if (!id) return "待分拣";
   return state.labelNames[id] || LABEL_NAMES[id] || id;
 }
 
@@ -533,7 +616,7 @@ export function nameRow(key, value, kind) {
   input.autocomplete = "off";
   input.dataset.nameKey = key;
   input.dataset.nameKind = kind;
-  input.placeholder = kind === "label" ? LABEL_NAMES[key] || "" : "短名，可空";
+  input.placeholder = kind === "label" ? LABEL_NAMES[key] || "" : "域名短名，可空";
   input.addEventListener("input", syncNamesSave);
   row.append(caption, input);
   return row;
@@ -550,15 +633,15 @@ export function senderRow(address, name) {
   nameInput.value = name || "";
   nameInput.maxLength = 40;
   nameInput.dataset.senderName = "1";
-  nameInput.placeholder = "名称";
+  nameInput.placeholder = "称呼";
   nameInput.dataset.savedName = name || "";
   nameInput.addEventListener("change", () => {
     if (!nameInput.value.trim()) {
       nameInput.value = nameInput.dataset.savedName || "";
-      toast("请填写名称");
+      toast("请填写称呼名称");
       return;
     }
-    enqueueNames("发件人已保存");
+    enqueueNames("发件人称呼已保存");
   });
   const remove = document.createElement("button");
   remove.type = "button";
@@ -566,7 +649,7 @@ export function senderRow(address, name) {
   remove.textContent = "移除";
   remove.addEventListener("click", () => {
     row.remove();
-    enqueueNames("发件人已移除");
+    enqueueNames("发件人称呼已移除");
   });
   row.append(addressInput, nameInput, remove);
   return row;
@@ -578,11 +661,11 @@ export function addSenderRow() {
   const address = normalizeAddress(addressInput ? addressInput.value : "");
   const name = nameInput ? nameInput.value.trim() : "";
   if (!address) {
-    toast("发件地址无效");
+    toast("发件地址格式无效");
     return;
   }
   if (!name) {
-    toast("请填写名称");
+    toast("请填写称呼");
     return;
   }
   const existing = document.querySelector(`#sender-names input[data-sender-address="${cssEscape(address)}"]`);
@@ -595,17 +678,20 @@ export function addSenderRow() {
   }
   if (addressInput) addressInput.value = "";
   if (nameInput) nameInput.value = "";
-  enqueueNames("发件人已保存");
+  enqueueNames("发件人称呼已保存");
 }
 
 export function collectNames(options = {}) {
+  if (state.sessionRole === "member") {
+    return { senderNames: collectSenderList() };
+  }
   const labelNamesOut = {};
   document.querySelectorAll('#label-names input[data-name-kind="label"]').forEach((input) => {
     labelNamesOut[input.dataset.nameKey] = input.value.trim();
   });
   const typedTitle = document.querySelector("#panel-title")?.value.trim() || "";
   return {
-    panelTitle: typedTitle || (options.fallbackTitle ? (state.panelTitle || "邮箱") : ""),
+    panelTitle: typedTitle || (options.fallbackTitle ? state.panelTitle || "邮箱" : ""),
     labelNames: labelNamesOut,
     domainNames: collectDomainNames(),
     senderNames: collectSenderList(),
@@ -651,7 +737,7 @@ export async function commitNamesNow(message) {
     state.savedSenders = backupSenders;
     state.domainShortNames = backupShort;
     renderSenderRows(state.savedSenders);
-    renderDomainCards({ discardPending: true });
+    if (state.sessionRole === "admin") renderDomainCards({ discardPending: true });
     toast("保存失败: " + explain(err));
   }
 }
@@ -662,7 +748,7 @@ export function applyNamesSaved(saved) {
   state.savedSenders = Array.isArray(saved.senderNames)
     ? saved.senderNames.map((item) => ({ address: item.address, name: item.name }))
     : [];
-  syncShortNameFields();
+  if (state.sessionRole === "admin") syncShortNameFields();
   if (JSON.stringify(collectSenderList()) !== JSON.stringify(state.savedSenders)) renderSenderRows(state.savedSenders);
   state.namesBaseline = JSON.stringify(collectNames());
   syncNamesSave();
@@ -679,36 +765,38 @@ export function syncShortNameFields() {
 
 export function syncNamesSave() {
   const button = document.querySelector("#btn-save-names");
-  if (!button) return;
+  if (!button || state.sessionRole === "member") return;
   const draft = collectNames();
   button.disabled = !draft.panelTitle || JSON.stringify(draft) === state.namesBaseline;
 }
 
 export async function saveNameSettings() {
   if (!collectNames().panelTitle) {
-    toast("面板名称不能为空");
+    toast("面板标题不能为空");
     return;
   }
-  state.namesJob = state.namesJob.then(async () => {
-    if (!collectNames().panelTitle) {
-      toast("面板名称不能为空");
-      return;
-    }
-    try {
-      const saved = await request("/v1/settings/names", { method: "PUT", body: collectNames() });
-      applyNamesSaved(saved);
-      renderNameEditors({
-        panelTitle: saved.panelTitle,
-        labelNames: saved.labelNames,
-        domainNames: saved.domainNames,
-        senderNames: saved.senderNames,
-        acceptDomains: state.settingsDomains,
-      });
-      toast("名称已保存");
-    } catch (err) {
-      toast("保存名称失败: " + explain(err));
-    }
-  }).catch(() => {});
+  state.namesJob = state.namesJob
+    .then(async () => {
+      if (!collectNames().panelTitle) {
+        toast("面板标题不能为空");
+        return;
+      }
+      try {
+        const saved = await request("/v1/settings/names", { method: "PUT", body: collectNames() });
+        applyNamesSaved(saved);
+        renderNameEditors({
+          panelTitle: saved.panelTitle,
+          labelNames: saved.labelNames,
+          domainNames: saved.domainNames,
+          senderNames: saved.senderNames,
+          acceptDomains: state.settingsDomains,
+        });
+        toast("界面命名已保存");
+      } catch (err) {
+        toast("保存失败: " + explain(err));
+      }
+    })
+    .catch(() => {});
 }
 
 export function renderAiEditors(pool) {
@@ -787,16 +875,16 @@ export async function applyAndSaveAi(apply, message) {
     toast(message);
   } catch (err) {
     restoreAi(backup);
-    toast("保存模型失败: " + explain(err));
+    toast("保存模型配置失败: " + explain(err));
     return;
   }
   try {
     const status = await request("/v1/ai/status");
     const aiLine = document.querySelector("#ai-status-line");
     const enabledNow = document.querySelector("#ai-enabled");
-    if (aiLine) aiLine.textContent = enabledNow && !enabledNow.checked ? "分拣已关" : describeAi(status);
+    if (aiLine) aiLine.textContent = enabledNow && !enabledNow.checked ? "自动分拣已关闭" : describeAi(status);
   } catch {
-    // The pool is already stored. The status line refreshes the next time settings open.
+    // 忽略状态行刷新异常
   }
 }
 
@@ -812,18 +900,20 @@ export function paintAiEditors() {
     if (state.aiKeyRows.length === 0) {
       const empty = document.createElement("p");
       empty.className = "muted";
-      empty.textContent = "没有密钥。";
+      empty.textContent = "尚未保存 API 密钥。";
       keys.append(empty);
     }
-    state.aiKeyRows.forEach((row, index) => keys.append(orderRow(maskKey(row.tail), index, state.aiKeyRows.length, "key")));
+    state.aiKeyRows.forEach((row, index) =>
+      keys.append(orderRow(maskKey(row.tail), index, state.aiKeyRows.length, "key", row)),
+    );
   }
 }
 
 export function maskKey(tail) {
-  return tail ? `····${tail}` : "已保存";
+  return tail ? `···· ${tail}` : "已保存密钥";
 }
 
-export function orderRow(label, index, total, kind) {
+export function orderRow(label, index, total, kind, rawRow) {
   const row = document.createElement("div");
   row.className = "name-row order-row";
   const text = document.createElement("input");
@@ -831,6 +921,16 @@ export function orderRow(label, index, total, kind) {
   text.readOnly = true;
   const actions = document.createElement("div");
   actions.className = "step-actions";
+
+  if (kind === "key" && rawRow) {
+    const testBtn = document.createElement("button");
+    testBtn.type = "button";
+    testBtn.className = "btn-fit ghost";
+    testBtn.textContent = "测试";
+    testBtn.addEventListener("click", () => void testSavedAiKey(rawRow, testBtn));
+    actions.append(testBtn);
+  }
+
   const up = document.createElement("button");
   up.type = "button";
   up.className = "btn-fit ghost";
@@ -853,6 +953,50 @@ export function orderRow(label, index, total, kind) {
   return row;
 }
 
+export async function testSavedAiKey(row, btn) {
+  const out = document.querySelector("#key-probe-result");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "探测中";
+  }
+  try {
+    const payload = row.secret ? { secret: row.secret } : { id: row.id };
+    if (state.aiModels[0]) payload.model = state.aiModels[0];
+    const res = await request("/v1/settings/ai/test-key", { method: "POST", body: payload });
+    if (out) {
+      out.hidden = false;
+      out.textContent = res.ok
+        ? `测试通过 · 模型 ${res.model} · 耗时 ${res.latencyMs}ms`
+        : `测试未通过 · ${res.error || "接口返回异常"}`;
+      out.className = res.ok ? "probe-ok" : "probe-fail";
+    }
+    toast(res.ok ? `密钥可用 (${res.latencyMs}ms)` : "密钥测试未通过");
+  } catch (err) {
+    if (out) {
+      out.hidden = false;
+      out.textContent = "测试失败: " + explain(err);
+      out.className = "probe-fail";
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "测试";
+    }
+  }
+}
+
+export async function testDraftAiKey() {
+  const input = document.querySelector("#key-add");
+  const btn = document.querySelector("#btn-test-new-key");
+  const secret = input ? input.value.trim() : "";
+  if (!secret || secret.length < 8) {
+    toast("请先在输入框内填写待测密钥");
+    return;
+  }
+  await testSavedAiKey({ secret }, btn);
+  if (btn) btn.textContent = "先测一下";
+}
+
 export function moveAiRow(kind, index, delta) {
   const list = kind === "model" ? state.aiModels : state.aiKeyRows;
   const next = index + delta;
@@ -862,7 +1006,7 @@ export function moveAiRow(kind, index, delta) {
     if (index < 0 || next >= current.length) return;
     const [item] = current.splice(index, 1);
     current.splice(next, 0, item);
-  }, "顺序已保存");
+  }, "优先级顺序已保存");
 }
 
 export function removeAiRow(kind, index) {
@@ -879,16 +1023,16 @@ export function addModelRow() {
   const input = document.querySelector("#model-add");
   const model = input ? input.value.trim() : "";
   if (!model) {
-    toast("请输入模型名称");
+    toast("请输入模型型号");
     return;
   }
   if (!/^[A-Za-z0-9._:@/-]{1,80}$/.test(model)) {
-    toast("模型名称无效");
+    toast("模型名称格式无效");
     return;
   }
   if (state.aiModels.includes(model)) {
     if (input) input.value = "";
-    toast("这个模型已经在列表里");
+    toast("该模型已在列表中");
     return;
   }
   if (input) input.value = "";
@@ -901,18 +1045,18 @@ export function addKeyRow() {
   const input = document.querySelector("#key-add");
   const secret = input ? input.value.trim() : "";
   if (!secret) {
-    toast("请输入密钥");
+    toast("请输入 API 密钥");
     return;
   }
   if (secret.length < 8 || secret.length > 512 || /\s/.test(secret)) {
-    toast("密钥无效");
+    toast("密钥格式无效");
     return;
   }
   const tail = secret.length >= 12 ? secret.slice(-4) : "";
   if (input) input.value = "";
   enqueueAi(() => {
     state.aiKeyRows.push({ secret, tail });
-  }, "密钥已添加");
+  }, "密钥已保存");
 }
 
 export async function loadDkimSection() {
@@ -921,7 +1065,7 @@ export async function loadDkimSection() {
     state.dkimKeys = Array.isArray(keys.items) ? keys.items : [];
     renderDkim(state.dkimKeys);
   } catch (err) {
-    toast("读取发信设置失败: " + explain(err));
+    toast("读取 DKIM 设置失败: " + explain(err));
   }
 }
 
@@ -946,12 +1090,12 @@ export function renderDomainCards(options = {}) {
   if (ordered.length === 0) {
     const empty = document.createElement("p");
     empty.className = "muted";
-    empty.textContent = "还没有域名。";
+    empty.textContent = "暂无收信域名。";
     host.append(empty);
     return;
   }
   for (const domain of ordered) {
-    const typed = pending.has(domain) ? pending.get(domain) : (state.domainShortNames[domain] || "");
+    const typed = pending.has(domain) ? pending.get(domain) : state.domainShortNames[domain] || "";
     const matches = state.dkimKeys.filter((key) => key.domain === domain);
     host.append(domainCard(domain, typed, matches));
   }
@@ -977,7 +1121,7 @@ export function domainCard(domain, shortName, keys) {
     const join = document.createElement("button");
     join.type = "button";
     join.className = "btn-fit ghost";
-    join.textContent = "开始收信";
+    join.textContent = "启用收信";
     join.addEventListener("click", () => void addDomainName(domain));
     head.append(join);
   }
@@ -987,12 +1131,12 @@ export function domainCard(domain, shortName, keys) {
     row.className = "name-row";
     const caption = document.createElement("span");
     caption.className = "name-key";
-    caption.textContent = "短名";
+    caption.textContent = "域名短名";
     const input = document.createElement("input");
     input.value = shortName || "";
     input.maxLength = 24;
     input.autocomplete = "off";
-    input.placeholder = "短名，可空";
+    input.placeholder = "用于收件地址后缀提示，可空";
     input.dataset.nameKey = domain;
     input.dataset.nameKind = "domain";
     input.dataset.savedValue = state.domainShortNames[domain] || "";
@@ -1004,7 +1148,7 @@ export function domainCard(domain, shortName, keys) {
     });
     input.addEventListener("change", () => {
       if (input.value.trim() === (input.dataset.savedValue || "")) return;
-      enqueueNames("短名已保存");
+      enqueueNames("域名短名已保存");
     });
     row.append(caption, input);
     card.append(row);
@@ -1017,11 +1161,11 @@ export function fillDkim(card, domain, keys) {
   if (keys.length === 0) {
     const missing = document.createElement("p");
     missing.className = "muted";
-    missing.textContent = "还没有密钥。生成后把 TXT 加到 DNS。换密钥后要改同一条记录。";
+    missing.textContent = "尚未生成 DKIM 密钥；生成后将 TXT 记录添加至域名 DNS 即可开启外发签名。";
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "btn-fit";
-    button.textContent = "生成密钥";
+    button.className = "btn-fit ghost";
+    button.textContent = "生成 DKIM 密钥";
     button.addEventListener("click", () => void generateDkim(domain));
     card.append(missing, button);
     return;
@@ -1029,17 +1173,17 @@ export function fillDkim(card, domain, keys) {
   for (const key of keys) {
     const line = document.createElement("p");
     line.className = "muted";
-    line.textContent = `主机记录: ${key.dnsName || key.selector} · ${dkimAlgLabel(key.algorithm)}`;
+    line.textContent = `DNS 主机记录: ${key.dnsName || key.selector} · ${dkimAlgLabel(key.algorithm)}`;
     const txt = document.createElement("div");
     txt.className = "dkim-txt";
     txt.textContent = key.txt;
     const actions = document.createElement("div");
     actions.className = "inline-row";
     actions.append(
-      dkimButton("复制主机记录", () => void copyText(key.dnsName || key.selector)),
-      dkimButton("复制 TXT", () => void copyText(key.txt)),
-      dkimButton("重新生成", () => void generateDkim(domain, key.selector)),
-      dkimButton("移除", () => void removeDkim(domain, key.selector)),
+      dkimButton("复制主机名", () => void copyText(key.dnsName || key.selector, "已复制主机记录")),
+      dkimButton("复制 TXT 值", () => void copyText(key.txt, "已复制 TXT 记录")),
+      dkimButton("轮换重生成", () => void generateDkim(domain, key.selector)),
+      dkimButton("移除密钥", () => void removeDkim(domain, key.selector)),
     );
     card.append(line, txt, actions);
   }
@@ -1067,13 +1211,13 @@ export async function generateDkim(domain, selector) {
   const name = (selector || "mail").trim().toLowerCase();
   const algorithm = selectedDkimAlg();
   const exists = state.dkimKeys.some((key) => key.domain === domain && key.selector === name);
-  if (exists && !(await askConfirm("重新生成后，原来的 DNS 记录要换成新的。"))) return;
+  if (exists && !(await askConfirm("重新生成后需同步更新 DNS TXT 记录，确定继续吗？"))) return;
   try {
     const body = selector ? { domain, selector: name, algorithm } : { domain, algorithm };
     await request("/v1/dkim", { method: "POST", body });
     const extra = document.querySelector("#dkim-domain");
     if (extra && extra.value.trim().toLowerCase() === domain) extra.value = "";
-    toast("密钥已生成");
+    toast("DKIM 密钥已生成");
     await loadDkimSection();
   } catch (err) {
     toast("生成密钥失败: " + explain(err));
@@ -1081,10 +1225,10 @@ export async function generateDkim(domain, selector) {
 }
 
 export async function removeDkim(domain, selector) {
-  if (!(await askConfirm("移除这把密钥？之后发出的信不再签名。"))) return;
+  if (!(await askConfirm("移除此 DKIM 密钥后，该域名发出的邮件将不再附带签名。"))) return;
   try {
     await request("/v1/dkim/remove", { method: "POST", body: { domain, selector } });
-    toast("密钥已移除");
+    toast("DKIM 密钥已移除");
     await loadDkimSection();
   } catch (err) {
     toast("移除密钥失败: " + explain(err));
@@ -1097,7 +1241,7 @@ export async function loadLogs() {
   try {
     const res = await request("/v1/logs");
     const lines = Array.isArray(res.lines) ? res.lines : [];
-    view.textContent = lines.length ? lines.join("\n") : "还没有记录";
+    view.textContent = lines.length ? lines.join("\n") : "暂无运行日志";
   } catch (err) {
     view.textContent = explain(err);
   }

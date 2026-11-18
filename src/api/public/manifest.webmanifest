@@ -1,0 +1,16 @@
+{
+  "name": "邮箱工作台",
+  "short_name": "邮箱",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'><rect width='128' height='128' rx='28' fill='%2309090b'/><g fill='none' stroke='%23f4f4f5' stroke-width='8' stroke-linecap='round' stroke-linejoin='round'><rect x='22' y='34' width='84' height='60' rx='10'/><path d='m24 40 40 28 40-28'/></g></svg>",
+      "sizes": "128x128",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

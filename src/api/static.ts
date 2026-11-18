@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 const PANEL_FILES: Record<string, { name: string; type: string }> = {
   "/": { name: "index.html", type: "text/html; charset=utf-8" },
   "/index.html": { name: "index.html", type: "text/html; charset=utf-8" },
+  "/manifest.webmanifest": { name: "manifest.webmanifest", type: "application/manifest+json; charset=utf-8" },
   "/boot.js": { name: "boot.js", type: "text/javascript; charset=utf-8" },
   "/app.css": { name: "app.css", type: "text/css; charset=utf-8" },
   "/app.js": { name: "app.js", type: "text/javascript; charset=utf-8" },
@@ -22,6 +23,8 @@ const PANEL_FILES: Record<string, { name: string; type: string }> = {
   "/dlq-view.js": { name: "dlq-view.js", type: "text/javascript; charset=utf-8" },
   "/settings-view.js": { name: "settings-view.js", type: "text/javascript; charset=utf-8" },
   "/send-view.js": { name: "send-view.js", type: "text/javascript; charset=utf-8" },
+  "/users-view.js": { name: "users-view.js", type: "text/javascript; charset=utf-8" },
+  "/palette.js": { name: "palette.js", type: "text/javascript; charset=utf-8" },
 };
 
 /** Paths the login page needs before a session exists. */

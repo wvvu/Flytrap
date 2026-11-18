@@ -1,3 +1,4 @@
+import "./polyfill.js";
 import { loadCodec } from "./compress.js";
 import { loadConfig, ConfigError, PLACEHOLDER_SESSION_SECRET, type Config } from "./config.js";
 import { dbFile, openDatabase } from "./db/index.js";

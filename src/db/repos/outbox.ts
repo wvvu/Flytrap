@@ -1,4 +1,5 @@
 import type { Db } from "../index.js";
+import type { ViewerScope } from "./messages.js";
 
 export type OutboxStatus = "queued" | "sent" | "error";
 
@@ -22,6 +23,7 @@ export interface OutboxRow {
   in_reply_to: string | null;
   ref_ids: string | null;
   thread_key: string | null;
+  user_id: string | null;
 }
 
 export interface NewOutbox {
@@ -39,6 +41,7 @@ export interface NewOutbox {
   inReplyTo?: string | null;
   refIds?: string | null;
   threadKey?: string | null;
+  userId?: string | null;
 }
 
 export function insertOutbox(db: Db, input: NewOutbox): void {
@@ -46,8 +49,8 @@ export function insertOutbox(db: Db, input: NewOutbox): void {
     `INSERT INTO outbox (
       id, sha256, raw_path, size_bytes, from_addr, to_addrs, subject, domain_known,
       dkim_selector, status, accepted, created_at, updated_at,
-      message_id, in_reply_to, ref_ids, thread_key
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '[]', ?, ?, ?, ?, ?, ?)`,
+      message_id, in_reply_to, ref_ids, thread_key, user_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '[]', ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.id,
     input.sha256,
@@ -64,16 +67,37 @@ export function insertOutbox(db: Db, input: NewOutbox): void {
     input.inReplyTo ?? null,
     input.refIds ?? null,
     input.threadKey ?? null,
+    input.userId ?? null,
   );
 }
 
-export function getOutbox(db: Db, id: string): OutboxRow | undefined {
+export function getOutbox(db: Db, id: string, viewer?: ViewerScope): OutboxRow | undefined {
+  if (viewer && viewer.role === "member") {
+    return db
+      .prepare("SELECT * FROM outbox WHERE id = ? AND user_id = ?")
+      .get(id, viewer.userId) as OutboxRow | undefined;
+  }
   return db.prepare("SELECT * FROM outbox WHERE id = ?").get(id) as OutboxRow | undefined;
 }
 
-export function listOutbox(db: Db, limit: number): OutboxRow[] {
+export function listOutbox(db: Db, limit: number, viewer?: ViewerScope, filterUserId?: string): OutboxRow[] {
+  if (viewer && viewer.role === "member") {
+    return db
+      .prepare("SELECT * FROM outbox WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?")
+      .all(viewer.userId, limit) as OutboxRow[];
+  }
+  if (filterUserId) {
+    if (filterUserId === "owner") {
+      return db
+        .prepare("SELECT * FROM outbox WHERE (user_id IS NULL OR user_id = 'owner') ORDER BY created_at DESC, id DESC LIMIT ?")
+        .all(limit) as OutboxRow[];
+    }
+    return db
+      .prepare("SELECT * FROM outbox WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?")
+      .all(filterUserId, limit) as OutboxRow[];
+  }
   return db
-    .prepare("SELECT * FROM outbox ORDER BY created_at DESC LIMIT ?")
+    .prepare("SELECT * FROM outbox ORDER BY created_at DESC, id DESC LIMIT ?")
     .all(limit) as OutboxRow[];
 }
 
