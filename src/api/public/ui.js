@@ -34,14 +34,18 @@ export function setGlyph(el, name) {
 export function setViewTitle(view) {
   document.title = VIEW_TITLES[view] || "收件箱";
   const count = state.inboxPromoOnly ? state.unreadPromo : state.unreadInbox;
-  if (view === "inbox" && state.inboxPromoOnly) {
+  if (view === "inbox" && state.starredOnly) {
+    document.title = "星标";
+  } else if (view === "inbox" && state.inboxPromoOnly) {
     document.title = count > 0 ? `推广 (${count})` : "推广";
   } else if (view === "inbox" && state.unreadInbox > 0) {
     document.title += " (" + state.unreadInbox + ")";
   }
   if (state.panelTitle !== "邮箱") document.title = state.panelTitle + " · " + document.title;
   if (streamTitle) {
-    if (view === "inbox" && state.inboxPromoOnly) {
+    if (view === "inbox" && state.starredOnly) {
+      streamTitle.textContent = "星标";
+    } else if (view === "inbox" && state.inboxPromoOnly) {
       streamTitle.textContent = count > 0 ? `推广 (${count})` : "推广";
     } else {
       streamTitle.textContent = state.unreadInbox > 0 ? "收件箱 (" + state.unreadInbox + ")" : "收件箱";

@@ -38,6 +38,8 @@ import {
   newUserBtn,
   noticeEl,
   promoBtn,
+  btnStarDetail,
+  starredFilterBtn,
   queryInput,
   readAllBtn,
   refreshBtn,
@@ -66,7 +68,7 @@ import {
   toggleShortcutModal,
 } from "./ui.js";
 import { debounce, hashMailId } from "./util.js";
-import { initTheme, revealApp, setPromoMode, switchNav, toggleTheme } from "./shell.js";
+import { initTheme, revealApp, setPromoMode, setStarredMode, switchNav, toggleTheme } from "./shell.js";
 import {
   closeReset,
   finishReset,
@@ -100,6 +102,7 @@ import {
   switchTab,
   syncListLabel,
   toggleSandboxExpand,
+  toggleStar,
 } from "./mail-view.js";
 import { loadDlqJobs, openFailedMail, renderFailureGroups, retryAllDead, updateDlqBadge } from "./dlq-view.js";
 import {
@@ -176,6 +179,11 @@ refreshBtn?.addEventListener("click", () => void reloadMessages());
 readAllBtn?.addEventListener("click", () => void handleMarkAllRead("inbox"));
 spamReadAllBtn?.addEventListener("click", () => void handleMarkAllRead("spam"));
 promoBtn?.addEventListener("click", () => setPromoMode(!state.inboxPromoOnly));
+starredFilterBtn?.addEventListener("click", () => setStarredMode(!state.starredOnly));
+btnStarDetail?.addEventListener("click", () => {
+  if (!state.selectedMailId || state.readingSentId) return;
+  void toggleStar(state.selectedMailId, !Boolean(state.openDetail?.starred));
+});
 spamRefreshBtn?.addEventListener("click", () => void reloadMessages());
 trashRefreshBtn?.addEventListener("click", () => void reloadTrash());
 emptyTrashBtn?.addEventListener("click", () => void handleEmptyTrash());
@@ -567,6 +575,14 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+  if (e.key === "s" && state.selectedMailId && !state.readingSentId) {
+    if (state.currentView === "inbox" || state.currentView === "spam" || state.currentView === "trash") {
+      e.preventDefault();
+      void toggleStar(state.selectedMailId, !Boolean(state.openDetail?.starred));
+    }
+    return;
+  }
+
   if (state.currentView === "inbox" || state.currentView === "spam") {
     if (e.key === "j") navigateMail(1);
     else if (e.key === "k") navigateMail(-1);
@@ -630,6 +646,7 @@ export async function pollLive() {
           : "";
     if (q) params.set("q", q);
     appendScopeParams(params);
+    if (state.starredOnly && state.currentView === "inbox") params.set("starred", "true");
     const page = await request("/v1/messages?" + params.toString());
     if (token !== state.listLoadToken) return;
     const items = Array.isArray(page.items) ? page.items : [];
@@ -643,7 +660,8 @@ export async function pollLive() {
         (item, index) =>
           item.id === state.currentMessages[index]?.id &&
           item.label === state.currentMessages[index]?.label &&
-          item.read === state.currentMessages[index]?.read,
+          item.read === state.currentMessages[index]?.read &&
+          Boolean(item.starred) === Boolean(state.currentMessages[index]?.starred),
       );
     if (same) return;
     if (state.currentView === "trash") await reloadTrash();

@@ -762,6 +762,164 @@ test("a prefix mailbox outranks the domain star, and a collaborative admin canno
   }
 });
 
+test("a shared letter keeps stars, labels, trash, and soft-delete on the person who did them", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-star-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 18, 19, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+  const alice = jar();
+  const bob = jar();
+  const dave = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    const createAlice = await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com" },
+    });
+    assert.equal(createAlice.statusCode, 201);
+    const aliceId = createAlice.json().user.id as string;
+    await owner.post(app, "/v1/users", {
+      username: "bob",
+      password: "bob-password-123",
+      initialMailbox: { localpart: "bob", domain: "example.com" },
+    });
+    const createDave = await owner.post(app, "/v1/users", {
+      username: "dave",
+      password: "dave-password-123",
+      role: "admin",
+      initialMailbox: { localpart: "dave", domain: "example.com" },
+    });
+    assert.equal(createDave.statusCode, 201);
+    const daveId = createDave.json().user.id as string;
+
+    const shared = await deliver(db, dir, ["alice@example.com", "bob@example.com"], "Subject: shared\r\n\r\nHi\r\n", ++clock);
+    await alice.login(app, "alice", "alice-password-123");
+    await bob.login(app, "bob", "bob-password-123");
+    await dave.login(app, "dave", "dave-password-123");
+
+    const starred = await alice.post(app, `/v1/messages/${shared.id}/star`, { starred: true });
+    assert.equal(starred.statusCode, 200);
+    assert.equal(starred.json().starred, true);
+    const labeled = await alice.patch(app, `/v1/messages/${shared.id}/label`, { label: "spam" });
+    assert.equal(labeled.statusCode, 200);
+
+    const bobDetail = (await bob.get(app, `/v1/messages/${shared.id}`)).json();
+    assert.equal(bobDetail.starred, false);
+    assert.equal(bobDetail.aiResult, null);
+    assert.equal(bobDetail.trashedAt, null);
+
+    const aliceDetail = (await alice.get(app, `/v1/messages/${shared.id}`)).json();
+    assert.equal(aliceDetail.starred, true);
+    assert.equal(aliceDetail.aiResult.label, "spam");
+
+    const previewBefore = (await dave.get(app, `/v1/messages?scope=user:${aliceId}`)).json().items as Array<{
+      id: string;
+      starred: boolean;
+      label: string | null;
+    }>;
+    const previewRow = previewBefore.find((item) => item.id === shared.id);
+    assert.ok(previewRow);
+    assert.equal(previewRow?.starred, false);
+    assert.equal(previewRow?.label, "spam");
+
+    const daveStar = await dave.post(app, `/v1/messages/${shared.id}/star`, { starred: true });
+    assert.equal(daveStar.statusCode, 200);
+    const previewAfter = (await dave.get(app, `/v1/messages?scope=user:${aliceId}`)).json().items as Array<{
+      id: string;
+      starred: boolean;
+    }>;
+    assert.equal(previewAfter.find((item) => item.id === shared.id)?.starred, true);
+    assert.equal((await alice.get(app, `/v1/messages/${shared.id}`)).json().starred, true);
+    assert.equal((await bob.get(app, `/v1/messages/${shared.id}`)).json().starred, false);
+
+    const ownerStar = await owner.post(app, `/v1/messages/${shared.id}/star`, { starred: true });
+    assert.equal(ownerStar.statusCode, 200);
+    const starRows = db
+      .prepare("SELECT user_id, starred_at FROM user_message_state WHERE message_id = ?")
+      .all(shared.id) as Array<{ user_id: string; starred_at: number | null }>;
+    const starOf = (userId: string) => starRows.find((row) => row.user_id === userId)?.starred_at ?? null;
+    assert.ok(starOf(aliceId));
+    assert.ok(starOf(daveId));
+    assert.ok(starOf("owner"));
+    assert.equal(starRows.some((row) => row.user_id !== aliceId && row.user_id !== daveId && row.user_id !== "owner"), false);
+
+    const ownerStarred = (await owner.get(app, "/v1/messages?scope=all&starred=true")).json().items as Array<{ id: string }>;
+    assert.equal(ownerStarred.some((item) => item.id === shared.id), true);
+    const bobStarred = (await bob.get(app, "/v1/messages?starred=true")).json().items as Array<{ id: string }>;
+    assert.equal(bobStarred.some((item) => item.id === shared.id), false);
+
+    const daveClear = await dave.post(app, `/v1/messages/${shared.id}/star`, { starred: false });
+    assert.equal(daveClear.statusCode, 200);
+    assert.equal(daveClear.json().starred, false);
+    assert.equal((await alice.get(app, `/v1/messages/${shared.id}`)).json().starred, true);
+    assert.equal(
+      (
+        db.prepare("SELECT starred_at FROM user_message_state WHERE user_id = ? AND message_id = ?").get(daveId, shared.id) as {
+          starred_at: number | null;
+        }
+      ).starred_at,
+      null,
+    );
+    assert.ok(
+      (
+        db.prepare("SELECT starred_at FROM user_message_state WHERE user_id = ? AND message_id = ?").get("owner", shared.id) as {
+          starred_at: number | null;
+        }
+      ).starred_at,
+    );
+
+    const trashed = await alice.post(app, `/v1/messages/${shared.id}/trash`, {});
+    assert.equal(trashed.statusCode, 200);
+    const bobInbox = (await bob.get(app, "/v1/messages")).json().items as Array<{ id: string; starred: boolean; label: string | null }>;
+    const bobRow = bobInbox.find((item) => item.id === shared.id);
+    assert.ok(bobRow);
+    assert.equal(bobRow?.starred, false);
+    assert.equal(bobRow?.label, null);
+    const aliceInbox = (await alice.get(app, "/v1/messages")).json().items as Array<{ id: string }>;
+    assert.equal(aliceInbox.some((item) => item.id === shared.id), false);
+    const aliceTrash = (await alice.get(app, "/v1/messages?trashed=true")).json().items as Array<{ id: string; starred: boolean }>;
+    assert.equal(aliceTrash.find((item) => item.id === shared.id)?.starred, true);
+
+    const removed = await alice.delete(app, `/v1/messages/${shared.id}`);
+    assert.equal(removed.statusCode, 200);
+    assert.equal((await alice.get(app, `/v1/messages/${shared.id}`)).statusCode, 404);
+    const bobAfter = await bob.get(app, `/v1/messages/${shared.id}`);
+    assert.equal(bobAfter.statusCode, 200);
+    assert.equal(bobAfter.json().starred, false);
+    assert.equal(bobAfter.json().aiResult, null);
+    assert.equal(bobAfter.json().trashedAt, null);
+    assert.ok(db.prepare("SELECT id FROM messages WHERE id = ?").get(shared.id));
+
+    const messageCols = db.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+    assert.equal(messageCols.some((col) => col.name === "starred_at"), false);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 async function deliver(db: Db, dir: string, rcptTo: string[], content: string, receivedAtMs: number) {
   return acceptMessage(
     { db, dataDir: dir, codec: gzipCodec() },

@@ -43,6 +43,8 @@
         <symbol id="i-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></g></symbol>
         <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></g></symbol>
         <symbol id="i-keyboard" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M8 15h8"/></g></symbol>
+        <symbol id="i-star" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></g></symbol>
+        <symbol id="i-star-fill" viewBox="0 0 24 24"><polygon fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></symbol>
       </defs>
     </svg>
 
@@ -155,6 +157,7 @@
             <div class="stream-actions">
               <button type="button" id="btn-read-all" class="pill pill-subtle" title="当前列表全部标为已读" hidden>全部已读</button>
               <button type="button" id="btn-promo" class="pill pill-promo" title="只看推广" aria-pressed="false">推广</button>
+              <button type="button" id="btn-starred-filter" class="pill pill-star" title="只看星标" aria-pressed="false">星标</button>
               <button type="button" id="btn-refresh" class="btn-icon" title="刷新 (R)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
           </div>
@@ -280,6 +283,9 @@
             <header class="detail-header">
               <div class="detail-title-line">
                 <button type="button" id="btn-back-list" class="btn-sm mobile-back">← 返回列表</button>
+                <button type="button" id="btn-star-detail" class="star-btn-lg" title="星标切换 (S)" aria-label="星标">
+                  <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-star"></use></svg>
+                </button>
                 <h1 id="detail-subject">(无主题)</h1>
                 <button type="button" id="detail-otp-btn" class="otp-pill" title="点击复制验证码" hidden></button>
               </div>
@@ -802,6 +808,7 @@
           <div class="shortcut-row"><span>前往写信</span><span><kbd>C</kbd></span></div>
           <div class="shortcut-row"><span>刷新当前列表</span><span><kbd>R</kbd></span></div>
           <div class="shortcut-row"><span>当前信件标为未读</span><span><kbd>U</kbd></span></div>
+          <div class="shortcut-row"><span>星标切换</span><span><kbd>S</kbd></span></div>
           <div class="shortcut-row"><span>写信框内直接发出</span><span><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span></div>
           <div class="shortcut-row"><span>打开或关闭此面板</span><span><kbd>?</kbd></span></div>
         </div>

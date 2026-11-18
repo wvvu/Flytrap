@@ -21,6 +21,7 @@ import {
   navUsersBtn,
   noticeEl,
   promoBtn,
+  starredFilterBtn,
   streamDlqHeader,
   streamInboxHeader,
   streamSendHeader,
@@ -118,6 +119,7 @@ export function setEmptyCopy(view) {
   if (!mailEmptyCopy) return;
   if (view === "spam") mailEmptyCopy.textContent = "这里是已拦截。选全部才会看到正常来信。";
   else if (view === "trash") mailEmptyCopy.textContent = "这里是垃圾桶。";
+  else if (view === "inbox" && state.starredOnly) mailEmptyCopy.textContent = "这里是星标，当前没有星标信。";
   else if (view === "inbox" && state.inboxPromoOnly) mailEmptyCopy.textContent = "这里是推广，当前没有推广信。";
   else mailEmptyCopy.textContent = "这里是收件箱，包含尚未分类的来信。其余在已拦截。";
 }
@@ -137,6 +139,27 @@ export function setPromoMode(on) {
   void reloadMessages();
 }
 
+export function paintStarredBtn() {
+  if (!starredFilterBtn) return;
+  starredFilterBtn.classList.toggle("active", state.starredOnly);
+  starredFilterBtn.setAttribute("aria-pressed", state.starredOnly ? "true" : "false");
+}
+
+export function setStarredMode(on) {
+  if (state.currentView !== "inbox" || state.starredOnly === on) return;
+  state.starredOnly = on;
+  paintStarredBtn();
+  state.selectedMailId = null;
+  state.readingSentId = null;
+  state.openDetail = null;
+  if (mailDetailEl) mailDetailEl.hidden = true;
+  if (mailLoadingEl) mailLoadingEl.hidden = true;
+  if (mailEmptyEl) mailEmptyEl.hidden = false;
+  setViewTitle("inbox");
+  setEmptyCopy("inbox");
+  void reloadMessages();
+}
+
 export async function switchNav(view) {
   if (view === "users") {
     if (!state.isAdmin) view = "inbox";
@@ -151,6 +174,10 @@ export async function switchNav(view) {
   if (state.inboxPromoOnly) {
     state.inboxPromoOnly = false;
     paintPromoBtn();
+  }
+  if (state.starredOnly) {
+    state.starredOnly = false;
+    paintStarredBtn();
   }
   state.currentView = view;
   setViewTitle(view);

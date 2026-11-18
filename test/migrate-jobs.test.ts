@@ -27,12 +27,17 @@ test("migration is idempotent and jobs are claimed atomically", () => {
       "009_dkim_alg",
       "010_thread",
       "011_multi_user",
+      "012_user_stars",
     ]);
     assert.deepEqual(second, []);
-    assert.equal(db.pragma("user_version", { simple: true }), 11);
+    assert.equal(db.pragma("user_version", { simple: true }), 12);
     db.pragma("user_version = 999");
     assert.throws(() => migrate(db, migrationsDir()), /newer than supported/);
-    db.pragma("user_version = 11");
+    db.pragma("user_version = 12");
+    const messageCols = db.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+    assert.equal(messageCols.some((col) => col.name === "starred_at"), false);
+    const stateCols = db.prepare("PRAGMA table_info(user_message_state)").all() as Array<{ name: string }>;
+    assert.equal(stateCols.some((col) => col.name === "starred_at"), true);
     const journal = db.pragma("journal_mode", { simple: true });
     assert.equal(String(journal).toLowerCase(), "wal");
 

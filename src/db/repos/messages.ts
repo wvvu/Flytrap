@@ -112,6 +112,8 @@ export interface StoredMessage {
   error: string | null;
   trashed_at: number | null;
   read_at?: number | null;
+  /** Session user's star. Absent on a raw messages row. */
+  starred_at?: number | null;
 }
 
 export function getMessage(db: Db, id: string): StoredMessage | undefined {
@@ -186,8 +188,9 @@ export function getMessageForViewer(db: Db, id: string, viewer?: ViewerContext):
   if (!canViewerAccessMessage(db, message, viewer)) return undefined;
 
   const target = resolveViewerTarget(viewer);
+  const starredAt = readUserStarredAt(db, viewer.userId, id);
   if (target.stateUserId === OWNER_USER_ID && !target.redactOtherRecipients) {
-    return message;
+    return { ...message, starred_at: starredAt };
   }
 
   const ums = db
@@ -219,6 +222,7 @@ export function getMessageForViewer(db: Db, id: string, viewer?: ViewerContext):
     ai_result: overlaidAi,
     trashed_at: target.stateUserId === OWNER_USER_ID ? message.trashed_at : (ums?.trashed_at ?? null),
     read_at: target.stateUserId === OWNER_USER_ID ? message.read_at : (ums?.read_at ?? null),
+    starred_at: starredAt,
   };
 }
 
@@ -434,6 +438,30 @@ export function setUserMessageTrashed(db: Db, userId: string, messageId: string,
   ).run(userId, messageId, trashedAt, now);
 }
 
+function readUserStarredAt(db: Db, userId: string, messageId: string): number | null {
+  const row = db
+    .prepare("SELECT starred_at FROM user_message_state WHERE user_id = ? AND message_id = ?")
+    .get(userId, messageId) as { starred_at: number | null } | undefined;
+  return row?.starred_at ?? null;
+}
+
+/** Draw 1 member branch. Owner and collaborative admins write their own state row too. */
+export function setMessageStarredForViewer(
+  db: Db,
+  id: string,
+  starred: boolean,
+  viewer: ViewerContext | undefined,
+  now: number,
+): void {
+  const userId = viewer?.userId ?? OWNER_USER_ID;
+  const stamp = starred ? now : null;
+  db.prepare(
+    `INSERT INTO user_message_state (user_id, message_id, starred_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, message_id) DO UPDATE SET starred_at = excluded.starred_at, updated_at = excluded.updated_at`,
+  ).run(userId, id, stamp, now);
+}
+
 export function saveAiResult(db: Db, id: string, aiResult: string, now: number): void {
   db.prepare(
     `UPDATE messages
@@ -449,6 +477,7 @@ export interface MessageListQuery {
   q?: string;
   from?: string;
   domain?: string;
+  starred?: boolean;
   since?: number;
   until?: number;
   limit: number;
@@ -472,6 +501,7 @@ export interface MessageListRow {
   ai_result: string | null;
   trashed_at: number | null;
   read_at: number | null;
+  starred_at: number | null;
 }
 
 export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] {
@@ -561,10 +591,26 @@ export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] 
     params.cursorId = query.cursorId;
   }
 
-  const joinClause =
-    useUserOverlay || query.viewer
-      ? "LEFT JOIN user_message_state ums ON ums.user_id = :stateUid AND ums.message_id = m.id"
-      : "";
+  const starUserId = query.viewer?.userId ?? OWNER_USER_ID;
+  const overlayJoin = useUserOverlay || Boolean(query.viewer);
+  const starOnUms = overlayJoin && target.stateUserId === starUserId;
+  let starJoin = "";
+  let starredExpr = "NULL";
+  if (starOnUms) {
+    starredExpr = "ums.starred_at";
+  } else if (query.viewer) {
+    params.starUid = starUserId;
+    starJoin =
+      "LEFT JOIN user_message_state ums_star ON ums_star.user_id = :starUid AND ums_star.message_id = m.id";
+    starredExpr = "ums_star.starred_at";
+  }
+  if (query.starred === true) {
+    where.push(`${starredExpr} IS NOT NULL`);
+  }
+
+  const joinClause = overlayJoin
+    ? "LEFT JOIN user_message_state ums ON ums.user_id = :stateUid AND ums.message_id = m.id"
+    : "";
 
   const selectTrashed = useUserOverlay ? "ums.trashed_at AS trashed_at" : "m.trashed_at AS trashed_at";
   const selectRead = useUserOverlay ? "ums.read_at AS read_at" : "m.read_at AS read_at";
@@ -572,9 +618,10 @@ export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] 
 
   const sql = `SELECT m.id, m.sha256, m.received_at, m.size_bytes, m.envelope_from, m.envelope_to, m.message_id,
                       m.subject, m.from_addr, m.domains, m.status, m.ai_result,
-                      ${selectTrashed}, ${selectRead}, ${selectManual}
+                      ${selectTrashed}, ${selectRead}, ${selectManual}, ${starredExpr} AS starred_at
                FROM messages m
                ${joinClause}
+               ${starJoin}
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
                ORDER BY m.received_at DESC, m.id DESC
                LIMIT :limit`;
@@ -602,6 +649,7 @@ export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] 
       ai_result: aiResult,
       trashed_at: row.trashed_at,
       read_at: row.read_at,
+      starred_at: row.starred_at ?? null,
     };
   });
 }

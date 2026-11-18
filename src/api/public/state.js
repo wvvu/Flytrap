@@ -5,6 +5,7 @@ export const state = {
   currentTab: "ai",
   currentView: "inbox",
   inboxPromoOnly: false,
+  starredOnly: false,
   currentDlqScope: "open",
   selectedMailId: null,
   promptBaseline: "",

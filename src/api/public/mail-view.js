@@ -13,6 +13,7 @@ import {
   btnReclassify,
   btnReply,
   btnRestoreMail,
+  btnStarDetail,
   btnTrashMail,
   detailFrom,
   detailModelVerdict,
@@ -57,6 +58,7 @@ import {
   findByDataId,
   formatRawHeaders,
   refreshUnread,
+  setGlyph,
   setMobilePane,
   toast,
 } from "./ui.js";
@@ -170,6 +172,7 @@ export async function loadMessagesPage(replace, token) {
     if (q) params.set("q", q);
   }
   appendScopeParams(params);
+  if (state.starredOnly && state.currentView === "inbox") params.set("starred", "true");
   params.set("limit", "40");
   if (!replace && state.cursor) params.set("cursor", state.cursor);
 
@@ -181,7 +184,8 @@ export async function loadMessagesPage(replace, token) {
     else state.currentMessages = state.currentMessages.concat(items);
 
     if (replace && items.length === 0) {
-      noticeEl.textContent = state.currentView === "trash" ? "垃圾桶空空如也" : "没有匹配的邮件";
+      noticeEl.textContent =
+        state.currentView === "trash" ? "垃圾桶空空如也" : state.starredOnly ? "没有星标邮件" : "没有匹配的邮件";
     }
 
     for (const item of items) {
@@ -232,7 +236,20 @@ export function createMailListItem(item) {
   time.className = "item-time";
   time.textContent = formatShortTime(item.receivedAt);
 
-  line1.append(fromWrap, time);
+  const starBtn = document.createElement("button");
+  starBtn.type = "button";
+  starBtn.className = "item-star-btn" + (item.starred ? " is-starred" : "");
+  starBtn.title = item.starred ? "取消星标" : "设为星标";
+  starBtn.setAttribute("aria-label", starBtn.title);
+  setGlyph(starBtn, item.starred ? "star-fill" : "star");
+  starBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const known = state.currentMessages.find((row) => row.id === item.id);
+    const current = known ? Boolean(known.starred) : starBtn.classList.contains("is-starred");
+    void toggleStar(item.id, !current);
+  });
+
+  line1.append(fromWrap, time, starBtn);
 
   const subject = document.createElement("p");
   subject.className = "item-subject";
@@ -277,6 +294,54 @@ export function createMailListItem(item) {
   return card;
 }
 
+export async function toggleStar(id, nextStarred) {
+  try {
+    const res = await request("/v1/messages/" + encodeURIComponent(id) + "/star", {
+      method: "POST",
+      body: { starred: Boolean(nextStarred) },
+    });
+    const starred = Boolean(res.starred);
+    const known = state.currentMessages.find((row) => row.id === id);
+    if (known) known.starred = starred;
+    if (state.openDetail && state.openDetail.id === id) {
+      state.openDetail.starred = starred;
+      paintDetailStar(starred);
+    }
+    const card = findByDataId(listEl, ".mail-item", id);
+    if (card) {
+      if (state.starredOnly && !starred) {
+        card.remove();
+        state.currentMessages = state.currentMessages.filter((row) => row.id !== id);
+        if (state.selectedMailId === id) {
+          const next = listEl.querySelector(".mail-item");
+          if (next && next.dataset.id) void selectMail(next.dataset.id);
+          else {
+            state.selectedMailId = null;
+            mailDetailEl.hidden = true;
+            mailEmptyEl.hidden = false;
+          }
+        }
+      } else {
+        const btn = card.querySelector(".item-star-btn");
+        if (btn) {
+          btn.classList.toggle("is-starred", starred);
+          btn.title = starred ? "取消星标" : "设为星标";
+          btn.setAttribute("aria-label", btn.title);
+          setGlyph(btn, starred ? "star-fill" : "star");
+        }
+      }
+    }
+  } catch (err) {
+    toast("星标更新失败: " + explain(err));
+  }
+}
+
+export function paintDetailStar(starred) {
+  if (!btnStarDetail) return;
+  btnStarDetail.classList.toggle("is-starred", Boolean(starred));
+  setGlyph(btnStarDetail, starred ? "star-fill" : "star");
+}
+
 export function refreshShownNames() {
   if (state.currentView !== "inbox" && state.currentView !== "spam" && state.currentView !== "trash") return;
   if (listEl) {
@@ -301,6 +366,7 @@ export async function selectMail(id, options = {}) {
   state.selectedMailId = id;
   state.readingSentId = null;
   state.openDetail = null;
+  if (btnStarDetail) btnStarDetail.hidden = false;
   showInboundExtras(true);
   if (detailVerdictSelect) detailVerdictSelect.hidden = false;
   if (btnReply) btnReply.hidden = true;
@@ -348,6 +414,8 @@ export async function selectMail(id, options = {}) {
       detailTo.title = Array.isArray(detail.envelopeTo) ? detail.envelopeTo.join(", ") : detail.envelopeTo || "";
     }
     if (detailTime) detailTime.textContent = formatFullTime(detail.receivedAt);
+    if (btnStarDetail) btnStarDetail.hidden = false;
+    paintDetailStar(Boolean(detail.starred));
 
     state.currentFromAddress = extractEmail(rawFrom);
     state.openDetail = detail;
@@ -704,6 +772,7 @@ export function paintSentLetter(letter) {
   if (btnTrashMail) btnTrashMail.hidden = true;
   if (btnRestoreMail) btnRestoreMail.hidden = true;
   if (btnDeleteMail) btnDeleteMail.hidden = true;
+  if (btnStarDetail) btnStarDetail.hidden = true;
   const status = outboxStatus(letter);
   if (detailSubject) detailSubject.textContent = letter.subject || "(无主题)";
   if (detailFrom) {
@@ -1021,9 +1090,10 @@ export function mergeFreshMail(items) {
       continue;
     }
     if (prev.read && !item.read && state.selectedMailId === item.id) item.read = true;
-    if (prev.label === item.label && prev.read === item.read) continue;
+    if (prev.label === item.label && prev.read === item.read && Boolean(prev.starred) === Boolean(item.starred)) continue;
     prev.label = item.label;
     prev.read = item.read;
+    prev.starred = item.starred;
     const card = findByDataId(listEl, ".mail-item", item.id);
     card?.replaceWith(createMailListItem(item));
   }

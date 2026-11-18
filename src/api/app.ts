@@ -47,6 +47,7 @@ import {
   markMessageUnreadForViewer,
   restoreMessageForViewer,
   setManualLabelForViewer,
+  setMessageStarredForViewer,
   trashMessageForViewer,
   type StoredMessage,
   type ViewerContext,
@@ -837,6 +838,22 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     requireMessage(db, id, request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer);
     markMessageUnreadForViewer(db, id, viewer, now());
     return reply.send({ ok: true, id, read: false });
+  });
+
+  const starBody = z.object({ starred: z.boolean() }).strict();
+
+  app.post("/v1/messages/:id/star", async (request, reply) => {
+    const id = messageId(request);
+    const viewer = viewerOf(db, request);
+    const message = requireMessage(
+      db,
+      id,
+      request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer,
+    );
+    const parsed = starBody.safeParse(request.body ?? {});
+    const nextStarred = parsed.success ? parsed.data.starred : message.starred_at == null;
+    setMessageStarredForViewer(db, id, nextStarred, viewer, now());
+    return reply.send({ ok: true, id, starred: nextStarred });
   });
 
   app.post("/v1/messages/:id/trash", async (request, reply) => {
@@ -2059,6 +2076,7 @@ function readListQuery(query: unknown): {
   q?: string;
   from?: string;
   domain?: string;
+  starred?: boolean;
   scope?: string;
   since?: number;
   until?: number;
@@ -2081,6 +2099,8 @@ function readListQuery(query: unknown): {
   const q = optionalString(source.q);
   const from = optionalString(source.from);
   const domain = optionalString(source.domain);
+  const starredRaw = optionalString(source.starred);
+  const starred = starredRaw === "true" || starredRaw === "1" ? true : undefined;
   const scope = optionalString(source.scope);
   const since = optionalString(source.since);
   const until = optionalString(source.until);
@@ -2110,6 +2130,7 @@ function readListQuery(query: unknown): {
     q,
     from,
     domain,
+    starred,
     scope,
     since: since === undefined ? undefined : parseTime(since),
     until: until === undefined ? undefined : parseTime(until),
@@ -2154,6 +2175,7 @@ function toListItem(row: ReturnType<typeof listMessages>[number]) {
     status: row.status,
     label: ai.label,
     read: row.read_at != null,
+    starred: row.starred_at != null,
     confidence: ai.confidence,
     summary: ai.summary,
     tags: ai.tags,
@@ -2193,6 +2215,7 @@ function toDetail(db: Db, id: string, viewer?: ViewerContext) {
     parsed: parseJson(message.parsed),
     aiResult: parseJson(message.ai_result),
     read: message.read_at != null,
+    starred: message.starred_at != null,
     trashedAt: message.trashed_at ? iso(message.trashed_at) : null,
     attachments: listMessageAttachments(db, id).map((row) => ({
       sha256: row.sha256,
