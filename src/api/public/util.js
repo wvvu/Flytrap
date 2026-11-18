@@ -140,7 +140,7 @@ export function debounce(fn, ms) {
 }
 
 const OTP_HINT_RE = /验证码|校验码|动态码|确认码|安全码|登录码|verification\s*code|security\s*code|passcode|one[-\s]?time|otp|login\s*code|auth\s*code/i;
-const OTP_NEAR_RE = /(?:验证码|校验码|动态码|确认码|安全码|code|otp|passcode)[^\dA-Za-z]{0,18}([0-9]{4,8})\b/i;
+const OTP_NEAR_RE = /(?:验证码|校验码|动态码|确认码|安全码|code|otp|passcode)(?:\s*(?:is|was)\s*)?[^\dA-Za-z]{0,8}([0-9]{4,8})\b/i;
 const OTP_STANDALONE_RE = /\b([0-9]{6})\b/g;
 
 /** 从主题与纯文本正文中识别验证码，排除普通年份。 */

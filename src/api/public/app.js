@@ -353,6 +353,21 @@ document.querySelector("#btn-attach-file")?.addEventListener("click", () => {
 document.querySelector("#send-files")?.addEventListener("change", (event) => {
   void handleAttachmentFiles(event.target.files);
 });
+composeSheet?.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  composeSheet.classList.add("is-dragging");
+});
+composeSheet?.addEventListener("dragleave", (event) => {
+  if (!event.relatedTarget || !composeSheet.contains(event.relatedTarget)) {
+    composeSheet.classList.remove("is-dragging");
+  }
+});
+composeSheet?.addEventListener("drop", (event) => {
+  event.preventDefault();
+  composeSheet.classList.remove("is-dragging");
+  void handleAttachmentFiles(event.dataTransfer?.files);
+});
 
 for (const fieldId of ["#send-from", "#send-to", "#send-cc", "#send-bcc", "#send-subject", "#send-text"]) {
   document.querySelector(fieldId)?.addEventListener("input", () => {
@@ -565,6 +580,11 @@ window.addEventListener("keydown", (e) => {
     if (resetModal && !resetModal.hidden) {
       e.preventDefault();
       closeReset(false);
+      return;
+    }
+    if (composeSheet && !composeSheet.hidden && !composeSheet.classList.contains("is-expanded")) {
+      e.preventDefault();
+      closeComposer();
       return;
     }
     if (collapseExpandedComposer()) {

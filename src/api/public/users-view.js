@@ -348,6 +348,10 @@ async function refreshUsersDataOnly() {
   renderUsersStream();
 }
 
+function requiresOwnerForUser(user) {
+  return user.role === "admin" && state.sessionUserId !== "owner" && user.id !== state.sessionUserId;
+}
+
 export function renderUserDetail(user) {
   const wrap = document.querySelector("#user-detail-wrap");
   if (!wrap) return;
@@ -372,10 +376,13 @@ export function renderUserDetail(user) {
 
   const headTools = document.createElement("div");
   headTools.className = "page-tools";
+  const ownerOnly = requiresOwnerForUser(user);
   const toggleStatusBtn = document.createElement("button");
   toggleStatusBtn.type = "button";
   toggleStatusBtn.className = user.status === "active" ? "btn-sm btn-danger-ghost" : "btn-sm";
   toggleStatusBtn.textContent = user.status === "active" ? "停用账号" : "恢复启用";
+  toggleStatusBtn.disabled = ownerOnly;
+  if (ownerOnly) toggleStatusBtn.title = "仅主管理员可管理协同管理员";
   toggleStatusBtn.addEventListener("click", () => void toggleUserStatus(user));
   headTools.append(toggleStatusBtn);
   head.append(headText, headTools);
@@ -431,6 +438,8 @@ export function renderUserDetail(user) {
   saveBtn.type = "button";
   saveBtn.className = "btn-fit";
   saveBtn.textContent = "保存资料";
+  saveBtn.disabled = ownerOnly;
+  if (ownerOnly) saveBtn.title = "仅主管理员可管理协同管理员";
   saveBtn.addEventListener("click", async () => {
     const qVal = Number.parseInt(quotaInput.value.trim(), 10);
     if (Number.isNaN(qVal) || qVal < 0 || qVal > 10000) {
@@ -455,7 +464,7 @@ export function renderUserDetail(user) {
     } catch (err) {
       toast("更新失败: " + explain(err));
     } finally {
-      saveBtn.disabled = false;
+      saveBtn.disabled = ownerOnly;
     }
   });
   saveActions.append(saveBtn);
@@ -506,6 +515,8 @@ export function renderUserDetail(user) {
   addBoxBtn.type = "button";
   addBoxBtn.className = "btn-fit";
   addBoxBtn.textContent = "分配";
+  addBoxBtn.disabled = ownerOnly;
+  if (ownerOnly) addBoxBtn.title = "仅主管理员可管理协同管理员";
   const allocError = document.createElement("p");
   allocError.className = "form-error";
   allocError.hidden = true;
@@ -547,7 +558,7 @@ export function renderUserDetail(user) {
       setFormError(allocError, message);
       toast(message);
     } finally {
-      addBoxBtn.disabled = false;
+      addBoxBtn.disabled = ownerOnly;
     }
   });
   addBoxForm.append(localInput, atSign, domainSelect, aliasInput, addBoxBtn);
@@ -582,6 +593,8 @@ export function renderUserDetail(user) {
   resetPassBtn.type = "button";
   resetPassBtn.className = "btn-fit";
   resetPassBtn.textContent = "重置密码";
+  resetPassBtn.disabled = ownerOnly;
+  if (ownerOnly) resetPassBtn.title = "仅主管理员可管理协同管理员";
   resetPassBtn.addEventListener("click", async () => {
     const val = newPassInput.value;
     if (val.length < 8) {
@@ -599,7 +612,7 @@ export function renderUserDetail(user) {
     } catch (err) {
       toast("重置密码失败: " + explain(err));
     } finally {
-      resetPassBtn.disabled = false;
+      resetPassBtn.disabled = ownerOnly;
     }
   });
   passRow.append(newPassInput, genBtn, resetPassBtn);
@@ -610,6 +623,8 @@ export function renderUserDetail(user) {
   delBtn.type = "button";
   delBtn.className = "btn-sm btn-danger";
   delBtn.textContent = "删除此账号";
+  delBtn.disabled = ownerOnly;
+  if (ownerOnly) delBtn.title = "仅主管理员可管理协同管理员";
   delBtn.addEventListener("click", () => void handleRemoveUser(user));
   delRow.append(delBtn);
 
@@ -718,6 +733,7 @@ async function loadMemberAudit(username, action, tbody) {
 }
 
 function createAllocationRow(user, box) {
+  const ownerOnly = requiresOwnerForUser(user);
   const row = document.createElement("div");
   row.className = "alloc-row";
 
@@ -742,6 +758,7 @@ function createAllocationRow(user, box) {
   const sendChk = document.createElement("input");
   sendChk.type = "checkbox";
   sendChk.checked = box.canSend !== false;
+  sendChk.disabled = ownerOnly;
   sendChk.addEventListener("change", async () => {
     try {
       await request(
@@ -763,6 +780,7 @@ function createAllocationRow(user, box) {
   revokeBtn.type = "button";
   revokeBtn.className = "btn-sm btn-danger-ghost";
   revokeBtn.textContent = "收回";
+  revokeBtn.disabled = ownerOnly;
   revokeBtn.addEventListener("click", async () => {
     if (!(await askConfirm(`收回 ${box.address} 的归属权？已看见的历史信留在库里。`))) return;
     try {
