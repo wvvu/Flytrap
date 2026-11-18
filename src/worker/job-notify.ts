@@ -1,10 +1,12 @@
 import type { Db } from "../db/index.js";
 import type { JobRow } from "../db/repos/jobs.js";
-import { readRuntimeSettings } from "../db/repos/settings.js";
+import { readPersonalNotifySettings, readRuntimeSettings } from "../db/repos/settings.js";
 import { getMessage, markMessageNotified } from "../db/repos/messages.js";
+import { getUserById, OWNER_USER_ID, sqlResolvedOwner } from "../db/repos/users.js";
 import type { AppLog } from "../log.js";
 import { aiResultSchema } from "../ai/types.js";
 import type { Notifier } from "../notify/types.js";
+import { createWebhookNotifier } from "../notify/webhook.js";
 
 export interface NotifyJobDeps {
   db: Db;
@@ -28,29 +30,78 @@ export async function runNotifyJob(deps: NotifyJobDeps, job: JobRow): Promise<vo
     notifyMinConfidence: deps.notifyMinConfidence,
     acceptDomains: [],
   });
-  const wanted = policy.notifyLabels.includes(ai.label) && ai.confidence >= policy.notifyMinConfidence;
-  if (wanted && deps.notifiers.length > 0) {
-    const input = {
-      messageId: message.id,
-      subject: message.subject,
-      from: message.from_addr,
-      label: ai.label,
-      confidence: ai.confidence,
-      summary: ai.summary,
-      panelUrl: `${deps.panelBaseUrl.replace(/\/$/, "")}/#/m/${message.id}`,
-    };
-    const done = notifiedIds(job.payload);
+  const input = {
+    messageId: message.id,
+    subject: message.subject,
+    from: message.from_addr,
+    label: ai.label,
+    confidence: ai.confidence,
+    summary: ai.summary,
+    panelUrl: `${deps.panelBaseUrl.replace(/\/$/, "")}/#/m/${message.id}`,
+  };
+
+  const done = notifiedIds(job.payload);
+  let sentAny = false;
+
+  const wantedGlobal = policy.notifyLabels.includes(ai.label) && ai.confidence >= policy.notifyMinConfidence;
+  if (wantedGlobal && deps.notifiers.length > 0) {
     for (const notifier of deps.notifiers) {
       if (done.includes(notifier.id)) continue;
       await notifier.notify(input);
       done.push(notifier.id);
       rememberNotified(deps.db, job.id, done, deps.now());
       deps.log.info({ messageId: message.id, notifier: notifier.id, label: ai.label }, "notified");
+      sentAny = true;
     }
-  } else {
+  }
+
+  for (const holderId of listNotifyHolderIds(deps.db, message.id)) {
+    if (holderId !== OWNER_USER_ID) {
+      const user = getUserById(deps.db, holderId);
+      if (!user || user.status !== "active") continue;
+      const overlay = deps.db
+        .prepare("SELECT trashed_at, deleted_at FROM user_message_state WHERE user_id = ? AND message_id = ?")
+        .get(holderId, message.id) as { trashed_at: number | null; deleted_at: number | null } | undefined;
+      if (overlay && (overlay.trashed_at != null || overlay.deleted_at != null)) continue;
+    }
+    const personal = readPersonalNotifySettings(deps.db, holderId);
+    if (!personal.notifyWebhookUrl) continue;
+    if (!personal.notifyLabels.includes(ai.label) || ai.confidence < personal.notifyMinConfidence) continue;
+    const channelId = `user:${holderId}:webhook`;
+    if (done.includes(channelId)) continue;
+    const notifier = createWebhookNotifier({
+      url: personal.notifyWebhookUrl,
+      bearer: personal.notifyWebhookBearer || undefined,
+    });
+    await notifier.notify(input);
+    done.push(channelId);
+    rememberNotified(deps.db, job.id, done, deps.now());
+    deps.log.info({ messageId: message.id, userId: holderId, label: ai.label }, "user webhook notified");
+    sentAny = true;
+  }
+
+  if (!sentAny) {
     deps.log.info({ messageId: message.id, label: ai.label, confidence: ai.confidence }, "notify skipped");
   }
   markMessageNotified(deps.db, message.id, deps.now());
+}
+
+/** Holders are the read-time winners of envelope_to. Unallocated recipients belong to the owner. */
+function listNotifyHolderIds(db: Db, messageId: string): string[] {
+  const resolved = sqlResolvedOwner("je.value");
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT COALESCE(${resolved}, ?) AS user_id
+       FROM messages m
+       JOIN json_each(m.envelope_to) je
+       WHERE m.id = ?
+       UNION
+       SELECT ?
+       FROM messages m
+       WHERE m.id = ? AND json_array_length(m.envelope_to) = 0`,
+    )
+    .all(OWNER_USER_ID, messageId, OWNER_USER_ID, messageId) as Array<{ user_id: string }>;
+  return rows.map((row) => row.user_id);
 }
 
 function notifiedIds(payload: string | null): string[] {

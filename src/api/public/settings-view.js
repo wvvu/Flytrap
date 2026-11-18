@@ -23,6 +23,7 @@ export async function loadSettingsPage() {
     renderNameEditors(settings);
     renderBlockList(settings.blockedSenders || []);
     renderProfileFields();
+    renderPersonalNotify(settings);
 
     const verEl = document.querySelector("#settings-version");
     if (verEl && settings.version) {
@@ -211,6 +212,88 @@ export function notifySnapshot() {
 export function syncNotifySave() {
   const button = document.querySelector("#btn-save-notify");
   if (button) button.disabled = notifySnapshot() === state.notifyBaseline;
+}
+
+export function renderPersonalNotify(settings) {
+  const personal = settings && settings.personalNotify ? settings.personalNotify : {};
+  const host = document.querySelector("#personal-notify-labels");
+  if (!host) return;
+  host.replaceChildren();
+  const selected = new Set(personal.notifyLabels || ["phish", "malware"]);
+  for (const label of LABELS) {
+    const wrap = document.createElement("label");
+    wrap.className = "chk";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = label;
+    input.checked = selected.has(label);
+    input.addEventListener("change", syncPersonalNotifySave);
+    const text = document.createElement("span");
+    text.textContent = labelName(label);
+    wrap.append(input, text);
+    host.append(wrap);
+  }
+  const confidence = document.querySelector("#personal-notify-confidence");
+  if (confidence) confidence.value = String(personal.notifyMinConfidence ?? 0.6);
+  const webhook = document.querySelector("#personal-webhook-url");
+  if (webhook) webhook.value = personal.notifyWebhookUrl || "";
+  const bearer = document.querySelector("#personal-webhook-bearer");
+  if (bearer) {
+    bearer.value = "";
+    bearer.placeholder = personal.notifyWebhookBearerSet ? "已保存，留空则保持" : "留空则保持现有令牌";
+  }
+  state.personalNotifyBaseline = personalNotifySnapshot();
+  syncPersonalNotifySave();
+}
+
+export function personalNotifySnapshot() {
+  const labels = [];
+  document.querySelectorAll("#personal-notify-labels input").forEach((input) => {
+    if (input.checked) labels.push(input.value);
+  });
+  const confidence = document.querySelector("#personal-notify-confidence");
+  const webhook = document.querySelector("#personal-webhook-url");
+  const bearer = document.querySelector("#personal-webhook-bearer");
+  return JSON.stringify({
+    labels,
+    confidence: confidence ? confidence.value.trim() : "",
+    webhookUrl: webhook ? webhook.value.trim() : "",
+    webhookBearer: bearer ? bearer.value : "",
+  });
+}
+
+export function syncPersonalNotifySave() {
+  const button = document.querySelector("#btn-save-personal-notify");
+  if (button) button.disabled = personalNotifySnapshot() === state.personalNotifyBaseline;
+}
+
+export async function savePersonalNotifySettings() {
+  const confidence = Number(document.querySelector("#personal-notify-confidence")?.value);
+  const labels = [];
+  document.querySelectorAll("#personal-notify-labels input").forEach((input) => {
+    if (input.checked) labels.push(input.value);
+  });
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    toast("置信度要在 0 到 1 之间");
+    return;
+  }
+  const webhookUrl = document.querySelector("#personal-webhook-url")?.value.trim() || "";
+  const bearer = document.querySelector("#personal-webhook-bearer")?.value.trim() || "";
+  const body = { labels, minConfidence: confidence, webhookUrl };
+  if (bearer) body.webhookBearer = bearer;
+  try {
+    const saved = await request("/v1/settings/notify/personal", { method: "PUT", body });
+    const bearerInput = document.querySelector("#personal-webhook-bearer");
+    if (bearerInput) {
+      bearerInput.value = "";
+      bearerInput.placeholder = saved && saved.notifyWebhookBearerSet ? "已保存，留空则保持" : "留空则保持现有令牌";
+    }
+    state.personalNotifyBaseline = personalNotifySnapshot();
+    syncPersonalNotifySave();
+    toast("个人提醒已保存");
+  } catch (err) {
+    toast("保存个人提醒失败: " + explain(err));
+  }
 }
 
 export function syncPromptSave() {
@@ -581,13 +664,17 @@ export function renderNameEditors(settings) {
 }
 
 export function refreshNotifyLabels() {
-  const notifyHost = document.querySelector("#notify-labels");
-  if (!notifyHost) return;
-  notifyHost.querySelectorAll("label.chk").forEach((wrap) => {
-    const input = wrap.querySelector("input");
-    const text = wrap.querySelector("span");
-    if (input && text) text.textContent = labelName(input.value);
-  });
+  for (const notifyHost of [
+    document.querySelector("#notify-labels"),
+    document.querySelector("#personal-notify-labels"),
+  ]) {
+    if (!notifyHost) continue;
+    notifyHost.querySelectorAll("label.chk").forEach((wrap) => {
+      const input = wrap.querySelector("input");
+      const text = wrap.querySelector("span");
+      if (input && text) text.textContent = labelName(input.value);
+    });
+  }
 }
 
 export function renderSenderRows(senders) {

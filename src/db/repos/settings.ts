@@ -22,6 +22,10 @@ export const SETTING_PASSWORD_RESET = "password_reset";
 export const SETTING_OWNER_DISPLAY_NAME = "owner_display_name";
 export const SETTING_OWNER_RECOVERY_EMAIL = "owner_recovery_email";
 export const SETTING_BLOCKED_SENDERS = "blocked_senders";
+export const SETTING_NOTIFY_WEBHOOK_URL = "notify_webhook_url";
+export const SETTING_NOTIFY_WEBHOOK_BEARER = "notify_webhook_bearer";
+export const SETTING_NOTIFY_WEBHOOK_LABELS = "notify_webhook_labels";
+export const SETTING_NOTIFY_WEBHOOK_MIN_CONFIDENCE = "notify_webhook_min_confidence";
 
 export interface ResetSeal {
   salt: string;
@@ -217,6 +221,53 @@ export function saveNotifySettings(db: Db, labels: readonly string[], minConfide
   });
   write();
   return normalized;
+}
+
+export interface PersonalNotifySettings {
+  notifyLabels: Label[];
+  notifyMinConfidence: number;
+  notifyWebhookUrl: string;
+  notifyWebhookBearer: string;
+}
+
+/** Per-person webhook. Keys follow userKey, separate from the global notify policy. */
+export function readPersonalNotifySettings(db: Db, userId: string): PersonalNotifySettings {
+  return {
+    notifyLabels: readPersonalNotifyLabels(db, userId),
+    notifyMinConfidence: readPersonalNotifyMinConfidence(db, userId),
+    notifyWebhookUrl: (readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_URL)) ?? "").trim(),
+    notifyWebhookBearer: (readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_BEARER)) ?? "").trim(),
+  };
+}
+
+export function savePersonalNotifySettings(
+  db: Db,
+  userId: string,
+  input: {
+    labels: readonly string[];
+    minConfidence: number;
+    webhookUrl: string;
+    webhookBearer?: string;
+  },
+  now: number,
+): PersonalNotifySettings {
+  const labels = normalizeLabels(input.labels, true);
+  if (!Number.isFinite(input.minConfidence) || input.minConfidence < 0 || input.minConfidence > 1) {
+    throw new SettingsError("notify confidence must be between 0 and 1");
+  }
+  const webhookUrl = cleanWebhookUrl(input.webhookUrl);
+  const current = readPersonalNotifySettings(db, userId);
+  const webhookBearer = input.webhookBearer === undefined
+    ? current.notifyWebhookBearer
+    : input.webhookBearer.trim().slice(0, 512);
+  const write = db.transaction(() => {
+    writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_LABELS), JSON.stringify(labels), now);
+    writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_MIN_CONFIDENCE), String(input.minConfidence), now);
+    writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_URL), webhookUrl, now);
+    writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_BEARER), webhookBearer, now);
+  });
+  write();
+  return readPersonalNotifySettings(db, userId);
 }
 
 export function saveAcceptDomains(db: Db, domains: readonly string[], now: number): string[] {
@@ -604,6 +655,40 @@ function readJsonObject(db: Db, key: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function readPersonalNotifyLabels(db: Db, userId: string): Label[] {
+  const raw = readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_LABELS));
+  if (raw === null) return ["phish", "malware"];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return ["phish", "malware"];
+    return normalizeLabels(parsed.filter((item): item is string => typeof item === "string"), false);
+  } catch {
+    return ["phish", "malware"];
+  }
+}
+
+function readPersonalNotifyMinConfidence(db: Db, userId: string): number {
+  const raw = readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_MIN_CONFIDENCE));
+  if (raw === null) return 0.6;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 1) return 0.6;
+  return value;
+}
+
+function cleanWebhookUrl(raw: string): string {
+  const url = raw.trim();
+  if (!url) return "";
+  if (url.length > 500) throw new SettingsError("invalid webhook url");
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new SettingsError("invalid webhook url");
+  } catch (err) {
+    if (err instanceof SettingsError) throw err;
+    throw new SettingsError("invalid webhook url");
+  }
+  return url;
 }
 
 function readNotifyLabels(db: Db, fallback: readonly string[]): Label[] {

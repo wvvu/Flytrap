@@ -70,6 +70,7 @@ import {
   readNameSettings,
   readOwnerProfile,
   readPasswordHash,
+  readPersonalNotifySettings,
   readResetSeal,
   readRuntimeSettings,
   saveAcceptDomains,
@@ -80,6 +81,7 @@ import {
   saveNameSettings,
   saveNotifySettings,
   saveOwnerProfile,
+  savePersonalNotifySettings,
   savePasswordHash,
   saveResetSeal,
   SettingsError,
@@ -167,6 +169,13 @@ const profileBody = z.object({
 const notifySettingsBody = z.object({
   labels: z.array(z.string()).max(LABELS.length),
   minConfidence: z.number().min(0).max(1),
+}).strict();
+
+const personalNotifyBody = z.object({
+  labels: z.array(z.string()).max(LABELS.length),
+  minConfidence: z.number().min(0).max(1),
+  webhookUrl: z.string().max(500),
+  webhookBearer: z.string().max(512).optional(),
 }).strict();
 
 const domainSettingsBody = z.object({
@@ -1145,6 +1154,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
         senderNames: names.senderNames,
         blockedSenders: readBlockedSenders(db, userId),
         passwordSet: true,
+        personalNotify: personalNotifyView(db, userId),
         version: APP_VERSION,
       };
     }
@@ -1178,6 +1188,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       aiThinking: readAiThinking(db),
       blockedSenders: readBlockedSenders(db, userId),
       passwordSet: userId === OWNER_USER_ID ? readPasswordHash(db) !== null : true,
+      personalNotify: personalNotifyView(db, userId),
       version: APP_VERSION,
     };
   });
@@ -1338,6 +1349,41 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       detail: labels.join(",") || "none",
     });
     return reply.send({ ok: true, notifyLabels: labels, notifyMinConfidence: body.data.minConfidence });
+  });
+
+  app.put("/v1/settings/notify/personal", async (request, reply) => {
+    const body = personalNotifyBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    const userId = request.session.userId ?? OWNER_USER_ID;
+    let saved;
+    try {
+      saved = savePersonalNotifySettings(db, userId, {
+        labels: body.data.labels,
+        minConfidence: body.data.minConfidence,
+        webhookUrl: body.data.webhookUrl,
+        webhookBearer: body.data.webhookBearer,
+      }, now());
+    } catch (err) {
+      if (err instanceof SettingsError && err.message === "invalid webhook url") {
+        throw new HttpError(400, "invalid webhook url");
+      }
+      if (err instanceof SettingsError) throw new HttpError(400);
+      throw err;
+    }
+    writeAudit(db, {
+      id: ulid(),
+      at: now(),
+      actor: request.session.user ?? "unknown",
+      action: "settings_notify_personal",
+      detail: saved.notifyLabels.join(",") || "none",
+    });
+    return reply.send({
+      ok: true,
+      notifyLabels: saved.notifyLabels,
+      notifyMinConfidence: saved.notifyMinConfidence,
+      notifyWebhookUrl: saved.notifyWebhookUrl,
+      notifyWebhookBearerSet: saved.notifyWebhookBearer.length > 0,
+    });
   });
 
   app.put("/v1/settings/domains", async (request, reply) => {
@@ -1931,6 +1977,16 @@ function requireAdmin(request: FastifyRequest): void {
   if (request.session.role !== "admin") {
     throw new HttpError(403, "forbidden");
   }
+}
+
+function personalNotifyView(db: Db, userId: string) {
+  const personal = readPersonalNotifySettings(db, userId);
+  return {
+    notifyLabels: personal.notifyLabels,
+    notifyMinConfidence: personal.notifyMinConfidence,
+    notifyWebhookUrl: personal.notifyWebhookUrl,
+    notifyWebhookBearerSet: personal.notifyWebhookBearer.length > 0,
+  };
 }
 
 function requireAcceptDomain(db: Db, config: Config, domain: string): void {

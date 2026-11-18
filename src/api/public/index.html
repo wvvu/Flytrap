@@ -647,6 +647,31 @@
               </div>
             </section>
 
+            <section class="block" id="set-personal-notify" data-group="remind" hidden>
+              <div class="block-head">
+                <div>
+                  <h2>个人提醒</h2>
+                  <p class="muted">勾上的分类达到置信度时，推到当前账号的 Webhook。打开链接仍回到这封信。</p>
+                </div>
+                <button type="button" id="btn-save-personal-notify" class="btn-fit" disabled>保存</button>
+              </div>
+              <div class="chk-row" id="personal-notify-labels"></div>
+              <div class="inline-row">
+                <span class="muted">置信至少</span>
+                <input id="personal-notify-confidence" class="field-narrow" inputmode="decimal" autocomplete="off">
+              </div>
+              <div class="send-form">
+                <label class="name-row">
+                  <span class="name-key">个人 Webhook</span>
+                  <input id="personal-webhook-url" maxlength="500" autocomplete="off" placeholder="https://... 留空则不推送">
+                </label>
+                <label class="name-row">
+                  <span class="name-key">Bearer</span>
+                  <input id="personal-webhook-bearer" type="password" maxlength="512" autocomplete="off" placeholder="留空则保持现有令牌">
+                </label>
+              </div>
+            </section>
+
             <section class="block" id="set-domains" data-group="domains">
               <div class="block-head">
                 <div>

@@ -10,6 +10,7 @@ export const state = {
   selectedMailId: null,
   promptBaseline: "",
   notifyBaseline: "",
+  personalNotifyBaseline: "",
   attemptsBaseline: "",
   namesBaseline: "",
   settingsDomains: [],

@@ -120,9 +120,11 @@ import {
   saveMailbox,
   saveNameSettings,
   saveNotifySettings,
+  savePersonalNotifySettings,
   syncAttemptSave,
   syncNamesSave,
   syncNotifySave,
+  syncPersonalNotifySave,
   syncPromptSave,
 } from "./settings-view.js";
 import {
@@ -299,6 +301,10 @@ document.querySelector("#btn-save-prompt")?.addEventListener("click", () => void
 document.querySelector("#prompt-editor")?.addEventListener("input", syncPromptSave);
 document.querySelector("#btn-save-notify")?.addEventListener("click", () => void saveNotifySettings());
 document.querySelector("#notify-confidence")?.addEventListener("input", syncNotifySave);
+document.querySelector("#btn-save-personal-notify")?.addEventListener("click", () => void savePersonalNotifySettings());
+document.querySelector("#personal-notify-confidence")?.addEventListener("input", syncPersonalNotifySave);
+document.querySelector("#personal-webhook-url")?.addEventListener("input", syncPersonalNotifySave);
+document.querySelector("#personal-webhook-bearer")?.addEventListener("input", syncPersonalNotifySave);
 document.querySelector("#btn-save-attempts")?.addEventListener("click", () => void saveAttemptSettings());
 document.querySelector("#job-max-attempts")?.addEventListener("input", syncAttemptSave);
 document.querySelector("#btn-add-domain")?.addEventListener("click", () => void addDomain());

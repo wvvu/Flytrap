@@ -9,6 +9,9 @@ import { gzipCodec } from "../src/compress.js";
 import { loadConfig } from "../src/config.js";
 import { openDatabase, type Db } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
+import { enqueueJob, type JobRow } from "../src/db/repos/jobs.js";
+import { insertMessage } from "../src/db/repos/messages.js";
+import { runNotifyJob } from "../src/worker/job-notify.js";
 import { acceptMessage } from "../src/ingest/accept.js";
 import { readRaw } from "../src/ingest/read-raw.js";
 import type { AppLog } from "../src/log.js";
@@ -1051,6 +1054,258 @@ test("allocating a mailbox checks the domain against the current accept list", a
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a personal webhook is sent only to the resolved holder", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-hook-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => Date.UTC(2026, 10, 19, 8, 0, 0),
+  });
+  const admin = jar();
+  const alice = jar();
+  const bob = jar();
+  const originalFetch = globalThis.fetch;
+  const seen: Array<{ who: string; auth: string | null; panel: string }> = [];
+
+  try {
+    await admin.login(app, "admin", adminPassword);
+    const aliceCreated = await admin.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com", canSend: true },
+    });
+    assert.equal(aliceCreated.statusCode, 201);
+    const aliceId = aliceCreated.json().user.id as string;
+    const bobCreated = await admin.post(app, "/v1/users", {
+      username: "bob",
+      password: "bob-password-123",
+      initialMailbox: { localpart: "bob", domain: "example.com", canSend: true },
+    });
+    assert.equal(bobCreated.statusCode, 201);
+    const bobId = bobCreated.json().user.id as string;
+    await alice.login(app, "alice", "alice-password-123");
+    await bob.login(app, "bob", "bob-password-123");
+
+    const aliceSaved = await alice.put(app, "/v1/settings/notify/personal", {
+      labels: ["phish"],
+      minConfidence: 0.6,
+      webhookUrl: "https://alice.hooks/in",
+      webhookBearer: "alice-webhook-secret",
+    });
+    assert.equal(aliceSaved.statusCode, 200);
+    assert.equal(aliceSaved.json().notifyWebhookBearerSet, true);
+    assert.equal(JSON.stringify(aliceSaved.json()).includes("alice-webhook-secret"), false);
+    const aliceKept = await alice.put(app, "/v1/settings/notify/personal", {
+      labels: ["phish"],
+      minConfidence: 0.6,
+      webhookUrl: "https://alice.hooks/in",
+    });
+    assert.equal(aliceKept.statusCode, 200);
+    assert.equal(aliceKept.json().notifyWebhookBearerSet, true);
+
+    const bobSaved = await bob.put(app, "/v1/settings/notify/personal", {
+      labels: ["phish"],
+      minConfidence: 0.6,
+      webhookUrl: "https://bob.hooks/in",
+      webhookBearer: "bob-webhook-secret",
+    });
+    assert.equal(bobSaved.statusCode, 200);
+    const ownerSaved = await admin.put(app, "/v1/settings/notify/personal", {
+      labels: ["phish"],
+      minConfidence: 0.6,
+      webhookUrl: "https://owner.hooks/in",
+    });
+    assert.equal(ownerSaved.statusCode, 200);
+
+    const badUrl = await alice.put(app, "/v1/settings/notify/personal", {
+      labels: ["phish"],
+      minConfidence: 0.6,
+      webhookUrl: "ftp://alice.hooks/in",
+    });
+    assert.equal(badUrl.statusCode, 400);
+    assert.equal(badUrl.json().reason, "invalid webhook url");
+    assert.equal((await alice.put(app, "/v1/settings/notify", { labels: ["spam"], minConfidence: 0.2 })).statusCode, 403);
+
+    const aliceView = (await alice.get(app, "/v1/settings")).json();
+    assert.equal(aliceView.personalNotify.notifyWebhookUrl, "https://alice.hooks/in");
+    assert.equal(aliceView.personalNotify.notifyWebhookBearerSet, true);
+    assert.equal(JSON.stringify(aliceView).includes("alice-webhook-secret"), false);
+    assert.equal(aliceView.channels, undefined);
+    const adminView = (await admin.get(app, "/v1/settings")).json();
+    assert.deepEqual(adminView.notifyLabels, ["phish", "malware"]);
+    assert.equal(adminView.personalNotify.notifyWebhookUrl, "https://owner.hooks/in");
+    const audit = (await admin.get(app, "/v1/audit?actor=alice&action=settings_notify_personal")).json();
+    assert.equal(JSON.stringify(audit).includes("alice-webhook-secret"), false);
+    assert.equal(JSON.stringify(audit).includes("https://alice.hooks/in"), false);
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      const body = JSON.parse(String(init?.body)) as { url?: string };
+      const who = url.includes("alice.hooks") ? "alice" : url.includes("bob.hooks") ? "bob" : url.includes("owner.hooks") ? "owner" : url;
+      seen.push({ who, auth: headers.get("authorization"), panel: body.url ?? "" });
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+
+    const globalHits: string[] = [];
+    const notifyDeps = {
+      db,
+      log: silent,
+      now: () => 20,
+      notifiers: [{
+        id: "webhook",
+        async notify(input: { label: string }) {
+          globalHits.push(input.label);
+        },
+      }],
+      notifyLabels: ["phish", "malware"],
+      notifyMinConfidence: 0.6,
+      panelBaseUrl: "http://127.0.0.1:8080/",
+    };
+
+    seedClassified(db, "msg_bob", "ab".repeat(32), ["bob@example.com"]);
+    enqueueJob(db, { id: "job_bob", type: "notify", messageId: "msg_bob", now: 1 });
+    await runNotifyJob(notifyDeps, notifyJob("job_bob", "msg_bob"));
+    assert.deepEqual(globalHits, ["phish"]);
+    assert.deepEqual(seen.map((item) => item.who), ["bob"]);
+    assert.equal(seen[0]?.auth, "Bearer bob-webhook-secret");
+    assert.equal(seen[0]?.panel, "http://127.0.0.1:8080/#/m/msg_bob");
+    const stored = db.prepare("SELECT payload FROM jobs WHERE id = ?").get("job_bob") as { payload: string };
+    const notified = (JSON.parse(stored.payload) as { notified: string[] }).notified;
+    assert.ok(notified.includes("webhook"));
+    assert.ok(notified.includes(`user:${bobId}:webhook`));
+    assert.equal(notified.includes(`user:${aliceId}:webhook`), false);
+    const beforeRetry = seen.length;
+    await runNotifyJob(notifyDeps, notifyJob("job_bob", "msg_bob", stored.payload));
+    assert.equal(seen.length, beforeRetry);
+    assert.deepEqual(globalHits, ["phish"]);
+
+    seen.length = 0;
+    globalHits.length = 0;
+    seedClassified(db, "msg_both", "cd".repeat(32), ["alice@example.com", "bob@example.com"]);
+    enqueueJob(db, { id: "job_both", type: "notify", messageId: "msg_both", now: 2 });
+    await runNotifyJob(notifyDeps, notifyJob("job_both", "msg_both"));
+    assert.deepEqual(globalHits, ["phish"]);
+    assert.deepEqual(seen.map((item) => item.who).slice().sort(), ["alice", "bob"]);
+    assert.equal(seen.find((item) => item.who === "alice")?.auth, "Bearer alice-webhook-secret");
+
+    seen.length = 0;
+    globalHits.length = 0;
+    await alice.put(app, "/v1/settings/notify/personal", {
+      labels: ["phish"],
+      minConfidence: 0.99,
+      webhookUrl: "https://alice.hooks/in",
+    });
+    seedClassified(db, "msg_low", "ef".repeat(32), ["alice@example.com"], 0.9);
+    enqueueJob(db, { id: "job_low", type: "notify", messageId: "msg_low", now: 3 });
+    await runNotifyJob(notifyDeps, notifyJob("job_low", "msg_low"));
+    assert.deepEqual(globalHits, ["phish"]);
+    assert.equal(seen.length, 0);
+
+    seen.length = 0;
+    globalHits.length = 0;
+    await alice.put(app, "/v1/settings/notify/personal", {
+      labels: ["phish"],
+      minConfidence: 0.6,
+      webhookUrl: "https://alice.hooks/in",
+    });
+    seedClassified(db, "msg_trashed", "12".repeat(32), ["alice@example.com"]);
+    db.prepare(
+      "INSERT INTO user_message_state (user_id, message_id, trashed_at, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(aliceId, "msg_trashed", 5, 5);
+    enqueueJob(db, { id: "job_trashed", type: "notify", messageId: "msg_trashed", now: 4 });
+    await runNotifyJob(notifyDeps, notifyJob("job_trashed", "msg_trashed"));
+    assert.deepEqual(globalHits, ["phish"]);
+    assert.equal(seen.length, 0);
+
+    seen.length = 0;
+    globalHits.length = 0;
+    db.prepare("UPDATE users SET status = 'disabled' WHERE id = ?").run(bobId);
+    seedClassified(db, "msg_disabled", "34".repeat(32), ["bob@example.com"]);
+    enqueueJob(db, { id: "job_disabled", type: "notify", messageId: "msg_disabled", now: 5 });
+    await runNotifyJob(notifyDeps, notifyJob("job_disabled", "msg_disabled"));
+    assert.deepEqual(globalHits, ["phish"]);
+    assert.equal(seen.length, 0);
+
+    seen.length = 0;
+    globalHits.length = 0;
+    seedClassified(db, "msg_owner", "56".repeat(32), ["other@example.com"]);
+    enqueueJob(db, { id: "job_owner", type: "notify", messageId: "msg_owner", now: 6 });
+    await runNotifyJob(notifyDeps, notifyJob("job_owner", "msg_owner"));
+    assert.deepEqual(globalHits, ["phish"]);
+    assert.deepEqual(seen.map((item) => item.who), ["owner"]);
+    assert.equal(seen[0]?.panel, "http://127.0.0.1:8080/#/m/msg_owner");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function seedClassified(db: Db, id: string, sha256: string, envelopeTo: string[], confidence = 0.9): void {
+  insertMessage(db, {
+    id,
+    sha256,
+    rawPath: `raw/${id}`,
+    sizeBytes: 20,
+    receivedAt: 10,
+    envelopeFrom: "sender@outside.test",
+    envelopeTo,
+    domains: ["example.com"],
+    smtpMeta: {},
+    now: 10,
+  });
+  db.prepare("UPDATE messages SET subject = ?, from_addr = ?, ai_result = ?, status = 'classified' WHERE id = ?").run(
+    "工资条",
+    "payroll@outside.test",
+    JSON.stringify({
+      schema: 1,
+      prompt_id: "classify-v1",
+      model: "fake",
+      provider: "fake",
+      at: "2026-11-19T00:00:00.000Z",
+      label: "phish",
+      confidence,
+      summary: "looks notable",
+      tags: [],
+      signals: [],
+    }),
+    id,
+  );
+}
+
+function notifyJob(id: string, messageId: string, payload: string | null = null): JobRow {
+  return {
+    id,
+    type: "notify",
+    message_id: messageId,
+    payload,
+    status: "running",
+    attempts: 1,
+    max_attempts: 5,
+    run_after: 1,
+    locked_at: 1,
+    locked_by: "t",
+    last_error: null,
+    created_at: 1,
+    updated_at: 1,
+  };
+}
 
 async function deliver(db: Db, dir: string, rcptTo: string[], content: string, receivedAtMs: number) {
   return acceptMessage(
