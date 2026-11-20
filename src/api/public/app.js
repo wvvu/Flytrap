@@ -187,12 +187,7 @@ btnEmptyCompose?.addEventListener("click", () => openComposer());
 navSpamBtn?.addEventListener("click", () => void switchNav("spam"));
 navTrashBtn?.addEventListener("click", () => void switchNav("trash"));
 navUsersBtn?.addEventListener("click", () => void switchNav("users"));
-navSettingsBtn?.addEventListener("click", () => {
-  if (state.currentSettingsSection === "users") {
-    state.currentSettingsSection = state.settingsReturnSection || (state.isAdmin ? "domains" : "my-mailboxes");
-  }
-  void switchNav("settings");
-});
+navSettingsBtn?.addEventListener("click", () => void switchNav("settings"));
 
 // 列表头与过滤器事件
 refreshBtn?.addEventListener("click", () => void reloadMessages());

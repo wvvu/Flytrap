@@ -266,12 +266,11 @@ export async function switchNav(view) {
     if (viewDlq) viewDlq.hidden = false;
     await loadDlqJobs(state.currentDlqScope);
   } else if (view === "settings") {
-    const onUsers = state.isAdmin && state.currentSettingsSection === "users";
-    (onUsers ? navUsersBtn : navSettingsBtn)?.classList.add("active");
+    navSettingsBtn?.classList.add("active");
     if (streamSettingsHeader) streamSettingsHeader.hidden = false;
     if (viewSettings) viewSettings.hidden = false;
     renderSettingsNav();
-    showSettingsSection(state.currentSettingsSection, { keepListOnNarrow: !onUsers });
+    showSettingsSection(state.currentSettingsSection, { keepListOnNarrow: true });
     await loadSettingsPage();
   }
 }

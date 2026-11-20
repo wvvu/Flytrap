@@ -120,12 +120,12 @@ export function renderSettingsNav() {
 function paintSettingsRail() {
   if (state.currentView !== "settings") return;
   const onUsers = state.isAdmin && state.currentSettingsSection === "users";
-  navUsersBtn?.classList.toggle("active", onUsers);
-  navSettingsBtn?.classList.toggle("active", !onUsers);
-  setViewTitle(onUsers ? "users" : "settings");
+  navUsersBtn?.classList.toggle("active", false);
+  navSettingsBtn?.classList.toggle("active", true);
+  setViewTitle("settings");
   const heading = document.querySelector("#settings-stream-heading");
   const subtitle = document.querySelector("#settings-subtitle");
-  if (heading) heading.textContent = onUsers ? "成员" : "设置";
+  if (heading) heading.textContent = "设置";
   if (subtitle) {
     subtitle.textContent = onUsers
       ? "开通账号，分配邮箱。"
@@ -137,7 +137,6 @@ export function showSettingsSection(id, options = {}) {
   const allowed = visibleSettingSections().map((s) => s.id);
   const nextId = allowed.includes(id) ? id : (allowed[0] || "account");
   state.currentSettingsSection = nextId;
-  if (nextId !== "users") state.settingsReturnSection = nextId;
   for (const block of document.querySelectorAll("#view-settings .block")) {
     if (block.id === "user-create-card" || block.closest("#user-detail-wrap")) continue;
     block.hidden = block.dataset.group !== nextId;
@@ -219,7 +218,7 @@ export function renderPersonalNotify(settings) {
   const host = document.querySelector("#personal-notify-labels");
   if (!host) return;
   host.replaceChildren();
-  const selected = new Set(personal.notifyLabels || ["phish", "malware"]);
+  const selected = new Set(personal.notifyLabels || ["legit"]);
   for (const label of LABELS) {
     const wrap = document.createElement("label");
     wrap.className = "chk";

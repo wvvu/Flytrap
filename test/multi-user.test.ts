@@ -1485,7 +1485,7 @@ test("a personal webhook is sent only to the resolved holder", async () => {
     assert.equal(JSON.stringify(aliceView).includes("alice-webhook-secret"), false);
     assert.equal(aliceView.channels, undefined);
     const adminView = (await admin.get(app, "/v1/settings")).json();
-    assert.deepEqual(adminView.notifyLabels, ["phish", "malware"]);
+    assert.deepEqual(adminView.notifyLabels, ["legit"]);
     assert.equal(adminView.personalNotify.notifyWebhookUrl, "https://owner.hooks/in");
     const audit = (await admin.get(app, "/v1/audit?actor=alice&action=settings_notify_personal")).json();
     assert.equal(JSON.stringify(audit).includes("alice-webhook-secret"), false);

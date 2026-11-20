@@ -659,13 +659,13 @@ function readJsonObject(db: Db, key: string): Record<string, unknown> | null {
 
 function readPersonalNotifyLabels(db: Db, userId: string): Label[] {
   const raw = readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_LABELS));
-  if (raw === null) return ["phish", "malware"];
+  if (raw === null) return ["legit"];
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return ["phish", "malware"];
+    if (!Array.isArray(parsed)) return ["legit"];
     return normalizeLabels(parsed.filter((item): item is string => typeof item === "string"), false);
   } catch {
-    return ["phish", "malware"];
+    return ["legit"];
   }
 }
 

@@ -128,7 +128,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     notifyWebhookBearer: pickOpt(env, "NOTIFY_WEBHOOK_BEARER"),
     telegramBotToken: pickOpt(env, "TELEGRAM_BOT_TOKEN"),
     telegramChatId: pickOpt(env, "TELEGRAM_CHAT_ID"),
-    notifyLabels: parseLabels(pick(env, "NOTIFY_LABELS", "phish,malware")),
+    notifyLabels: parseLabels(pick(env, "NOTIFY_LABELS", "legit")),
     notifyMinConfidence: pickFloat(env, "NOTIFY_MIN_CONFIDENCE", 0.6),
     panelBaseUrl: pickOpt(env, "PANEL_BASE_URL"),
     compress: pick(env, "COMPRESS", "auto"),
