@@ -1,9 +1,9 @@
 // 处理失败（DLQ）：失败任务列表、详情、重试 / 忽略 / 全部重试。
 import { STEP_NAMES, STEP_ORDER } from "./constants.js";
 import { state } from "./state.js";
-import { badgeDlq, dlqEmptyEl, dlqNoticeEl, failureDetailEl, listEl, retryAllBtn } from "./dom.js";
+import { dlqEmptyEl, dlqNoticeEl, failureDetailEl, listEl, retryAllBtn } from "./dom.js";
 import { request } from "./net.js";
-import { askConfirm, copyText, explain, setMobilePane, toast } from "./ui.js";
+import { askConfirm, copyText, explain, setMobilePane, syncAccountHubDlq, toast } from "./ui.js";
 import { formatFrom, formatFullTime, formatRecipients, formatShortTime } from "./util.js";
 import { switchNav } from "./nav.js";
 import { selectMail } from "./mail-view.js";
@@ -51,6 +51,7 @@ export function paintDlqCounts(summary) {
       : `没有停住的步骤。${waiting}`;
   }
   if (retryAllBtn) retryAllBtn.disabled = stopped === 0;
+  syncAccountHubDlq(state.failureCounts);
 }
 
 export function setPillLabel(status, label, count) {
@@ -327,13 +328,15 @@ export async function retryAllDead() {
 export async function updateDlqBadge() {
   try {
     const res = await request("/v1/jobs/summary");
-    const count = (res.dead || 0) + (res.failed || 0);
-    if (count > 0) {
-      badgeDlq.hidden = false;
-      badgeDlq.textContent = String(count);
-    } else {
-      badgeDlq.hidden = true;
-    }
+    state.failureCounts = {
+      open: res.open || 0,
+      dead: res.dead || 0,
+      failed: res.failed || 0,
+      retrying: res.retrying || 0,
+      dismissed: res.dismissed || 0,
+      running: res.running || 0,
+    };
+    syncAccountHubDlq(state.failureCounts);
     if (state.currentView === "dlq") paintDlqCounts(res);
   } catch {
     // ignore

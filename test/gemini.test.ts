@@ -22,6 +22,7 @@ test("gemini classifier completes json format and parses result", async () => {
                     summary: "仿冒钓鱼邮件",
                     tags: ["credential_harvesting"],
                     signals: [{ name: "url", value: "fake domain" }],
+                    otp: null,
                   }),
                 },
               ],
@@ -55,6 +56,8 @@ test("gemini classifier completes json format and parses result", async () => {
   assert.equal(calledBody.generationConfig.responseMimeType, "application/json");
   assert.ok(calledBody.generationConfig.responseSchema);
   assert.equal(calledBody.generationConfig.responseSchema.type, "OBJECT");
+  assert.equal(calledBody.generationConfig.responseSchema.properties.otp.nullable, true);
+  assert.equal(res.otp, null);
   assert.equal(calledBody.generationConfig.thinkingConfig, undefined);
 });
 

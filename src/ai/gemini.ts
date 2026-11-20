@@ -163,6 +163,7 @@ export function createGeminiClassifier(options: GeminiClassifierOptions): Gemini
               summary: output.summary,
               tags: output.tags,
               signals: output.signals,
+              ...(output.otp !== undefined ? { otp: output.otp || null } : {}),
               raw: output,
             });
           } catch (err) {
@@ -256,6 +257,10 @@ const GEMINI_RESPONSE_SCHEMA = {
         },
         required: ["name", "value"],
       },
+    },
+    otp: {
+      type: "STRING",
+      nullable: true,
     },
   },
   required: ["label", "confidence", "summary", "tags", "signals"],

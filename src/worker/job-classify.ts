@@ -134,22 +134,50 @@ export function applyDeterministicGuardrails(facts: ClassifyFacts, ai: AiResult)
 
   const haystack = `${facts.subject}\n${facts.text}`.toLowerCase();
   const injected = INJECTION_HINTS.some((hint) => haystack.includes(hint));
-  if (!injected) return result;
-
-  if (!result.tags.includes("prompt-injection") && result.tags.length < 20) {
-    result.tags.push("prompt-injection");
+  if (injected) {
+    if (!result.tags.includes("prompt-injection") && result.tags.length < 20) {
+      result.tags.push("prompt-injection");
+    }
+    if (result.label === "legit") {
+      result.label = "phish";
+      if (result.signals.length < 30) {
+        result.signals.push({
+          name: "提示词注入",
+          value: "正文试图指挥分类器，已从正常改记为钓鱼",
+        });
+      }
+      result.summary = `正文试图指挥分类器，已改记为钓鱼。${result.summary}`.slice(0, 2000);
+    }
   }
-  if (result.label !== "legit") return result;
 
-  result.label = "phish";
-  if (result.signals.length < 30) {
-    result.signals.push({
-      name: "提示词注入",
-      value: "正文试图指挥分类器，已从正常改记为钓鱼",
-    });
+  if (result.otp !== undefined) {
+    if (result.label === "phish" || result.label === "malware" || result.label === "spam") {
+      result.otp = null;
+    } else {
+      result.otp = verifyExtractedOtp(result.otp, facts.subject, facts.text);
+    }
   }
-  result.summary = `正文试图指挥分类器，已改记为钓鱼。${result.summary}`.slice(0, 2000);
+
   return result;
+}
+
+const OTP_BLOCKED_YEAR_RE = /^(?:19|20)\d{2}$/;
+
+/** Verify an AI-extracted OTP appears verbatim in the subject or body text. */
+export function verifyExtractedOtp(candidate: string | null | undefined, subject: string, text: string): string | null {
+  if (!candidate) return null;
+  const trimmed = candidate.trim().replace(/\s+/g, " ");
+  if (!trimmed || trimmed.length > 32) return null;
+  const compact = trimmed.replace(/[\s-]+/g, "");
+  if (compact.length < 4 || compact.length > 12) return null;
+  if (!/^[A-Za-z0-9]+$/.test(compact)) return null;
+  if (OTP_BLOCKED_YEAR_RE.test(compact)) return null;
+  if (!/\d/.test(compact) && !/^[A-Z]{5,8}$/.test(compact)) return null;
+
+  const source = `${subject}\n${text}`;
+  const pattern = compact.split("").join("[\\s-]?");
+  const present = new RegExp(`(?<![A-Za-z0-9])${pattern}(?![A-Za-z0-9])`, "i");
+  return present.test(source) ? trimmed : null;
 }
 
 function headerFrom(from: { name: string; address: string } | null, fallback: string | null): string {

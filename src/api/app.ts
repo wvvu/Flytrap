@@ -2288,6 +2288,8 @@ function toListItem(row: ReturnType<typeof listMessages>[number]) {
     confidence: ai.confidence,
     summary: ai.summary,
     tags: ai.tags,
+    otp: ai.otp,
+    otpChecked: ai.otpChecked,
     manualOverride: ai.manualOverride,
     originalLabel: ai.originalLabel,
     originalConfidence: ai.originalConfidence,
@@ -2340,6 +2342,8 @@ function aiSummary(raw: string | null): {
   confidence: number | null;
   summary: string | null;
   tags: string[];
+  otp: string | null;
+  otpChecked: boolean;
   manualOverride: boolean;
   originalLabel: string | null;
   originalConfidence: number | null;
@@ -2351,17 +2355,22 @@ function aiSummary(raw: string | null): {
       confidence: null,
       summary: null,
       tags: [],
+      otp: null,
+      otpChecked: false,
       manualOverride: false,
       originalLabel: null,
       originalConfidence: null,
     };
   }
   const record = value as Record<string, unknown>;
+  const otpChecked = Object.prototype.hasOwnProperty.call(record, "otp");
   return {
     label: typeof record.label === "string" ? record.label : null,
     confidence: typeof record.confidence === "number" ? record.confidence : null,
     summary: typeof record.summary === "string" ? record.summary : null,
     tags: Array.isArray(record.tags) ? record.tags.filter((tag): tag is string => typeof tag === "string") : [],
+    otp: typeof record.otp === "string" && record.otp.trim() ? record.otp.trim() : null,
+    otpChecked,
     manualOverride: record.manualOverride === true,
     originalLabel: typeof record.originalLabel === "string" ? record.originalLabel : null,
     originalConfidence: typeof record.originalConfidence === "number" ? record.originalConfidence : null,

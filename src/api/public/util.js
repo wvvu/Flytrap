@@ -139,25 +139,64 @@ export function debounce(fn, ms) {
   };
 }
 
-const OTP_HINT_RE = /验证码|校验码|动态码|确认码|安全码|登录码|verification\s*code|security\s*code|passcode|one[-\s]?time|otp|login\s*code|auth\s*code/i;
-const OTP_NEAR_RE = /(?:验证码|校验码|动态码|确认码|安全码|code|otp|passcode)(?:\s*(?:is|was)\s*)?[^\dA-Za-z]{0,8}([0-9]{4,8})\b/i;
-const OTP_STANDALONE_RE = /\b([0-9]{6})\b/g;
+const OTP_REPLY_PREFIX_RE = /^(?:re|fwd|fw|回复|转发)\s*[:：]/i;
+const OTP_BLOCKED_LABELS = new Set(["phish", "malware", "spam"]);
+const OTP_HINT_RE =
+  /验证码|驗證碼|校验码|校驗碼|动态码|確認碼|确认码|安全码|安全碼|登录码|登錄碼|一次性代码|一次性代碼|一次性密码|一次性密碼|verification\s*code|confirmation\s*code|security\s*code|passcode|one[-\s]?time|\botp\b|login\s*code|auth(?:entication)?\s*code|c[oó]digo\s+de\s+verificaci/i;
+const OTP_NEAR_PATTERNS = [
+  /(?:验证码|驗證碼|校验码|校驗碼|动态码|确认码|確認碼|安全码|安全碼|登录码|登錄碼|一次性代码|一次性代碼|一次性密码|一次性密碼)[^\dA-Za-z]{0,12}([0-9]{3}\s[0-9]{3}|[0-9]{4,8})(?![A-Za-z0-9])/i,
+  /(?<![A-Za-z0-9])([0-9]{3}\s[0-9]{3}|[0-9]{4,8})(?![A-Za-z0-9])[^\n]{0,16}(?:是本次|为本次|验证码|驗證碼|校验码|确认码|確認碼|登录码|登錄碼)/i,
+  /(?:verification|confirmation|security|login|auth(?:entication)?|one[-\s]?time)\s*(?:code|pin|passcode)(?:\s*(?:is|was)\s*)?[^\dA-Za-z]{0,12}([0-9]{3}\s[0-9]{3}|[0-9]{4,8})(?![A-Za-z0-9])/i,
+  /\b(?:otp|passcode|code)(?:\s*(?:is|was)\s*)?[:：]\s*([0-9]{3}\s[0-9]{3}|[0-9]{4,8})(?![A-Za-z0-9])/i,
+];
+const OTP_BRACKET_RE = /[[【(]\s*([0-9]{3}\s[0-9]{3}|[0-9]{6})\s*[\]】)]/;
+const OTP_STANDALONE_LINE_RE = /(?:^|\n)[ \t]*([0-9]{3}\s[0-9]{3}|[0-9]{6})[ \t]*(?:\n|$)/;
 
-/** 从主题与纯文本正文中识别验证码，排除普通年份。 */
+/** 分类尚未返回时的保守正则兜底，排除回复主题与年份。 */
 export function extractOtpCode(subject, text) {
-  const combined = `${subject || ""}\n${(text || "").slice(0, 2400)}`;
+  const subj = String(subject || "").trim();
+  if (OTP_REPLY_PREFIX_RE.test(subj)) return "";
+  const combined = `${subj}\n${String(text || "").slice(0, 2400)}`;
+  const bracket = OTP_BRACKET_RE.exec(subj);
+  if (bracket && bracket[1] && !isLikelyYear(bracket[1])) return bracket[1].trim();
   if (!OTP_HINT_RE.test(combined)) return "";
-  const near = OTP_NEAR_RE.exec(combined);
-  if (near && near[1] && !isLikelyYear(near[1])) return near[1];
-  const matches = [...combined.matchAll(OTP_STANDALONE_RE)];
-  for (const match of matches) {
-    if (match[1] && !isLikelyYear(match[1])) return match[1];
+  for (const re of OTP_NEAR_PATTERNS) {
+    const near = re.exec(combined);
+    if (near && near[1] && !isLikelyYear(near[1])) return near[1].trim();
   }
+  const line = OTP_STANDALONE_LINE_RE.exec(combined);
+  if (line && line[1] && !isLikelyYear(line[1])) return line[1].trim();
   return "";
 }
 
+/** 详情视图：优先采用模型裁决结果；未带 otp 字段时再走保守正则兜底。 */
+export function resolveDetailOtp(detail) {
+  const ai = detail && detail.aiResult;
+  if (ai && typeof ai === "object" && Object.prototype.hasOwnProperty.call(ai, "otp")) {
+    if (OTP_BLOCKED_LABELS.has(ai.label)) return "";
+    return typeof ai.otp === "string" ? ai.otp.trim() : "";
+  }
+  if (ai && OTP_BLOCKED_LABELS.has(ai.label)) return "";
+  return extractOtpCode(detail?.subject, detail?.parsed?.text || "");
+}
+
+/** 列表视图：模型已裁决时以服务端 otp 为准；旧记录或待分类再走保守兜底。 */
+export function resolveListOtp(item) {
+  if (!item) return "";
+  if (OTP_BLOCKED_LABELS.has(item.label)) return "";
+  if (item.otpChecked) return typeof item.otp === "string" ? item.otp.trim() : "";
+  return extractOtpCode(item.subject, item.summary || "");
+}
+
+/** 复制到剪贴板时，纯数字分段码自动去空格与短横线，方便直接粘贴。 */
+export function formatOtpForCopy(code) {
+  const text = String(code || "").trim();
+  if (/^\d+(?:[\s-]\d+)+$/.test(text)) return text.replace(/[\s-]+/g, "");
+  return text;
+}
+
 function isLikelyYear(code) {
-  return /^(?:19|20)\d{2}$/.test(code);
+  return /^(?:19|20)\d{2}$/.test(String(code || "").trim());
 }
 
 /** 生成易读无歧义的 14 位随机初始密码。 */

@@ -1,6 +1,9 @@
 // 入口装配：全局事件监听、键盘流快捷键、15 秒增量轮询。
 import { state } from "./state.js";
 import {
+  accountHubBtn,
+  accountModal,
+  accountModalCloseBtn,
   adminScopeSelect,
   appEl,
   backListBtn,
@@ -17,12 +20,12 @@ import {
   confirmModal,
   composeSheet,
   detailModelVerdict,
-  detailOtpBtn,
   detailVerdictSelect,
   dlqRefreshBtn,
   domainFilterSelect,
   emptyTrashBtn,
   filterSelect,
+  hubGotoDlqBtn,
   mailDetailEl,
   mailEmptyEl,
   mailLoadingEl,
@@ -30,7 +33,6 @@ import {
   listEl,
   loginForm,
   logoutBtn,
-  navDlqBtn,
   navInboxBtn,
   navSendBtn,
   navSettingsBtn,
@@ -48,9 +50,6 @@ import {
   refreshBtn,
   resetModal,
   retryAllBtn,
-  shortcutCloseBtn,
-  shortcutModal,
-  shortcutsBtn,
   spamReadAllBtn,
   spamRefreshBtn,
   themeBtn,
@@ -68,7 +67,7 @@ import {
   refreshUnread,
   setMobilePane,
   toast,
-  toggleShortcutModal,
+  toggleAccountModal,
 } from "./ui.js";
 import { debounce, hashMailId } from "./util.js";
 import { initTheme, revealApp, setPromoMode, setStarredMode, switchNav, toggleTheme } from "./shell.js";
@@ -163,12 +162,22 @@ loginForm.addEventListener("submit", (e) => {
   void signIn();
 });
 
-logoutBtn.addEventListener("click", () => void signOut());
+logoutBtn?.addEventListener("click", () => {
+  toggleAccountModal(false);
+  void signOut();
+});
 themeBtn.addEventListener("click", () => toggleTheme());
-shortcutsBtn?.addEventListener("click", () => toggleShortcutModal());
-shortcutCloseBtn?.addEventListener("click", () => toggleShortcutModal(false));
-shortcutModal?.addEventListener("click", (e) => {
-  if (e.target === shortcutModal) toggleShortcutModal(false);
+accountHubBtn?.addEventListener("click", () => {
+  const opened = toggleAccountModal();
+  if (opened && state.isAdmin) void updateDlqBadge();
+});
+accountModalCloseBtn?.addEventListener("click", () => toggleAccountModal(false));
+accountModal?.addEventListener("click", (e) => {
+  if (e.target === accountModal) toggleAccountModal(false);
+});
+hubGotoDlqBtn?.addEventListener("click", () => {
+  toggleAccountModal(false);
+  void switchNav("dlq");
 });
 
 navInboxBtn?.addEventListener("click", () => void switchNav("inbox"));
@@ -184,7 +193,6 @@ navSettingsBtn?.addEventListener("click", () => {
   }
   void switchNav("settings");
 });
-navDlqBtn?.addEventListener("click", () => void switchNav("dlq"));
 
 // 列表头与过滤器事件
 refreshBtn?.addEventListener("click", () => void reloadMessages());
@@ -216,6 +224,7 @@ adminScopeSelect?.addEventListener("change", () => {
   clearOpenLetter();
   void refreshUnread();
   if (state.currentView === "trash") void reloadTrash();
+  else if (state.currentView === "send") void loadSendPage();
   else void reloadMessages();
 });
 
@@ -223,6 +232,7 @@ domainFilterSelect?.addEventListener("change", () => {
   state.domainFilter = domainFilterSelect.value || "";
   clearOpenLetter();
   if (state.currentView === "trash") void reloadTrash();
+  else if (state.currentView === "send") renderSentList();
   else void reloadMessages();
 });
 
@@ -234,10 +244,6 @@ btnBlockMail?.addEventListener("click", () => void handleBlockMail());
 btnRestoreMail?.addEventListener("click", () => void handleRestoreMail());
 btnDeleteMail?.addEventListener("click", () => void handleDeleteMail());
 btnExpandPreview?.addEventListener("click", () => toggleSandboxExpand());
-detailOtpBtn?.addEventListener("click", () => {
-  const code = detailOtpBtn.dataset.code || "";
-  if (code) void copyText(code, "疑似验证码已复制");
-});
 
 backListBtn?.addEventListener("click", () => setMobilePane("list"));
 document.querySelector("#btn-back-dlq")?.addEventListener("click", () => setMobilePane("list"));
@@ -572,9 +578,9 @@ function handleEscapeInSearch(target) {
 
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (shortcutModal && !shortcutModal.hidden) {
+    if (accountModal && !accountModal.hidden) {
       e.preventDefault();
-      toggleShortcutModal(false);
+      toggleAccountModal(false);
       return;
     }
     if (resetModal && !resetModal.hidden) {
@@ -604,10 +610,11 @@ window.addEventListener("keydown", (e) => {
 
   if (e.key === "?") {
     e.preventDefault();
-    toggleShortcutModal();
+    const opened = toggleAccountModal();
+    if (opened && state.isAdmin) void updateDlqBadge();
     return;
   }
-  if (shortcutModal && !shortcutModal.hidden) return;
+  if (accountModal && !accountModal.hidden) return;
 
   if (e.key === "/") {
     const searchEl = activeSearchInput();
@@ -718,6 +725,7 @@ export async function pollLive() {
         (item, index) =>
           item.id === state.currentMessages[index]?.id &&
           item.label === state.currentMessages[index]?.label &&
+          item.otp === state.currentMessages[index]?.otp &&
           item.read === state.currentMessages[index]?.read &&
           Boolean(item.starred) === Boolean(state.currentMessages[index]?.starred),
       );

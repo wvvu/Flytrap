@@ -2,6 +2,7 @@
 import { setRevealApp, setSwitchNav } from "./nav.js";
 import { state } from "./state.js";
 import {
+  accountHubBtn,
   adminScopeSelect,
   appEl,
   btnEmptyCompose,
@@ -13,7 +14,6 @@ import {
   mailEmptyCopy,
   mailEmptyEl,
   mailLoadingEl,
-  navDlqBtn,
   navInboxBtn,
   navSendBtn,
   navSettingsBtn,
@@ -68,18 +68,29 @@ export function toggleTheme() {
 
 export function syncSubfiltersBar(view) {
   if (!streamSubfilters) return;
-  const inMailRoom = view === "inbox" || view === "spam" || view === "trash";
+  const inMailRoom = view === "inbox" || view === "spam" || view === "send" || view === "trash";
   if (!inMailRoom) {
     streamSubfilters.hidden = true;
     return;
   }
 
   const targetHeader =
-    view === "spam" ? streamSpamHeader : view === "trash" ? streamTrashHeader : streamInboxHeader;
-  if (targetHeader && streamSubfilters.parentElement !== targetHeader) {
+    view === "spam"
+      ? streamSpamHeader
+      : view === "send"
+        ? streamSendHeader
+        : view === "trash"
+          ? streamTrashHeader
+          : streamInboxHeader;
+  if (targetHeader) {
     const searchForm = targetHeader.querySelector("form.search-box");
-    if (searchForm) targetHeader.insertBefore(streamSubfilters, searchForm);
-    else targetHeader.append(streamSubfilters);
+    if (searchForm) {
+      if (streamSubfilters.parentElement !== targetHeader || streamSubfilters.nextElementSibling !== searchForm) {
+        targetHeader.insertBefore(streamSubfilters, searchForm);
+      }
+    } else if (streamSubfilters.parentElement !== targetHeader) {
+      targetHeader.append(streamSubfilters);
+    }
   }
 
   const showScope = state.isAdmin && state.hasMembers;
@@ -111,8 +122,13 @@ export function syncSubfiltersBar(view) {
 
 export function placeMailSearch(view) {
   if (!filtersForm) return;
-  if (view === "spam" && streamSpamHeader) streamSpamHeader.append(filtersForm);
-  else if (streamInboxHeader) streamInboxHeader.append(filtersForm);
+  if (view === "spam" && streamSpamHeader) {
+    const filterBar = streamSpamHeader.querySelector(".stream-filter-bar");
+    if (filterBar) streamSpamHeader.insertBefore(filtersForm, filterBar);
+    else streamSpamHeader.append(filtersForm);
+  } else if (streamInboxHeader) {
+    streamInboxHeader.append(filtersForm);
+  }
 }
 
 export function setEmptyCopy(view) {
@@ -183,7 +199,7 @@ export async function switchNav(view) {
   setViewTitle(view);
   if (appEl) delete appEl.dataset.layout;
 
-  const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navUsersBtn, navSettingsBtn, navDlqBtn];
+  const navBtns = [navInboxBtn, navSendBtn, navSpamBtn, navTrashBtn, navUsersBtn, navSettingsBtn, accountHubBtn];
   navBtns.forEach((b) => b?.classList.remove("active"));
   const viewPanels = [viewMail, viewDlq, viewSettings];
   viewPanels.forEach((p) => {
@@ -245,7 +261,7 @@ export async function switchNav(view) {
     viewMail.hidden = false;
     await reloadTrash();
   } else if (view === "dlq") {
-    navDlqBtn?.classList.add("active");
+    accountHubBtn?.classList.add("active");
     if (streamDlqHeader) streamDlqHeader.hidden = false;
     if (viewDlq) viewDlq.hidden = false;
     await loadDlqJobs(state.currentDlqScope);

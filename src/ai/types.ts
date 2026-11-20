@@ -13,6 +13,7 @@ export const modelOutputSchema = z
     summary: z.string().min(1).max(2000),
     tags: z.array(z.string().min(1).max(64)).max(20),
     signals: z.array(signalSchema).max(30),
+    otp: z.string().trim().max(32).nullable().optional(),
   })
   .strict();
 
@@ -30,6 +31,7 @@ export const aiResultSchema = z
     summary: z.string().min(1).max(2000),
     tags: z.array(z.string()).max(20),
     signals: z.array(signalSchema).max(30),
+    otp: z.string().trim().max(32).nullable().optional(),
     raw: z.record(z.string(), z.unknown()).optional(),
     previous: z.unknown().optional(),
     manualOverride: z.boolean().optional(),

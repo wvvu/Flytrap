@@ -1,18 +1,31 @@
-// 通用界面辅助：通知条、确认框、快捷键面板、角色化显隐、未读数同步。
+// 通用界面辅助：通知条、确认框、账户快捷面板、角色化显隐、未读数同步。
 import { VIEW_TITLES } from "./constants.js";
 import { state } from "./state.js";
 import {
+  accountAvatarChar,
+  accountHubBtn,
+  accountModal,
   appEl,
+  badgeDlq,
   confirmCancel,
   confirmModal,
   confirmOk,
   confirmText,
+  hubAvatarChar,
+  hubDlqDesc,
+  hubDlqDot,
+  hubDlqSection,
+  hubDlqTitle,
+  hubGotoDlqBtn,
+  hubUserName,
+  hubUserRole,
+  hubUserSub,
+  hubVersion,
   loginEl,
   logoutBtn,
-  navDlqBtn,
   navUsersBtn,
+  promoUnreadBadge,
   readAllBtn,
-  shortcutModal,
   spamReadAllBtn,
   streamTitle,
   toastEl,
@@ -62,17 +75,84 @@ export function syncReadAllButtons() {
   if (spamReadAllBtn) {
     spamReadAllBtn.hidden = state.unreadSpam <= 0;
   }
+  if (promoUnreadBadge) {
+    const count = state.unreadPromo || 0;
+    promoUnreadBadge.hidden = count <= 0;
+    promoUnreadBadge.textContent = count > 99 ? "99+" : String(count);
+  }
 }
 
 export function applyRoleUI() {
   if (navUsersBtn) navUsersBtn.hidden = !state.isAdmin;
-  if (navDlqBtn) navDlqBtn.hidden = !state.isAdmin;
+  if (hubDlqSection) hubDlqSection.hidden = !state.isAdmin;
+  const isOwner = state.sessionUserId === "owner";
+  const roleLabel = isOwner ? "主管理员" : state.isAdmin ? "协同管理员" : "成员";
+  const name = state.displayName || state.sessionUser || "admin";
+  const initial = (Array.from(name.trim())[0] || "A").toUpperCase();
+  if (accountAvatarChar) accountAvatarChar.textContent = initial;
+  if (hubAvatarChar) hubAvatarChar.textContent = initial;
+  if (accountHubBtn) {
+    accountHubBtn.dataset.role = isOwner ? "owner" : state.sessionRole;
+  }
+  if (hubUserName) hubUserName.textContent = name;
+  if (hubUserRole) hubUserRole.textContent = roleLabel;
+  if (hubUserSub) {
+    const parts = [];
+    if (state.sessionUser && state.displayName && state.displayName !== state.sessionUser) {
+      parts.push("@" + state.sessionUser);
+    }
+    if (Array.isArray(state.allocatedMailboxes) && state.allocatedMailboxes.length > 0) {
+      parts.push(`已分配 ${state.allocatedMailboxes.length} 项地址规则`);
+    } else if (isOwner) {
+      parts.push("全域兜底与系统管理");
+    }
+    hubUserSub.textContent = parts.join(" · ");
+    hubUserSub.hidden = parts.length === 0;
+  }
   if (logoutBtn) {
-    const roleLabel = state.isAdmin ? "管理员" : "成员";
     logoutBtn.title = state.sessionUser ? `退出 (${state.sessionUser} · ${roleLabel})` : "退出";
   }
+  const versionText = state.appVersion ? `v${state.appVersion}` : "";
   const verEl = document.querySelector("#settings-version");
-  if (verEl) verEl.textContent = state.appVersion ? `v${state.appVersion}` : "";
+  if (verEl) verEl.textContent = versionText;
+  if (hubVersion) hubVersion.textContent = versionText;
+  syncAccountHubDlq(state.failureCounts);
+}
+
+export function syncAccountHubDlq(summary) {
+  const counts = summary || state.failureCounts || {};
+  const stopped = (counts.dead || 0) + (counts.failed || 0);
+  const retrying = counts.retrying || 0;
+  const showAlert = state.isAdmin && stopped > 0;
+  if (badgeDlq) {
+    badgeDlq.hidden = !showAlert;
+    if (showAlert) badgeDlq.textContent = stopped > 99 ? "99+" : String(stopped);
+  }
+  if (accountHubBtn) {
+    accountHubBtn.classList.toggle("has-alert", showAlert);
+    accountHubBtn.title = showAlert
+      ? `账户与快捷面板（${stopped} 项处理失败待查看）`
+      : "账户与快捷面板 (?)";
+  }
+  if (hubDlqSection) hubDlqSection.classList.toggle("is-alert", showAlert);
+  if (hubDlqDot) hubDlqDot.classList.toggle("is-alert", showAlert);
+  if (hubDlqTitle) {
+    hubDlqTitle.textContent = showAlert ? `${stopped} 项处理失败待处理` : "处理失败通知";
+  }
+  if (hubDlqDesc) {
+    if (showAlert) {
+      hubDlqDesc.textContent = retrying > 0
+        ? `另有 ${retrying} 步等待自动重试，可前往查看详情`
+        : "后台任务已停止，可前往失败队列重试或放过";
+    } else if (retrying > 0) {
+      hubDlqDesc.textContent = `当前无停住任务，${retrying} 步正在等待重试`;
+    } else {
+      hubDlqDesc.textContent = "当前无停住任务";
+    }
+  }
+  if (hubGotoDlqBtn) {
+    hubGotoDlqBtn.classList.toggle("btn-alert-jump", showAlert);
+  }
 }
 
 export async function refreshUnread() {
@@ -113,10 +193,11 @@ export function showApp() {
   appEl.style.display = "grid";
 }
 
-export function toggleShortcutModal(force) {
-  if (!shortcutModal) return;
-  const next = typeof force === "boolean" ? force : shortcutModal.hidden;
-  shortcutModal.hidden = !next;
+export function toggleAccountModal(force) {
+  if (!accountModal) return false;
+  const next = typeof force === "boolean" ? force : accountModal.hidden;
+  accountModal.hidden = !next;
+  return next;
 }
 
 export function isTypingTarget(target) {

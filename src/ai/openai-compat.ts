@@ -49,6 +49,7 @@ export function createOpenAiClassifier(options: OpenAiCompatOptions): Classifier
               summary: output.summary,
               tags: output.tags,
               signals: output.signals,
+              ...(output.otp !== undefined ? { otp: output.otp || null } : {}),
               raw: output,
             });
           } catch (err) {

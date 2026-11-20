@@ -6,7 +6,7 @@ import test from "node:test";
 import { buildUserMessage, readPrompt } from "../src/ai/prompt.js";
 import { createOpenAiClassifier } from "../src/ai/openai-compat.js";
 import { aiResultSchema, finalizeAiResult, parseModelOutput } from "../src/ai/types.js";
-import { applyDeterministicGuardrails } from "../src/worker/job-classify.js";
+import { applyDeterministicGuardrails, verifyExtractedOtp } from "../src/worker/job-classify.js";
 import { gzipCodec } from "../src/compress.js";
 import { openDatabase } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
@@ -151,6 +151,51 @@ test("auth failure stays a fact, and only a classifier instruction moves legit m
   assert.ok(injectionGuarded.tags.includes("prompt-injection"));
   assert.ok(injectionGuarded.signals.some((s: { name: string }) => s.name === "提示词注入"));
   assert.match(injectionGuarded.summary, /已改记为钓鱼/);
+});
+
+test("OTP guardrail verifies verbatim presence and suppresses phishing or hallucinated codes", () => {
+  assert.equal(verifyExtractedOtp("538 173", "Supercell ID登录[538 173]", "欢迎回来668833！"), "538 173");
+  assert.equal(verifyExtractedOtp("K9X4M", "Steam Guard", "Your code is K9X4M"), "K9X4M");
+  assert.equal(verifyExtractedOtp("999999", "Supercell ID登录[538 173]", "欢迎回来668833！"), null);
+  assert.equal(verifyExtractedOtp("2026", "Notice 2026", "Copyright 2026"), null);
+  assert.equal(verifyExtractedOtp("login", "login code", "please login"), null);
+
+  const baseAi = {
+    schema: 1 as const,
+    prompt_id: "classify-v1",
+    model: "test",
+    provider: "test",
+    at: "2026-09-24T00:00:00.000Z",
+    label: "legit" as const,
+    confidence: 0.98,
+    summary: "Supercell 登录验证码",
+    tags: ["otp"],
+    signals: [],
+    otp: "538 173",
+  };
+
+  const kept = applyDeterministicGuardrails(
+    { ...emptyFacts(), subject: "Supercell ID登录[538 173]", text: "欢迎回来668833！" },
+    baseAi,
+  );
+  assert.equal(kept.otp, "538 173");
+
+  const hallucinated = applyDeterministicGuardrails(
+    { ...emptyFacts(), subject: "Supercell ID登录[002 726]", text: "欢迎回来668833！" },
+    baseAi,
+  );
+  assert.equal(hallucinated.otp, null);
+
+  const phishDropped = applyDeterministicGuardrails(
+    { ...emptyFacts(), subject: "Verify 538 173", text: "Code 538 173" },
+    { ...baseAi, label: "phish" as const },
+  );
+  assert.equal(phishDropped.otp, null);
+
+  const parsedWithOtp = parseModelOutput({ ...valid, label: "legit", otp: "538 173" });
+  assert.equal(parsedWithOtp.otp, "538 173");
+  const parsedNullOtp = parseModelOutput({ ...valid, otp: null });
+  assert.equal(parsedNullOtp.otp, null);
 });
 
 test("openai-compat validates the completion and retries without response_format", async () => {

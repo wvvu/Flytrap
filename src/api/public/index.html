@@ -109,9 +109,8 @@
       <!-- 第一列：全局主功能轨 -->
       <nav class="rail" aria-label="全局导航">
         <div class="rail-top">
-          <div class="logo-mark" id="rail-mark" title="邮箱"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"></use></svg></div>
-          <button type="button" class="rail-compose" id="btn-rail-compose" title="写信 (C)">
-            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-edit"></use></svg>
+          <button type="button" class="rail-btn rail-btn-compose" id="btn-rail-compose" title="写信 (C)">
+            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-edit"></use></svg></span>
             <span class="label">写信</span>
           </button>
           <button type="button" class="rail-btn active" id="nav-inbox" title="收件箱">
@@ -132,24 +131,16 @@
           </button>
         </div>
         <div class="rail-bottom">
-          <button type="button" class="rail-btn-sm" id="nav-users" title="成员与邮箱" hidden>
-            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-users"></use></svg></span>
-          </button>
           <button type="button" class="rail-btn-sm" id="nav-settings" title="设置">
             <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"></use></svg></span>
-          </button>
-          <button type="button" class="rail-btn-sm" id="btn-shortcuts" title="快捷键 (?)">
-            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-keyboard"></use></svg></span>
           </button>
           <button type="button" class="rail-btn-sm" id="btn-theme" title="切换深浅色">
             <span class="icon" id="theme-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sun"></use></svg></span>
           </button>
-          <button type="button" class="rail-btn-sm" id="nav-dlq" title="处理失败">
-            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-alert"></use></svg></span>
+          <div class="rail-divider" aria-hidden="true"></div>
+          <button type="button" class="rail-avatar-btn" id="btn-account-hub" title="账户与快捷面板 (?)" aria-label="账户与快捷面板">
+            <span id="account-avatar-char">A</span>
             <span class="badge badge-alert" id="badge-dlq" hidden>0</span>
-          </button>
-          <button type="button" class="rail-btn-sm" id="logout" title="退出">
-            <span class="icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-logout"></use></svg></span>
           </button>
         </div>
       </nav>
@@ -162,7 +153,7 @@
             <h2 id="stream-title">收件箱</h2>
             <div class="stream-actions">
               <button type="button" id="btn-read-all" class="pill pill-subtle" title="当前列表全部标为已读" hidden>全部已读</button>
-              <button type="button" id="btn-promo" class="pill pill-promo" title="只看推广" aria-pressed="false">推广</button>
+              <button type="button" id="btn-promo" class="pill pill-promo" title="只看推广" aria-pressed="false">推广<span id="promo-unread-badge" class="pill-corner-badge" hidden></span></button>
               <button type="button" id="btn-starred-filter" class="pill pill-star" title="只看星标" aria-pressed="false">星标</button>
               <button type="button" id="btn-refresh" class="btn-icon" title="刷新 (R)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
@@ -172,7 +163,7 @@
               <option value="mine">本号与未分配</option>
               <option value="all">全站全部邮件</option>
             </select>
-            <select id="domain-filter-select" class="stream-mini-select" title="按收件域名筛选" hidden>
+            <select id="domain-filter-select" class="stream-mini-select" title="按域名筛选" hidden>
               <option value="">全部域名</option>
             </select>
           </div>
@@ -294,7 +285,6 @@
                   <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-star"></use></svg>
                 </button>
                 <h1 id="detail-subject">(无主题)</h1>
-                <button type="button" id="detail-otp-btn" class="otp-pill" title="点击复制疑似验证码" hidden></button>
               </div>
               <div class="meta-grid">
                 <div class="meta-item"><span class="meta-label">发件人：</span><span id="detail-from" class="meta-val"></span></div>
@@ -367,14 +357,6 @@
                   <iframe id="mail-sandbox" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="邮件正文预览"></iframe>
                 </div>
               </section>
-
-              <details class="ai-section collapsible-section" id="section-signals">
-                <summary class="collapsible-summary">
-                  <span class="collapsible-title">依据</span>
-                  <span class="badge" id="signals-count">0</span>
-                </summary>
-                <div id="signals-list" class="signals-grid"></div>
-              </details>
 
               <details class="ai-section collapsible-section" id="section-urls">
                 <summary class="collapsible-summary">
@@ -829,23 +811,61 @@
       </form>
     </aside>
 
-    <div id="shortcut-modal" class="modal" hidden>
-      <div class="modal-card shortcut-card" role="dialog" aria-modal="true" aria-labelledby="shortcut-title">
-        <div class="reset-head">
-          <h2 id="shortcut-title">键盘快捷键</h2>
-          <button type="button" id="btn-shortcut-close" class="reset-close" aria-label="关闭">×</button>
+    <div id="account-modal" class="modal" hidden>
+      <div class="modal-card hub-card" role="dialog" aria-modal="true" aria-labelledby="hub-user-name">
+        <header class="hub-head">
+          <div class="hub-identity">
+            <span class="hub-avatar" id="hub-avatar-char" aria-hidden="true">A</span>
+            <div class="hub-identity-copy">
+              <div class="hub-name-row">
+                <h2 id="hub-user-name">admin</h2>
+                <span class="hub-role-pill" id="hub-user-role">管理员</span>
+              </div>
+              <p class="hub-sub" id="hub-user-sub"></p>
+            </div>
+          </div>
+          <div class="hub-head-actions">
+            <button type="button" id="logout" class="btn-sm btn-danger-ghost" title="退出登录">退出登录</button>
+            <button type="button" id="btn-hub-close" class="reset-close" aria-label="关闭">×</button>
+          </div>
+        </header>
+
+        <div id="hub-modules" class="hub-modules">
+          <section class="hub-section" id="hub-dlq-section" hidden>
+            <div class="hub-notice-row">
+              <div class="hub-notice-copy">
+                <span class="hub-dot" id="hub-dlq-dot" aria-hidden="true"></span>
+                <div>
+                  <p class="hub-notice-title" id="hub-dlq-title">处理失败通知</p>
+                  <p class="hub-notice-desc" id="hub-dlq-desc">当前无停住任务</p>
+                </div>
+              </div>
+              <button type="button" id="btn-hub-goto-dlq" class="btn-sm">跳转</button>
+            </div>
+          </section>
+
+          <section class="hub-section" id="hub-shortcuts-section">
+            <div class="hub-section-head">
+              <h3>键盘快捷键</h3>
+              <kbd>?</kbd>
+            </div>
+            <div class="shortcut-grid">
+              <div class="shortcut-row"><span>下一封 / 上一封</span><span><kbd>J</kbd> <kbd>K</kbd></span></div>
+              <div class="shortcut-row"><span>聚焦搜索框</span><span><kbd>/</kbd></span></div>
+              <div class="shortcut-row"><span>清空搜索 / 关闭弹窗</span><span><kbd>Esc</kbd></span></div>
+              <div class="shortcut-row"><span>打开悬浮写信窗口</span><span><kbd>C</kbd></span></div>
+              <div class="shortcut-row"><span>刷新当前列表</span><span><kbd>R</kbd></span></div>
+              <div class="shortcut-row"><span>当前信件标为未读</span><span><kbd>U</kbd></span></div>
+              <div class="shortcut-row"><span>星标切换</span><span><kbd>S</kbd></span></div>
+              <div class="shortcut-row"><span>写信框内直接发出</span><span><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span></div>
+              <div class="shortcut-row"><span>打开或关闭此面板</span><span><kbd>?</kbd></span></div>
+            </div>
+          </section>
         </div>
-        <div class="shortcut-grid">
-          <div class="shortcut-row"><span>下一封 / 上一封</span><span><kbd>J</kbd> <kbd>K</kbd></span></div>
-          <div class="shortcut-row"><span>聚焦搜索框</span><span><kbd>/</kbd></span></div>
-          <div class="shortcut-row"><span>清空搜索 / 关闭弹窗</span><span><kbd>Esc</kbd></span></div>
-          <div class="shortcut-row"><span>打开悬浮写信窗口</span><span><kbd>C</kbd></span></div>
-          <div class="shortcut-row"><span>刷新当前列表</span><span><kbd>R</kbd></span></div>
-          <div class="shortcut-row"><span>当前信件标为未读</span><span><kbd>U</kbd></span></div>
-          <div class="shortcut-row"><span>星标切换</span><span><kbd>S</kbd></span></div>
-          <div class="shortcut-row"><span>写信框内直接发出</span><span><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span></div>
-          <div class="shortcut-row"><span>打开或关闭此面板</span><span><kbd>?</kbd></span></div>
-        </div>
+
+        <footer class="hub-foot">
+          <span id="hub-version" class="version-foot"></span>
+        </footer>
       </div>
     </div>
 

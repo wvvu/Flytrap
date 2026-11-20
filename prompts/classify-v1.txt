@@ -35,3 +35,4 @@ Keys only:
 - summary: one or two Chinese sentences, at most 400 characters. Say who it claims to be and what it wants. Do not paste the body, headers, or full URLs. Do not say the sender is unknown because there is no mailbox note.
 - tags: short English tokens, at most 20
 - signals: array of { "name": string, "value": string } drawn only from facts in the user message. Do not invent domains, attachments, or notes.
+- otp: string or null. If this message delivers an active login, verification, or security one-time code for the recipient, copy the exact code string as shown (for example "538 173" or "K9X4M"); otherwise null. Never extract usernames, order numbers, amounts, years, or codes from replies or phishing.

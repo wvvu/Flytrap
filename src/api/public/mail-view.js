@@ -17,7 +17,6 @@ import {
   btnTrashMail,
   detailFrom,
   detailModelVerdict,
-  detailOtpBtn,
   detailSubject,
   detailSummary,
   detailTime,
@@ -37,10 +36,7 @@ import {
   rawHeaders,
   sandboxWrap,
   sectionAttachments,
-  sectionSignals,
   sectionUrls,
-  signalsCountEl,
-  signalsList,
   threadBox,
   threadList,
   trashQueryInput,
@@ -64,14 +60,15 @@ import {
 } from "./ui.js";
 import {
   extractEmail,
-  extractOtpCode,
   formatBytes,
   formatFrom,
   formatFullTime,
+  formatOtpForCopy,
   formatRecipients,
   formatShortTime,
   outboxStatus,
   replyAddress,
+  resolveListOtp,
 } from "./util.js";
 import { showLogin } from "./auth.js";
 import { labelName, renderBlockList } from "./settings-view.js";
@@ -251,31 +248,31 @@ export function createMailListItem(item) {
 
   line1.append(fromWrap, time, starBtn);
 
+  const line2 = document.createElement("div");
+  line2.className = "item-line2";
+
   const subject = document.createElement("p");
   subject.className = "item-subject";
   subject.textContent = item.subject || "(无主题)";
 
-  const line3 = document.createElement("div");
-  line3.className = "item-line3";
+  const badges = document.createElement("div");
+  badges.className = "item-badges";
 
-  const snippet = document.createElement("span");
-  snippet.className = "item-snippet";
-  snippet.hidden = true;
-
-  const otpCode = extractOtpCode(item.subject, item.summary || "");
+  const otpCode = resolveListOtp(item);
   let hasOtp = false;
   if (otpCode) {
     hasOtp = true;
     const otpBtn = document.createElement("button");
     otpBtn.type = "button";
     otpBtn.className = "otp-pill";
-    otpBtn.textContent = "疑似验证码 " + otpCode;
-    otpBtn.title = "点击复制疑似验证码";
+    otpBtn.textContent = "验证码 " + otpCode;
+    otpBtn.title = "点击复制验证码";
     otpBtn.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      void copyText(otpCode, "验证码已复制");
+      const copyVal = formatOtpForCopy(otpCode);
+      void copyText(copyVal, `验证码 ${copyVal} 已复制`);
     });
-    line3.append(otpBtn);
+    badges.append(otpBtn);
   }
 
   const tag = document.createElement("span");
@@ -286,10 +283,11 @@ export function createMailListItem(item) {
   if (item.manualOverride) tag.dataset.manual = "1";
   tag.textContent = named ? labelName(item.label) + (item.manualOverride ? " 已改" : "") : "";
 
-  line3.hidden = !named && !hasOtp;
-  line3.append(snippet, tag);
+  badges.hidden = !named && !hasOtp;
+  badges.append(tag);
 
-  card.append(line1, subject, line3);
+  line2.append(subject, badges);
+  card.append(line1, line2);
   card.addEventListener("click", () => void selectMail(item.id));
   return card;
 }
@@ -371,7 +369,6 @@ export async function selectMail(id, options = {}) {
   if (detailVerdictSelect) detailVerdictSelect.hidden = false;
   if (btnReply) btnReply.hidden = true;
   if (btnMarkUnread) btnMarkUnread.hidden = true;
-  if (detailOtpBtn) detailOtpBtn.hidden = true;
   if (threadBox) threadBox.hidden = true;
   state.allowExternalImages = false;
   state.sandboxExpanded = false;
@@ -385,7 +382,6 @@ export async function selectMail(id, options = {}) {
   if (guard) guard.textContent = "";
   if (!options.keepListOnNarrow) setMobilePane("detail");
 
-  if (sectionSignals) sectionSignals.open = false;
   if (sectionUrls) sectionUrls.open = false;
 
   document.querySelectorAll(".mail-item").forEach((el) => {
@@ -452,19 +448,6 @@ export async function selectMail(id, options = {}) {
     if (verdictPercent) verdictPercent.textContent = Math.round(confidence * 100) + "%";
     if (detailSummary) detailSummary.textContent = detail.aiResult?.summary || "尚未分类";
 
-    const plainText = detail.parsed?.text || "";
-    const detectedOtp = extractOtpCode(detail.subject, plainText);
-    if (detailOtpBtn) {
-      if (detectedOtp) {
-        detailOtpBtn.hidden = false;
-        detailOtpBtn.textContent = "疑似验证码 " + detectedOtp + " · 复制";
-        detailOtpBtn.dataset.code = detectedOtp;
-      } else {
-        detailOtpBtn.hidden = true;
-        detailOtpBtn.dataset.code = "";
-      }
-    }
-
     const detailTags = document.querySelector("#detail-tags");
     if (detailTags) {
       detailTags.replaceChildren();
@@ -475,29 +458,6 @@ export async function selectMail(id, options = {}) {
         chip.className = "mini-tag";
         chip.textContent = name;
         detailTags.append(chip);
-      }
-    }
-
-    signalsList.replaceChildren();
-    const signals = detail.aiResult?.signals || [];
-    if (signalsCountEl) signalsCountEl.textContent = String(signals.length);
-    if (signals.length === 0) {
-      const emptySig = document.createElement("span");
-      emptySig.className = "muted";
-      emptySig.textContent = "没有额外依据";
-      signalsList.append(emptySig);
-    } else {
-      for (const sig of signals) {
-        const chip = document.createElement("div");
-        chip.className = "signal-chip";
-        const sName = document.createElement("span");
-        sName.className = "signal-name";
-        sName.textContent = sig.name;
-        const sVal = document.createElement("span");
-        sVal.className = "signal-val";
-        sVal.textContent = sig.value;
-        chip.append(sName, sVal);
-        signalsList.append(chip);
       }
     }
 
@@ -559,6 +519,7 @@ export async function selectMail(id, options = {}) {
       authChips.append(createAuthChip("DMARC", auth.dmarc));
     }
 
+    const plainText = detail.parsed?.text || "";
     state.currentMailPlain = plainText;
     plainTextBody.textContent = state.currentMailPlain || "(正文为空)";
     rawHeaders.textContent = formatRawHeaders(detail);
@@ -735,7 +696,6 @@ export function renderThread(items) {
 }
 
 export function showInboundExtras(show) {
-  if (sectionSignals) sectionSignals.hidden = !show;
   if (sectionUrls) sectionUrls.hidden = !show;
   if (sectionAttachments) sectionAttachments.hidden = !show;
 }
@@ -759,7 +719,6 @@ export async function openSentLetter(id) {
 export function paintSentLetter(letter) {
   showInboundExtras(false);
   if (detailVerdictSelect) detailVerdictSelect.hidden = true;
-  if (detailOtpBtn) detailOtpBtn.hidden = true;
   const confidenceChip = document.querySelector(".confidence-chip");
   if (confidenceChip) confidenceChip.hidden = true;
   const detailTags = document.querySelector("#detail-tags");
@@ -788,7 +747,6 @@ export function paintSentLetter(letter) {
   if (detailSummary) {
     detailSummary.textContent = letter.error && letter.status !== "sent" ? status + "。" + letter.error : status;
   }
-  if (signalsList) signalsList.replaceChildren();
   if (urlsList) urlsList.replaceChildren();
   if (attachmentsList) attachmentsList.replaceChildren();
   if (authChips) authChips.replaceChildren();

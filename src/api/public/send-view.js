@@ -657,14 +657,20 @@ export function splitAddresses(raw) {
 export function renderSentList() {
   if (state.currentView !== "send") return;
   listEl.replaceChildren();
-  const items = state.sentItems.filter((item) => sentMatches(item, state.sentQuery));
+  const domain = (state.domainFilter || "").trim().toLowerCase();
+  const items = state.sentItems.filter((item) => sentMatches(item, state.sentQuery, domain));
   if (state.sentItems.length === 0) noticeEl.textContent = "还没有发出的信";
-  else if (items.length === 0) noticeEl.textContent = "没有符合搜索的信";
+  else if (items.length === 0) noticeEl.textContent = domain && !state.sentQuery ? "该域名下还没有发出的信" : "没有符合搜索的信";
   else noticeEl.textContent = "";
   for (const item of items) listEl.append(createSentListItem(item));
 }
 
-export function sentMatches(item, needle) {
+export function sentMatches(item, needle, domain = "") {
+  if (domain) {
+    const fromAddr = extractEmail(item.from || "").toLowerCase();
+    const fromDomain = fromAddr.includes("@") ? fromAddr.slice(fromAddr.lastIndexOf("@") + 1) : "";
+    if (fromDomain !== domain) return false;
+  }
   if (!needle) return true;
   const to = Array.isArray(item.to) ? item.to.join(" ") : "";
   const haystack = [item.subject, item.from, to, item.error, outboxStatus(item)]
@@ -692,31 +698,39 @@ export function createSentListItem(item) {
   time.textContent = formatShortTime(item.createdAt);
   line1.append(who, time);
 
+  const line2 = document.createElement("div");
+  line2.className = "item-line2";
+
   const subject = document.createElement("p");
   subject.className = "item-subject";
   subject.textContent = item.subject || "(无主题)";
 
-  const line3 = document.createElement("div");
-  line3.className = "item-line3";
-  const snippet = document.createElement("span");
-  snippet.className = "item-snippet";
+  const badges = document.createElement("div");
+  badges.className = "item-badges";
+
+  const statusTag = document.createElement("span");
+  statusTag.className = "verdict-tag sent-status-tag";
+  statusTag.dataset.status = item.status || "queued";
+  statusTag.textContent = outboxStatus(item);
   const bits = [outboxStatus(item), item.dkim === "signed" ? "已签名" : "未签名"];
   if (item.error && item.status !== "sent") bits.push(item.error);
-  snippet.textContent = bits.join(" · ");
-  line3.append(snippet);
+  statusTag.title = bits.join(" · ");
+  badges.append(statusTag);
+
   if (item.status === "error") {
     const retry = document.createElement("button");
     retry.type = "button";
-    retry.className = "btn-sm";
+    retry.className = "otp-pill";
     retry.textContent = "再试";
     retry.addEventListener("click", (event) => {
       event.stopPropagation();
       void retrySent(item.id);
     });
-    line3.append(retry);
+    badges.append(retry);
   }
 
-  card.append(line1, subject, line3);
+  line2.append(subject, badges);
+  card.append(line1, line2);
   card.addEventListener("click", () => void selectSentFromList(item.id));
   return card;
 }

@@ -618,8 +618,6 @@ export function applyAppearance(settings) {
       .filter((item) => item && item.address)
       .map((item) => [String(item.address).toLowerCase(), item.name]),
   );
-  const mark = document.querySelector("#rail-mark");
-  if (mark) mark.title = state.panelTitle;
   for (const select of [filterSelect, detailVerdictSelect]) {
     if (!select) continue;
     for (const option of select.options) {
@@ -1254,9 +1252,15 @@ export function fillDkim(card, domain, keys) {
     const line = document.createElement("p");
     line.className = "muted";
     line.textContent = `主机记录: ${key.dnsName || key.selector} · ${dkimAlgLabel(key.algorithm)}`;
+    const details = document.createElement("details");
+    details.className = "dkim-details";
+    const summary = document.createElement("summary");
+    summary.className = "dkim-summary";
+    summary.textContent = "TXT 记录（点击展开）";
     const txt = document.createElement("div");
     txt.className = "dkim-txt";
     txt.textContent = key.txt;
+    details.append(summary, txt);
     const actions = document.createElement("div");
     actions.className = "inline-row";
     actions.append(
@@ -1265,7 +1269,7 @@ export function fillDkim(card, domain, keys) {
       dkimButton("重新生成", () => void generateDkim(domain, key.selector)),
       dkimButton("移除", () => void removeDkim(domain, key.selector)),
     );
-    card.append(line, txt, actions);
+    card.append(line, details, actions);
   }
 }
 
