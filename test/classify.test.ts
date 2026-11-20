@@ -13,6 +13,7 @@ import { migrate } from "../src/db/migrate.js";
 import { enqueueJob } from "../src/db/repos/jobs.js";
 import { insertMessage, saveParsedMessage } from "../src/db/repos/messages.js";
 import type { AppLog } from "../src/log.js";
+import { createBarkNotifier, isBarkUrl } from "../src/notify/bark.js";
 import { createTelegramNotifier } from "../src/notify/telegram.js";
 import { createWebhookNotifier } from "../src/notify/webhook.js";
 import type { NotifyInput } from "../src/notify/types.js";
@@ -330,6 +331,59 @@ test("a telegram failure does not reveal the bot token", async () => {
         panelUrl: "http://127.0.0.1/#/m/m",
       }),
     (err: Error) => err.message === "telegram request failed" && !err.message.includes("secret-token"),
+  );
+});
+
+test("bark notifier posts json with otp copy, url, and never reveals the device key on failure", async () => {
+  assert.equal(isBarkUrl("https://api.day.app/fake-key"), true);
+  assert.equal(isBarkUrl("https://hooks.example/in"), false);
+
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const notifier = createBarkNotifier({
+    url: "https://api.day.app/fake-device-key/",
+    fetchImpl: async (input, init) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      return new Response(JSON.stringify({ code: 200 }), { status: 200 });
+    },
+  });
+  await notifier.notify({
+    messageId: "m1",
+    subject: "登录验证码",
+    from: "GitForge <no-reply@gitforge.example>",
+    label: "legit",
+    confidence: 0.96,
+    summary: "一次性登录验证码 538 173。",
+    otp: "538 173",
+    panelUrl: "https://mail.example/#/m/m1",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, "https://api.day.app/fake-device-key");
+  assert.equal(calls[0]?.body.title, "[验证码 538 173] 登录验证码");
+  assert.equal(calls[0]?.body.subtitle, "GitForge <no-reply@gitforge.example>");
+  assert.equal(calls[0]?.body.body, "一次性登录验证码 538 173。");
+  assert.equal(calls[0]?.body.url, "https://mail.example/#/m/m1");
+  assert.equal(calls[0]?.body.group, "Flytrap");
+  assert.equal(calls[0]?.body.copy, "538173");
+  assert.equal(calls[0]?.body.level, undefined);
+
+  const failing = createBarkNotifier({
+    url: "https://api.day.app/super-secret-bark-key",
+    fetchImpl: async () => {
+      throw new Error("network error https://api.day.app/super-secret-bark-key");
+    },
+  });
+  await assert.rejects(
+    () =>
+      failing.notify({
+        messageId: "m2",
+        subject: "s",
+        from: "a@b.c",
+        label: "phish",
+        confidence: 0.9,
+        summary: "x",
+        panelUrl: "http://127.0.0.1/#/m/m2",
+      }),
+    (err: Error) => err.message === "bark request failed" && !err.message.includes("super-secret-bark-key"),
   );
 });
 

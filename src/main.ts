@@ -12,6 +12,7 @@ import { fallbackAiPool } from "./ai/pool.js";
 import { readAiThinking, readEffectiveAiPool } from "./db/repos/settings.js";
 import { readPrompt } from "./ai/prompt.js";
 import { createMailauthAuthenticator } from "./mail/auth.js";
+import { createBarkNotifier } from "./notify/bark.js";
 import { createTelegramNotifier } from "./notify/telegram.js";
 import { createWebhookNotifier } from "./notify/webhook.js";
 import type { Notifier } from "./notify/types.js";
@@ -165,6 +166,9 @@ async function boot(stops: Array<() => Promise<void>>): Promise<void> {
     const notifiers: Notifier[] = [];
     if (config.notifyWebhookUrl) {
       notifiers.push(createWebhookNotifier({ url: config.notifyWebhookUrl, bearer: config.notifyWebhookBearer }));
+    }
+    if (config.barkUrl) {
+      notifiers.push(createBarkNotifier({ url: config.barkUrl }));
     }
     if (config.telegramBotToken && config.telegramChatId) {
       notifiers.push(createTelegramNotifier({ token: config.telegramBotToken, chatId: config.telegramChatId }));

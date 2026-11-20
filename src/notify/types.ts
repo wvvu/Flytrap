@@ -5,6 +5,7 @@ export interface NotifyInput {
   label: string;
   confidence: number;
   summary: string;
+  otp?: string | null;
   panelUrl: string;
 }
 
@@ -20,6 +21,7 @@ export function notifyPayload(input: NotifyInput): {
   label: string;
   confidence: number;
   summary: string;
+  otp: string | null;
   url: string;
 } {
   return {
@@ -29,12 +31,15 @@ export function notifyPayload(input: NotifyInput): {
     label: input.label,
     confidence: input.confidence,
     summary: input.summary,
+    otp: input.otp ?? null,
     url: input.panelUrl,
   };
 }
 
 export function notifyText(input: NotifyInput): string {
+  const otp = typeof input.otp === "string" ? input.otp.trim() : "";
   return [
+    otp ? `验证码: ${otp}` : "",
     `[${input.label}] (${input.confidence.toFixed(2)})`,
     input.subject ? `Subject: ${input.subject}` : "",
     input.from ? `From: ${input.from}` : "",

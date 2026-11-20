@@ -24,8 +24,12 @@ export const SETTING_OWNER_RECOVERY_EMAIL = "owner_recovery_email";
 export const SETTING_BLOCKED_SENDERS = "blocked_senders";
 export const SETTING_NOTIFY_WEBHOOK_URL = "notify_webhook_url";
 export const SETTING_NOTIFY_WEBHOOK_BEARER = "notify_webhook_bearer";
+export const SETTING_NOTIFY_WEBHOOK_FORMAT = "notify_webhook_format";
 export const SETTING_NOTIFY_WEBHOOK_LABELS = "notify_webhook_labels";
 export const SETTING_NOTIFY_WEBHOOK_MIN_CONFIDENCE = "notify_webhook_min_confidence";
+
+export const WEBHOOK_FORMATS = ["auto", "bark", "json"] as const;
+export type WebhookFormat = (typeof WEBHOOK_FORMATS)[number];
 
 export interface ResetSeal {
   salt: string;
@@ -228,6 +232,7 @@ export interface PersonalNotifySettings {
   notifyMinConfidence: number;
   notifyWebhookUrl: string;
   notifyWebhookBearer: string;
+  notifyWebhookFormat: WebhookFormat;
 }
 
 /** Per-person webhook. Keys follow userKey, separate from the global notify policy. */
@@ -237,6 +242,7 @@ export function readPersonalNotifySettings(db: Db, userId: string): PersonalNoti
     notifyMinConfidence: readPersonalNotifyMinConfidence(db, userId),
     notifyWebhookUrl: (readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_URL)) ?? "").trim(),
     notifyWebhookBearer: (readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_BEARER)) ?? "").trim(),
+    notifyWebhookFormat: readPersonalWebhookFormat(db, userId),
   };
 }
 
@@ -248,6 +254,7 @@ export function savePersonalNotifySettings(
     minConfidence: number;
     webhookUrl: string;
     webhookBearer?: string;
+    webhookFormat?: WebhookFormat;
   },
   now: number,
 ): PersonalNotifySettings {
@@ -260,11 +267,19 @@ export function savePersonalNotifySettings(
   const webhookBearer = input.webhookBearer === undefined
     ? current.notifyWebhookBearer
     : input.webhookBearer.trim().slice(0, 512);
+  const webhookFormat: WebhookFormat = input.webhookFormat === undefined
+    ? current.notifyWebhookFormat
+    : WEBHOOK_FORMATS.includes(input.webhookFormat)
+      ? input.webhookFormat
+      : (() => {
+          throw new SettingsError("invalid webhook format");
+        })();
   const write = db.transaction(() => {
     writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_LABELS), JSON.stringify(labels), now);
     writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_MIN_CONFIDENCE), String(input.minConfidence), now);
     writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_URL), webhookUrl, now);
     writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_BEARER), webhookBearer, now);
+    writeRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_FORMAT), webhookFormat, now);
   });
   write();
   return readPersonalNotifySettings(db, userId);
@@ -675,6 +690,12 @@ function readPersonalNotifyMinConfidence(db: Db, userId: string): number {
   const value = Number(raw);
   if (!Number.isFinite(value) || value < 0 || value > 1) return 0.6;
   return value;
+}
+
+function readPersonalWebhookFormat(db: Db, userId: string): WebhookFormat {
+  const raw = (readRaw(db, userKey(userId, SETTING_NOTIFY_WEBHOOK_FORMAT)) ?? "").trim();
+  if (WEBHOOK_FORMATS.includes(raw as WebhookFormat)) return raw as WebhookFormat;
+  return "auto";
 }
 
 function cleanWebhookUrl(raw: string): string {

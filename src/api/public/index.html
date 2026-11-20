@@ -592,12 +592,20 @@
               </div>
               <div class="send-form">
                 <label class="name-row">
-                  <span class="name-key">个人 Webhook</span>
-                  <input id="personal-webhook-url" maxlength="500" autocomplete="off" placeholder="https://... 留空则不推送">
+                  <span class="name-key">推送地址</span>
+                  <input id="personal-webhook-url" maxlength="500" autocomplete="off" placeholder="https://api.day.app/Key 或 Webhook 地址，留空不推">
+                </label>
+                <label class="name-row">
+                  <span class="name-key">推送格式</span>
+                  <select id="personal-webhook-format">
+                    <option value="auto" selected>自动识别（api.day.app 走 Bark）</option>
+                    <option value="bark">Bark（支持自建 Bark 域名）</option>
+                    <option value="json">通用 Webhook JSON</option>
+                  </select>
                 </label>
                 <label class="name-row">
                   <span class="name-key">Bearer</span>
-                  <input id="personal-webhook-bearer" type="password" maxlength="512" autocomplete="off" placeholder="留空则保持现有令牌">
+                  <input id="personal-webhook-bearer" type="password" maxlength="512" autocomplete="off" placeholder="可选；留空则保持现有令牌">
                 </label>
               </div>
             </section>

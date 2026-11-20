@@ -86,6 +86,7 @@ import {
   savePasswordHash,
   saveResetSeal,
   SettingsError,
+  WEBHOOK_FORMATS,
 } from "../db/repos/settings.js";
 import { listThread } from "../db/repos/thread.js";
 import {
@@ -177,6 +178,7 @@ const personalNotifyBody = z.object({
   minConfidence: z.number().min(0).max(1),
   webhookUrl: z.string().max(500),
   webhookBearer: z.string().max(512).optional(),
+  webhookFormat: z.enum(WEBHOOK_FORMATS).optional(),
 }).strict();
 
 const domainSettingsBody = z.object({
@@ -1198,6 +1200,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       senderNames: runtime.senderNames,
       channels: {
         telegram: Boolean(config.telegramBotToken && config.telegramChatId),
+        bark: Boolean(config.barkUrl),
         webhook: Boolean(config.notifyWebhookUrl),
       },
       ai: aiStatus(db, config),
@@ -1380,6 +1383,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
         minConfidence: body.data.minConfidence,
         webhookUrl: body.data.webhookUrl,
         webhookBearer: body.data.webhookBearer,
+        webhookFormat: body.data.webhookFormat,
       }, now());
     } catch (err) {
       if (err instanceof SettingsError && err.message === "invalid webhook url") {
@@ -1401,6 +1405,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       notifyMinConfidence: saved.notifyMinConfidence,
       notifyWebhookUrl: saved.notifyWebhookUrl,
       notifyWebhookBearerSet: saved.notifyWebhookBearer.length > 0,
+      notifyWebhookFormat: saved.notifyWebhookFormat,
     });
   });
 
@@ -2007,6 +2012,7 @@ function personalNotifyView(db: Db, userId: string) {
     notifyMinConfidence: personal.notifyMinConfidence,
     notifyWebhookUrl: personal.notifyWebhookUrl,
     notifyWebhookBearerSet: personal.notifyWebhookBearer.length > 0,
+    notifyWebhookFormat: personal.notifyWebhookFormat,
   };
 }
 

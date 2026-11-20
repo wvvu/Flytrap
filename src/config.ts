@@ -49,6 +49,7 @@ const draftSchema = z.object({
   promptsDir: z.string().min(1),
   notifyWebhookUrl: z.string().optional(),
   notifyWebhookBearer: z.string().optional(),
+  barkUrl: z.string().optional(),
   telegramBotToken: z.string().optional(),
   telegramChatId: z.string().optional(),
   notifyLabels: z.array(z.enum(LABELS)).min(1),
@@ -126,6 +127,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     promptsDir: path.resolve(pickOpt(env, "PROMPTS_DIR") ?? defaultPromptsDir()),
     notifyWebhookUrl: pickOpt(env, "NOTIFY_WEBHOOK_URL"),
     notifyWebhookBearer: pickOpt(env, "NOTIFY_WEBHOOK_BEARER"),
+    barkUrl: pickOpt(env, "BARK_URL"),
     telegramBotToken: pickOpt(env, "TELEGRAM_BOT_TOKEN"),
     telegramChatId: pickOpt(env, "TELEGRAM_CHAT_ID"),
     notifyLabels: parseLabels(pick(env, "NOTIFY_LABELS", "legit")),
@@ -187,6 +189,9 @@ function assertRoleRequirements(config: z.infer<typeof draftSchema>): void {
   // gemini needs no key at startup either: GEMINI_API_KEYS may be added in the panel.
   if (config.notifyWebhookUrl && !isHttpUrl(config.notifyWebhookUrl)) {
     problems.push("NOTIFY_WEBHOOK_URL must be an http(s) URL");
+  }
+  if (config.barkUrl && !isHttpUrl(config.barkUrl)) {
+    problems.push("BARK_URL must be an http(s) URL");
   }
   if (config.panelBaseUrl && !isHttpUrl(config.panelBaseUrl)) {
     problems.push("PANEL_BASE_URL must be an http(s) URL");

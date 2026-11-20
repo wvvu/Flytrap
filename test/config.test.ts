@@ -142,6 +142,7 @@ test(".env.example names the keys the process requires", () => {
     "OPENAI_API_KEY",
     "OPENAI_MODEL",
     "NOTIFY_WEBHOOK_URL",
+    "BARK_URL",
     "NOTIFY_LABELS",
   ]) {
     assert.match(example, new RegExp(`^${key}=`, "m"), key);

@@ -171,8 +171,9 @@ export function describeAi(ai) {
 
 export function describeChannels(channels) {
   const telegram = channels && channels.telegram ? "Telegram 已配置" : "Telegram 未配置";
+  const bark = channels && channels.bark ? "Bark 已配置" : "Bark 未配置";
   const webhook = channels && channels.webhook ? "Webhook 已配置" : "Webhook 未配置";
-  return `${telegram} · ${webhook}`;
+  return `${telegram} · ${bark} · ${webhook}`;
 }
 
 export function renderNotify(settings) {
@@ -236,10 +237,12 @@ export function renderPersonalNotify(settings) {
   if (confidence) confidence.value = String(personal.notifyMinConfidence ?? 0.6);
   const webhook = document.querySelector("#personal-webhook-url");
   if (webhook) webhook.value = personal.notifyWebhookUrl || "";
+  const format = document.querySelector("#personal-webhook-format");
+  if (format) format.value = personal.notifyWebhookFormat || "auto";
   const bearer = document.querySelector("#personal-webhook-bearer");
   if (bearer) {
     bearer.value = "";
-    bearer.placeholder = personal.notifyWebhookBearerSet ? "已保存，留空则保持" : "留空则保持现有令牌";
+    bearer.placeholder = personal.notifyWebhookBearerSet ? "已保存，留空则保持" : "可选；留空则保持现有令牌";
   }
   state.personalNotifyBaseline = personalNotifySnapshot();
   syncPersonalNotifySave();
@@ -252,11 +255,13 @@ export function personalNotifySnapshot() {
   });
   const confidence = document.querySelector("#personal-notify-confidence");
   const webhook = document.querySelector("#personal-webhook-url");
+  const format = document.querySelector("#personal-webhook-format");
   const bearer = document.querySelector("#personal-webhook-bearer");
   return JSON.stringify({
     labels,
     confidence: confidence ? confidence.value.trim() : "",
     webhookUrl: webhook ? webhook.value.trim() : "",
+    webhookFormat: format ? format.value : "auto",
     webhookBearer: bearer ? bearer.value : "",
   });
 }
@@ -277,15 +282,16 @@ export async function savePersonalNotifySettings() {
     return;
   }
   const webhookUrl = document.querySelector("#personal-webhook-url")?.value.trim() || "";
+  const webhookFormat = document.querySelector("#personal-webhook-format")?.value || "auto";
   const bearer = document.querySelector("#personal-webhook-bearer")?.value.trim() || "";
-  const body = { labels, minConfidence: confidence, webhookUrl };
+  const body = { labels, minConfidence: confidence, webhookUrl, webhookFormat };
   if (bearer) body.webhookBearer = bearer;
   try {
     const saved = await request("/v1/settings/notify/personal", { method: "PUT", body });
     const bearerInput = document.querySelector("#personal-webhook-bearer");
     if (bearerInput) {
       bearerInput.value = "";
-      bearerInput.placeholder = saved && saved.notifyWebhookBearerSet ? "已保存，留空则保持" : "留空则保持现有令牌";
+      bearerInput.placeholder = saved && saved.notifyWebhookBearerSet ? "已保存，留空则保持" : "可选；留空则保持现有令牌";
     }
     state.personalNotifyBaseline = personalNotifySnapshot();
     syncPersonalNotifySave();

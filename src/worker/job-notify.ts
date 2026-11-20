@@ -5,6 +5,7 @@ import { getMessage, markMessageNotified } from "../db/repos/messages.js";
 import { getUserById, OWNER_USER_ID, sqlResolvedOwner } from "../db/repos/users.js";
 import type { AppLog } from "../log.js";
 import { aiResultSchema } from "../ai/types.js";
+import { createBarkNotifier, isBarkUrl } from "../notify/bark.js";
 import type { Notifier } from "../notify/types.js";
 import { createWebhookNotifier } from "../notify/webhook.js";
 
@@ -37,6 +38,7 @@ export async function runNotifyJob(deps: NotifyJobDeps, job: JobRow): Promise<vo
     label: ai.label,
     confidence: ai.confidence,
     summary: ai.summary,
+    otp: ai.otp ?? null,
     panelUrl: `${deps.panelBaseUrl.replace(/\/$/, "")}/#/m/${message.id}`,
   };
 
@@ -69,10 +71,18 @@ export async function runNotifyJob(deps: NotifyJobDeps, job: JobRow): Promise<vo
     if (!personal.notifyLabels.includes(ai.label) || ai.confidence < personal.notifyMinConfidence) continue;
     const channelId = `user:${holderId}:webhook`;
     if (done.includes(channelId)) continue;
-    const notifier = createWebhookNotifier({
-      url: personal.notifyWebhookUrl,
-      bearer: personal.notifyWebhookBearer || undefined,
-    });
+    const useBark =
+      personal.notifyWebhookFormat === "bark" ||
+      (personal.notifyWebhookFormat === "auto" && isBarkUrl(personal.notifyWebhookUrl));
+    const notifier = useBark
+      ? createBarkNotifier({
+          url: personal.notifyWebhookUrl,
+          bearer: personal.notifyWebhookBearer || undefined,
+        })
+      : createWebhookNotifier({
+          url: personal.notifyWebhookUrl,
+          bearer: personal.notifyWebhookBearer || undefined,
+        });
     await notifier.notify(input);
     done.push(channelId);
     rememberNotified(deps.db, job.id, done, deps.now());

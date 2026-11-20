@@ -314,6 +314,7 @@ document.querySelector("#notify-confidence")?.addEventListener("input", syncNoti
 document.querySelector("#btn-save-personal-notify")?.addEventListener("click", () => void savePersonalNotifySettings());
 document.querySelector("#personal-notify-confidence")?.addEventListener("input", syncPersonalNotifySave);
 document.querySelector("#personal-webhook-url")?.addEventListener("input", syncPersonalNotifySave);
+document.querySelector("#personal-webhook-format")?.addEventListener("change", syncPersonalNotifySave);
 document.querySelector("#personal-webhook-bearer")?.addEventListener("input", syncPersonalNotifySave);
 document.querySelector("#btn-save-attempts")?.addEventListener("click", () => void saveAttemptSettings());
 document.querySelector("#job-max-attempts")?.addEventListener("input", syncAttemptSave);
