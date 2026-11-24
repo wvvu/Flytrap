@@ -10,9 +10,12 @@ import { enqueueJob } from "../src/db/repos/jobs.js";
 import { insertMessage } from "../src/db/repos/messages.js";
 import { readPrompt, savePrompt, listPrompts } from "../src/ai/prompt.js";
 import {
+  presentAiChannels,
+  readEffectiveAiChannels,
   readEffectiveAiPool,
   readRuntimeSettings,
   saveAcceptDomains,
+  saveAiChannels,
   saveAiPool,
   saveJobMaxAttempts,
   saveNameSettings,
@@ -150,6 +153,60 @@ test("saved api keys keep their order and the secret is not part of the public t
     assert.equal(stored.keys[0]?.secret, secret);
     assert.equal(stored.keys[1]?.secret, "env-secret-value-abcd");
     assert.equal(stored.models[0], "gemini-2.0-flash");
+
+    // Legacy models+keys automatically bridge into readEffectiveAiChannels, and saveAiChannels preserves key secrets across channels
+    const bridged = readEffectiveAiChannels(db, {
+      classifier: "gemini",
+      geminiModel: "gemini-2.5-flash",
+      geminiKeys: [],
+      openaiKeys: [],
+    });
+    assert.equal(bridged.from, "legacy");
+    assert.equal(bridged.channels[0]?.provider, "gemini");
+    assert.equal(bridged.channels[0]?.model, "gemini-2.0-flash");
+    assert.equal(bridged.channels[0]?.keys.length, 2);
+
+    const oaiSecret = "sk-deepseek-secret-9876";
+    const savedChannels = saveAiChannels(
+      db,
+      [
+        {
+          provider: "openai-compat",
+          baseUrl: "https://api.deepseek.com/v1/",
+          model: "deepseek-chat",
+          keys: [{ secret: oaiSecret }],
+        },
+        {
+          provider: "gemini",
+          baseUrl: "",
+          model: "gemini-flash-lite-latest",
+          keys: [{ id: bridged.channels[0]!.keys[0]!.id }],
+        },
+      ],
+      [],
+      15,
+    );
+    assert.equal(savedChannels.from, "saved");
+    assert.equal(savedChannels.channels[0]?.baseUrl, "https://api.deepseek.com/v1");
+    assert.equal(savedChannels.channels[0]?.keys[0]?.tail, "9876");
+    assert.equal(savedChannels.channels[1]?.keys[0]?.tail, "wxyz");
+    assert.equal(JSON.stringify(savedChannels).includes(oaiSecret), false);
+    assert.equal(JSON.stringify(savedChannels).includes(secret), false);
+
+    assert.throws(
+      () =>
+        saveAiChannels(
+          db,
+          [{ provider: "openai-compat", baseUrl: "ftp://bad.host", model: "m", keys: [] }],
+          [],
+          16,
+        ),
+      SettingsError,
+    );
+    const pub = presentAiChannels(
+      readEffectiveAiChannels(db, { classifier: "gemini", geminiModel: "g", geminiKeys: [], openaiKeys: [] }),
+    );
+    assert.equal(pub.channels.length, 2);
   } finally {
     db.close();
   }

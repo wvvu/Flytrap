@@ -10,7 +10,7 @@ import session from "@fastify/session";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyRequest } from "fastify";
 import PostalMime from "postal-mime";
 import { z } from "zod";
-import { fallbackAiPool } from "../ai/pool.js";
+import { fallbackAiChannelsConfig, fallbackAiPool } from "../ai/pool.js";
 import { probeAiKey } from "../ai/probe.js";
 import { listPrompts, readPrompt, savePrompt } from "../ai/prompt.js";
 import { LABELS } from "../ai/types.js";
@@ -61,12 +61,16 @@ import {
   listOutboxByIds,
 } from "../db/repos/outbox.js";
 import {
+  AI_PROVIDERS,
   clearResetSeal,
+  presentAiChannels,
   presentAiPool,
+  presentAiPoolFromChannels,
   readAcceptDomains,
   readAiEnabled,
   readAiThinking,
   readBlockedSenders,
+  readEffectiveAiChannels,
   readEffectiveAiPool,
   readNameSettings,
   readOwnerProfile,
@@ -75,6 +79,7 @@ import {
   readResetSeal,
   readRuntimeSettings,
   saveAcceptDomains,
+  saveAiChannels,
   saveAiControls,
   saveAiPool,
   saveBlockedSenders,
@@ -203,18 +208,38 @@ const retryMessageBody = z.object({
   messageId: z.string().regex(/^[\w-]+$/),
 }).strict();
 
-const aiSettingsBody = z.object({
-  models: z.array(z.string().max(80)).max(8),
-  keys: z.array(z.object({
-    id: z.string().min(1).max(80).optional(),
-    secret: z.string().min(8).max(512).optional(),
-  }).strict()).max(20),
-  enabled: z.boolean().optional(),
-  thinking: z.enum(["off", "low", "medium", "high"]).optional(),
+const aiKeyRefBody = z.object({
+  id: z.string().min(1).max(80).optional(),
+  secret: z.string().min(8).max(512).optional(),
 }).strict();
+
+const aiChannelBody = z.object({
+  id: z.string().min(1).max(80).optional(),
+  provider: z.enum(AI_PROVIDERS),
+  baseUrl: z.string().max(300).optional(),
+  model: z.string().max(80).optional(),
+  keys: z.array(aiKeyRefBody).max(20),
+}).strict();
+
+const aiSettingsBody = z.union([
+  z.object({
+    channels: z.array(aiChannelBody).max(8),
+    enabled: z.boolean().optional(),
+    thinking: z.enum(["off", "low", "medium", "high"]).optional(),
+  }).strict(),
+  z.object({
+    models: z.array(z.string().max(80)).max(8),
+    keys: z.array(aiKeyRefBody).max(20),
+    enabled: z.boolean().optional(),
+    thinking: z.enum(["off", "low", "medium", "high"]).optional(),
+  }).strict(),
+]);
 
 const testKeyBody = z.object({
   id: z.string().min(1).max(80),
+  channelId: z.string().min(1).max(80).optional(),
+  provider: z.enum(AI_PROVIDERS).optional(),
+  baseUrl: z.string().max(300).optional(),
   model: z.string().max(80).optional(),
 }).strict();
 
@@ -1188,6 +1213,10 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       },
       userId,
     );
+    const effectiveChannels = readEffectiveAiChannels(db, fallbackAiChannelsConfig(config));
+    const effectivePool = effectiveChannels.from === "saved"
+      ? presentAiPoolFromChannels(effectiveChannels)
+      : presentAiPool(readEffectiveAiPool(db, fallbackAiPool(config)));
     return {
       role: "admin",
       notifyLabels: runtime.notifyLabels,
@@ -1204,7 +1233,8 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
         webhook: Boolean(config.notifyWebhookUrl),
       },
       ai: aiStatus(db, config),
-      aiPool: presentAiPool(readEffectiveAiPool(db, fallbackAiPool(config))),
+      aiPool: effectivePool,
+      aiChannels: presentAiChannels(effectiveChannels),
       aiEnabled: readAiEnabled(db),
       aiThinking: readAiThinking(db),
       blockedSenders: readBlockedSenders(db, userId),
@@ -1218,9 +1248,23 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     requireAdmin(request);
     const body = aiSettingsBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
-    let saved;
+    const fallbackCfg = fallbackAiChannelsConfig(config);
+    const allFallbackKeys = [...fallbackCfg.geminiKeys, ...fallbackCfg.openaiKeys];
+    let savedPool;
+    let savedChannels;
+    let auditDetail: string;
     try {
-      saved = saveAiPool(db, body.data, fallbackAiPool(config).keys, now());
+      if ("channels" in body.data) {
+        savedChannels = saveAiChannels(db, body.data.channels, allFallbackKeys, now());
+        const updated = readEffectiveAiChannels(db, fallbackCfg);
+        savedPool = presentAiPoolFromChannels(updated);
+        const totalKeys = savedChannels.channels.reduce((sum, ch) => sum + ch.keys.length, 0);
+        auditDetail = `channels=${savedChannels.channels.length} keys=${totalKeys}`;
+      } else {
+        savedPool = saveAiPool(db, body.data, fallbackAiPool(config).keys, now());
+        savedChannels = presentAiChannels(readEffectiveAiChannels(db, fallbackCfg));
+        auditDetail = `models=${savedPool.models.length} keys=${savedPool.keys.length}`;
+      }
     } catch (err) {
       if (err instanceof SettingsError) throw new HttpError(400);
       throw err;
@@ -1234,11 +1278,12 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       at: now(),
       actor: request.session.user ?? "unknown",
       action: "settings_ai",
-      detail: `models=${saved.models.length} keys=${saved.keys.length}`,
+      detail: auditDetail,
     });
     return reply.send({
       ok: true,
-      aiPool: saved,
+      aiPool: savedPool,
+      aiChannels: savedChannels,
       aiEnabled: readAiEnabled(db),
       aiThinking: readAiThinking(db),
     });
@@ -1248,17 +1293,31 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     requireAdmin(request);
     const body = testKeyBody.safeParse(request.body);
     if (!body.success) throw new HttpError(400);
+    const channels = readEffectiveAiChannels(db, fallbackAiChannelsConfig(config)).channels;
+    const matchedChannel = body.data.channelId
+      ? channels.find((ch) => ch.id === body.data.channelId && ch.keys.some((k) => k.id === body.data.id))
+      : channels.find((ch) => ch.keys.some((k) => k.id === body.data.id));
+    const channelKey = matchedChannel?.keys.find((k) => k.id === body.data.id);
     const pool = readEffectiveAiPool(db, fallbackAiPool(config));
-    const targetKey = pool.keys.find((item) => item.id === body.data.id);
+    const targetKey = channelKey ?? pool.keys.find((item) => item.id === body.data.id);
     if (!targetKey) throw new HttpError(404, "not_found");
-    const defaultModel = config.classifier === "gemini" ? config.geminiModel : config.openaiModel ?? "";
-    const chosenModel = body.data.model?.trim() || pool.models[0] || defaultModel;
+
+    const classifier = body.data.provider ?? matchedChannel?.provider ?? config.classifier;
+    const defaultModel = classifier === "gemini" ? config.geminiModel : config.openaiModel ?? "";
+    const chosenModel = body.data.model?.trim() || matchedChannel?.model || pool.models[0] || defaultModel;
+    const baseUrlOverride = body.data.baseUrl !== undefined ? body.data.baseUrl.trim() : matchedChannel?.baseUrl;
+    if (classifier === "openai-compat" && !(baseUrlOverride || config.openaiBaseUrl)) {
+      return reply.send({ ok: false, model: chosenModel, latencyMs: 0, error: "请先填写接口地址 (Base URL)" });
+    }
+    if (classifier !== "fake" && !chosenModel) {
+      return reply.send({ ok: false, model: "", latencyMs: 0, error: "请先填写模型名称" });
+    }
     const probe = await probeAiKey({
-      classifier: config.classifier,
+      classifier,
       secret: targetKey.secret,
       model: chosenModel,
-      geminiBaseUrl: config.geminiBaseUrl,
-      openaiBaseUrl: config.openaiBaseUrl,
+      geminiBaseUrl: classifier === "gemini" ? (baseUrlOverride || config.geminiBaseUrl) : config.geminiBaseUrl,
+      openaiBaseUrl: classifier === "openai-compat" ? (baseUrlOverride || config.openaiBaseUrl) : config.openaiBaseUrl,
       fetchImpl: options.probeFetch,
     });
     return reply.send(probe);
@@ -2113,14 +2172,17 @@ function redactLogLine(line: string): string {
     .replace(/\bAIza[0-9A-Za-z_-]{10,}\b/g, "[redacted]");
 }
 
-function aiStatus(db: Db, config: Config): { classifier: string; model: string; keyCount: number } {
+function aiStatus(db: Db, config: Config): { classifier: string; model: string; keyCount: number; channelCount?: number } {
   if (config.classifier === "fake") return { classifier: "fake", model: "fake", keyCount: 0 };
-  const pool = readEffectiveAiPool(db, fallbackAiPool(config));
-  const fallbackModel = config.classifier === "gemini" ? config.geminiModel : config.openaiModel ?? "";
+  const channels = readEffectiveAiChannels(db, fallbackAiChannelsConfig(config)).channels;
+  const runnable = channels.filter((ch) => ch.model.trim() && ch.keys.length > 0 && (ch.provider !== "openai-compat" || Boolean(ch.baseUrl.trim())));
+  const primary = runnable[0] ?? channels[0];
+  const totalKeys = channels.reduce((sum, ch) => sum + ch.keys.length, 0);
   return {
-    classifier: config.classifier,
-    model: pool.models[0] || fallbackModel,
-    keyCount: pool.keys.length,
+    classifier: primary?.provider ?? config.classifier,
+    model: primary?.model || (config.classifier === "gemini" ? config.geminiModel : config.openaiModel ?? ""),
+    keyCount: totalKeys,
+    channelCount: runnable.length,
   };
 }
 

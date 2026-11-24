@@ -1,6 +1,8 @@
 import type { Config } from "../config.js";
 import { keyTail, scrubSecrets } from "./secret.js";
 
+export type AiProvider = "gemini" | "openai-compat";
+
 export interface PoolKey {
   id: string;
   secret: string;
@@ -9,6 +11,24 @@ export interface PoolKey {
 export interface AiPoolSnapshot {
   models: string[];
   keys: PoolKey[];
+}
+
+export interface AiChannelSnapshot {
+  id: string;
+  provider: AiProvider;
+  baseUrl: string;
+  model: string;
+  keys: PoolKey[];
+}
+
+export interface AiChannelsFallback {
+  classifier: "gemini" | "openai-compat" | "fake";
+  geminiModel: string;
+  geminiBaseUrl?: string;
+  geminiKeys: PoolKey[];
+  openaiModel?: string;
+  openaiBaseUrl?: string;
+  openaiKeys: PoolKey[];
 }
 
 export interface KeyState {
@@ -268,4 +288,16 @@ export function fallbackAiPool(config: Config): AiPoolSnapshot {
     };
   }
   return { models: [], keys: [] };
+}
+
+export function fallbackAiChannelsConfig(config: Config): AiChannelsFallback {
+  return {
+    classifier: config.classifier,
+    geminiModel: config.geminiModel || "gemini-2.5-flash",
+    geminiBaseUrl: config.geminiBaseUrl,
+    geminiKeys: config.geminiApiKeys.map((secret, index) => ({ id: `env:${index}`, secret })),
+    openaiModel: config.openaiModel,
+    openaiBaseUrl: config.openaiBaseUrl,
+    openaiKeys: config.openaiApiKey ? [{ id: "env:0", secret: config.openaiApiKey }] : [],
+  };
 }

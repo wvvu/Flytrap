@@ -518,9 +518,10 @@
             <section class="block" id="set-model" data-group="classify" hidden>
               <div class="block-head">
                 <div>
-                  <h2>模型</h2>
-                  <p class="muted">按列表顺序轮换使用。密钥只显示末 4 位，点「试」可在服务端实测连通与延迟。</p>
+                  <h2>模型通道</h2>
+                  <p class="muted">按从上到下顺序优先使用；主通道全部密钥冷却或出错时自动切换下一条。点「试」可在服务端实测连通与延迟。</p>
                 </div>
+                <button type="button" id="btn-add-channel" class="btn-fit">添加通道</button>
               </div>
               <div class="model-switch">
                 <label class="chk"><input id="ai-enabled" type="checkbox" checked> 启用分拣</label>
@@ -534,19 +535,8 @@
                   </select>
                 </label>
               </div>
-              <p class="muted">关掉之后不再调用模型，已经收下的信仍在。思考等级只给 Gemini 用。开关、添加、移除和排序会直接保存。</p>
-              <h3 class="field-title">型号</h3>
-              <div id="model-list" class="name-list"></div>
-              <div class="inline-row">
-                <input id="model-add" placeholder="模型名称" maxlength="80" autocomplete="off">
-                <button type="button" id="btn-add-model" class="btn-fit">添加</button>
-              </div>
-              <h3 class="field-title">密钥</h3>
-              <div id="key-list" class="name-list"></div>
-              <div class="inline-row">
-                <input id="key-add" type="password" placeholder="新密钥" maxlength="512" autocomplete="off">
-                <button type="button" id="btn-add-key" class="btn-fit">添加</button>
-              </div>
+              <p class="muted">关掉之后不再调用模型，已经收下的信仍在。思考等级只对 Gemini 原生通道生效。改动后自动保存。</p>
+              <div id="channel-list" class="channel-list"></div>
             </section>
 
             <section class="block" id="set-prompt" data-group="classify" hidden>

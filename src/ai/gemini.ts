@@ -71,30 +71,60 @@ export function createGeminiClassifier(options: GeminiClassifierOptions): Gemini
     id: "gemini",
     model,
     classify(input: ClassifyInput) {
-      return pool.run(snapshot(), async (modelName, secret) => {
-        const thinking = options.thinking ? geminiThinkingConfig(modelName, options.thinking()) : undefined;
-        const content = await callGemini(fetchImpl, baseUrl, modelName, secret, input, timeoutMs, thinking);
-        const output = parseModelOutput(parseModelJson(content));
-        return finalizeAiResult({
-          schema: 1,
-          prompt_id: input.promptId,
+      return pool.run(snapshot(), (modelName, secret) =>
+        classifyWithGemini({
+          fetchImpl,
+          baseUrl,
           model: modelName,
-          provider: "gemini",
-          at: new Date(now()).toISOString(),
-          label: output.label,
-          confidence: output.confidence,
-          summary: output.summary,
-          tags: output.tags,
-          signals: output.signals,
-          ...(output.otp !== undefined ? { otp: output.otp || null } : {}),
-          raw: output,
-        });
-      });
+          secret,
+          input,
+          timeoutMs,
+          thinking: options.thinking ? geminiThinkingConfig(modelName, options.thinking()) : undefined,
+          now,
+        }),
+      );
     },
     getKeyPoolStatus() {
       return pool.status(snapshot(), model);
     },
   };
+}
+
+export async function classifyWithGemini(options: {
+  fetchImpl: typeof fetch;
+  baseUrl?: string;
+  model: string;
+  secret: string;
+  input: ClassifyInput;
+  timeoutMs: number;
+  thinking?: { thinkingBudget: number } | { thinkingLevel: string };
+  now: () => number;
+}) {
+  const baseUrl = (options.baseUrl || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
+  const content = await callGemini(
+    options.fetchImpl,
+    baseUrl,
+    options.model,
+    options.secret,
+    options.input,
+    options.timeoutMs,
+    options.thinking,
+  );
+  const output = parseModelOutput(parseModelJson(content));
+  return finalizeAiResult({
+    schema: 1,
+    prompt_id: options.input.promptId,
+    model: options.model,
+    provider: "gemini",
+    at: new Date(options.now()).toISOString(),
+    label: output.label,
+    confidence: output.confidence,
+    summary: output.summary,
+    tags: output.tags,
+    signals: output.signals,
+    ...(output.otp !== undefined ? { otp: output.otp || null } : {}),
+    raw: output,
+  });
 }
 
 const GEMINI_RESPONSE_SCHEMA = {

@@ -6,10 +6,9 @@ import { settleFinishedSends } from "./db/repos/jobs.js";
 import { createLogger } from "./log.js";
 import { ensureDataDirs, migrationsDir } from "./paths.js";
 import { fakeClassifier } from "./ai/classifier.js";
-import { createGeminiClassifier } from "./ai/gemini.js";
-import { createOpenAiClassifier } from "./ai/openai-compat.js";
-import { fallbackAiPool } from "./ai/pool.js";
-import { readAiThinking, readEffectiveAiPool } from "./db/repos/settings.js";
+import { fallbackAiChannelsConfig } from "./ai/pool.js";
+import { createMultiChannelClassifier } from "./ai/router.js";
+import { readAiThinking, readEffectiveAiChannels } from "./db/repos/settings.js";
 import { readPrompt } from "./ai/prompt.js";
 import { createMailauthAuthenticator } from "./mail/auth.js";
 import { createBarkNotifier } from "./notify/bark.js";
@@ -146,21 +145,19 @@ async function boot(stops: Array<() => Promise<void>>): Promise<void> {
     if (config.classifier === "fake" && config.nodeEnv === "production") {
       log.warn("CLASSIFIER=fake is running in production");
     }
+    const channelsFallback = fallbackAiChannelsConfig(config);
     const classifier =
       config.classifier === "fake"
         ? fakeClassifier()
-        : config.classifier === "gemini"
-          ? createGeminiClassifier({
-              model: config.geminiModel,
-              baseUrl: config.geminiBaseUrl,
-              resolve: () => readEffectiveAiPool(db, fallbackAiPool(config)),
-              thinking: () => readAiThinking(db),
-            })
-          : createOpenAiClassifier({
-              baseUrl: config.openaiBaseUrl ?? "",
-              resolve: () => readEffectiveAiPool(db, fallbackAiPool(config)),
-            });
-    if (config.classifier !== "fake" && readEffectiveAiPool(db, fallbackAiPool(config)).keys.length === 0) {
+        : createMultiChannelClassifier({
+            resolve: () => readEffectiveAiChannels(db, channelsFallback).channels,
+            thinking: () => readAiThinking(db),
+            defaultModel: config.classifier === "gemini" ? config.geminiModel : config.openaiModel ?? "",
+          });
+    if (
+      config.classifier !== "fake" &&
+      !readEffectiveAiChannels(db, channelsFallback).channels.some((ch) => ch.model.trim() && ch.keys.length > 0)
+    ) {
       log.warn("no AI key configured yet; classification waits until a key is saved in the panel");
     }
     const notifiers: Notifier[] = [];

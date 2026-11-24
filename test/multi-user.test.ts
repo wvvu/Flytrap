@@ -326,6 +326,9 @@ test("member RBAC, outbound sender authorization, daily send quota, session revo
       if (target.includes("bad-model")) {
         return new Response(`key=${leakedSecret} model bad-model not valid`, { status: 403 });
       }
+      if (target.startsWith("https://oai.test/v1/chat/completions")) {
+        return Response.json({ choices: [{ message: { content: "OK" } }] });
+      }
       return Response.json({ candidates: [{ content: { parts: [{ text: "OK" }] } }] });
     },
   });
@@ -355,6 +358,40 @@ test("member RBAC, outbound sender authorization, daily send quota, session revo
     assert.equal(errProbe.statusCode, 200);
     assert.equal(errProbe.json().ok, false);
     assert.equal(JSON.stringify(errProbe.json()).includes(leakedSecret), false);
+
+    // Multi-channel AI save & per-channel probe (OpenAI-compat + Gemini)
+    const oaiSecret = "sk-deepseek-probe-1234";
+    const savedChannels = await admin.put(app, "/v1/settings/ai", {
+      channels: [
+        {
+          provider: "openai-compat",
+          baseUrl: "https://oai.test/v1",
+          model: "deepseek-chat",
+          keys: [{ secret: oaiSecret }],
+        },
+        {
+          provider: "gemini",
+          baseUrl: "",
+          model: "gemini-2.5-flash",
+          keys: [{ id: keyId }],
+        },
+      ],
+    });
+    assert.equal(savedChannels.statusCode, 200);
+    assert.equal(JSON.stringify(savedChannels.json()).includes(oaiSecret), false);
+    const chOai = savedChannels.json().aiChannels.channels[0];
+    const chGem = savedChannels.json().aiChannels.channels[1];
+    assert.equal(chOai.provider, "openai-compat");
+    assert.equal(chOai.keys[0].tail, "1234");
+    assert.equal(chGem.keys[0].id, keyId);
+
+    const oaiProbe = await admin.post(app, "/v1/settings/ai/test-key", {
+      id: chOai.keys[0].id,
+      channelId: chOai.id,
+    });
+    assert.equal(oaiProbe.statusCode, 200);
+    assert.equal(oaiProbe.json().ok, true);
+    assert.equal(oaiProbe.json().model, "deepseek-chat");
 
     // Create Alice (exact alice@example.com) and Bob (wildcard *@example.com, quota 2)
     const aliceCreated = await admin.post(app, "/v1/users", {

@@ -69,7 +69,7 @@ export async function loadSettingsPage() {
     if (enabled) enabled.checked = settings.aiEnabled !== false;
     const thinking = document.querySelector("#ai-thinking");
     if (thinking) thinking.value = settings.aiThinking || "low";
-    renderAiEditors(settings.aiPool || {});
+    renderAiEditors(settings.aiChannels || {});
     await loadDkimSection();
   } catch (err) {
     toast(explain(err));
@@ -165,8 +165,10 @@ export function showSettingsSection(id, options = {}) {
 
 export function describeAi(ai) {
   if (!ai || ai.classifier === "fake" || !ai.model) return "尚未配置模型。提示词会在模型可用后用于新邮件。";
+  const proto = ai.classifier === "gemini" ? "Gemini" : "OpenAI 兼容";
   const keys = Number(ai.keyCount) === 1 ? "1 个密钥可用" : `${ai.keyCount || 0} 个密钥可用`;
-  return `${ai.model} · ${keys}`;
+  const extra = Number(ai.channelCount) > 1 ? `（共 ${ai.channelCount} 条通道）` : "";
+  return `${proto} · ${ai.model} · ${keys}${extra}`;
 }
 
 export function describeChannels(channels) {
@@ -880,11 +882,17 @@ export async function saveNameSettings() {
     .catch(() => {});
 }
 
-export function renderAiEditors(pool) {
-  state.aiModels = Array.isArray(pool.models) ? pool.models.slice() : [];
-  state.aiKeyRows = (Array.isArray(pool.keys) ? pool.keys : []).map((item) => ({
-    id: item.id,
-    tail: item.tail || "",
+export function renderAiEditors(aiChannels) {
+  const list = Array.isArray(aiChannels) ? aiChannels : Array.isArray(aiChannels?.channels) ? aiChannels.channels : [];
+  state.aiChannels = list.map((ch) => ({
+    id: ch.id || "",
+    provider: ch.provider === "openai-compat" ? "openai-compat" : "gemini",
+    baseUrl: ch.baseUrl || "",
+    model: ch.model || "",
+    keys: (Array.isArray(ch.keys) ? ch.keys : []).map((k) => ({
+      id: k.id,
+      tail: k.tail || "",
+    })),
   }));
   paintAiEditors();
   rememberAiControls();
@@ -899,16 +907,26 @@ export function captureAi() {
   const enabled = document.querySelector("#ai-enabled");
   const thinking = document.querySelector("#ai-thinking");
   return {
-    models: state.aiModels.slice(),
-    keys: state.aiKeyRows.map((row) => ({ id: row.id, tail: row.tail, secret: row.secret })),
+    channels: state.aiChannels.map((ch) => ({
+      id: ch.id,
+      provider: ch.provider,
+      baseUrl: ch.baseUrl,
+      model: ch.model,
+      keys: ch.keys.map((row) => ({ id: row.id, tail: row.tail, secret: row.secret })),
+    })),
     enabled: enabled ? enabled.checked : true,
     thinking: thinking ? thinking.value : "low",
   };
 }
 
 export function restoreAi(snapshot) {
-  state.aiModels = snapshot.models.slice();
-  state.aiKeyRows = snapshot.keys.map((row) => ({ id: row.id, tail: row.tail, secret: row.secret }));
+  state.aiChannels = snapshot.channels.map((ch) => ({
+    id: ch.id,
+    provider: ch.provider,
+    baseUrl: ch.baseUrl,
+    model: ch.model,
+    keys: ch.keys.map((row) => ({ id: row.id, tail: row.tail, secret: row.secret })),
+  }));
   const enabled = document.querySelector("#ai-enabled");
   const thinking = document.querySelector("#ai-thinking");
   if (enabled) enabled.checked = snapshot.enabled;
@@ -921,39 +939,49 @@ export function aiPayload() {
   const enabled = document.querySelector("#ai-enabled");
   const thinking = document.querySelector("#ai-thinking");
   return {
-    models: state.aiModels.slice(),
-    keys: state.aiKeyRows.map((row) => (row.secret ? { secret: row.secret } : { id: row.id })),
+    channels: state.aiChannels.map((ch) => ({
+      ...(ch.id ? { id: ch.id } : {}),
+      provider: ch.provider,
+      baseUrl: (ch.baseUrl || "").trim(),
+      model: (ch.model || "").trim(),
+      keys: ch.keys.map((row) => (row.secret ? { secret: row.secret } : { id: row.id })),
+    })),
     enabled: enabled ? enabled.checked : true,
     thinking: thinking ? thinking.value : "low",
   };
 }
 
-export function enqueueAi(apply, message) {
-  state.aiJob = state.aiJob.then(() => applyAndSaveAi(apply, message)).catch(() => {});
+export function enqueueAi(apply, message, options = {}) {
+  state.aiJob = state.aiJob.then(() => applyAndSaveAi(apply, message, options)).catch(() => {});
 }
 
 export function aiStateKey(snapshot) {
   return JSON.stringify({
-    models: snapshot.models,
-    keys: snapshot.keys.map((row) => ({ id: row.id || "", tail: row.tail || "", secret: row.secret || "" })),
+    channels: snapshot.channels.map((ch) => ({
+      id: ch.id || "",
+      provider: ch.provider,
+      baseUrl: (ch.baseUrl || "").trim(),
+      model: (ch.model || "").trim(),
+      keys: ch.keys.map((row) => ({ id: row.id || "", tail: row.tail || "", secret: row.secret || "" })),
+    })),
     enabled: snapshot.enabled,
     thinking: snapshot.thinking,
   });
 }
 
-export async function applyAndSaveAi(apply, message) {
+export async function applyAndSaveAi(apply, message, options = {}) {
   const backup = captureAi();
   try {
     apply();
-    if (aiStateKey(captureAi()) === aiStateKey(backup)) return;
-    paintAiEditors();
+    if (!options.force && aiStateKey(captureAi()) === aiStateKey(backup)) return;
+    if (!options.deferRender) paintAiEditors();
     const saved = await request("/v1/settings/ai", { method: "PUT", body: aiPayload() });
     const enabled = document.querySelector("#ai-enabled");
     const thinking = document.querySelector("#ai-thinking");
     if (enabled) enabled.checked = saved.aiEnabled !== false;
     if (thinking && saved.aiThinking) thinking.value = saved.aiThinking;
-    renderAiEditors(saved.aiPool || {});
-    toast(message);
+    renderAiEditors(saved.aiChannels || {});
+    if (message) toast(message);
   } catch (err) {
     restoreAi(backup);
     toast("保存模型失败: " + explain(err));
@@ -970,46 +998,181 @@ export async function applyAndSaveAi(apply, message) {
 }
 
 export function paintAiEditors() {
-  const models = document.querySelector("#model-list");
-  const keys = document.querySelector("#key-list");
-  if (models) {
-    models.replaceChildren();
-    state.aiModels.forEach((model, index) => models.append(orderRow(model, index, state.aiModels.length, "model", null)));
+  const host = document.querySelector("#channel-list");
+  if (!host) return;
+  host.replaceChildren();
+  if (state.aiChannels.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "还没有通道。点右上角「添加通道」配置 Gemini 或 OpenAI 兼容接口。";
+    host.append(empty);
+    return;
   }
-  if (keys) {
-    keys.replaceChildren();
-    if (state.aiKeyRows.length === 0) {
-      const empty = document.createElement("p");
-      empty.className = "muted";
-      empty.textContent = "没有密钥。";
-      keys.append(empty);
+  state.aiChannels.forEach((ch, index) => {
+    host.append(buildChannelCard(ch, index, state.aiChannels.length));
+  });
+}
+
+function buildChannelCard(ch, index, total) {
+  const card = document.createElement("div");
+  card.className = "channel-card";
+
+  const head = document.createElement("div");
+  head.className = "channel-card-head";
+
+  const titleGroup = document.createElement("div");
+  titleGroup.className = "channel-title-group";
+
+  const badge = document.createElement("span");
+  badge.className = "role-pill" + (index === 0 ? " is-admin" : "");
+  badge.textContent = index === 0 ? "#1 主用" : `#${index + 1} 备用`;
+
+  const providerSel = document.createElement("select");
+  providerSel.className = "channel-provider-select";
+  const optGem = document.createElement("option");
+  optGem.value = "gemini";
+  optGem.textContent = "Gemini 原生";
+  const optOai = document.createElement("option");
+  optOai.value = "openai-compat";
+  optOai.textContent = "OpenAI 兼容";
+  providerSel.append(optGem, optOai);
+  providerSel.value = ch.provider;
+  providerSel.addEventListener("change", () => {
+    const nextProvider = providerSel.value === "openai-compat" ? "openai-compat" : "gemini";
+    enqueueAi(() => {
+      ch.provider = nextProvider;
+    }, "通道协议已更新", { force: true });
+  });
+  titleGroup.append(badge, providerSel);
+
+  const headActions = document.createElement("div");
+  headActions.className = "step-actions";
+  headActions.append(
+    channelCtrlBtn("上移", index === 0, () => moveChannel(index, -1)),
+    channelCtrlBtn("下移", index === total - 1, () => moveChannel(index, 1)),
+    channelCtrlBtn("移除", false, () => removeChannel(index)),
+  );
+  head.append(titleGroup, headActions);
+
+  const modelRow = document.createElement("label");
+  modelRow.className = "name-row channel-field";
+  const modelKey = document.createElement("span");
+  modelKey.className = "name-key";
+  modelKey.textContent = "模型";
+  const modelInput = document.createElement("input");
+  modelInput.value = ch.model || "";
+  modelInput.maxLength = 80;
+  modelInput.autocomplete = "off";
+  modelInput.placeholder = ch.provider === "gemini" ? "例如 gemini-flash-lite-latest" : "例如 deepseek-chat 或 gpt-4o-mini";
+  modelInput.addEventListener("input", () => {
+    ch.model = modelInput.value;
+  });
+  modelInput.addEventListener("change", () => {
+    const val = modelInput.value.trim();
+    if (val && !/^[A-Za-z0-9._:@/-]{1,80}$/.test(val)) {
+      toast("模型名称无效");
+      modelInput.value = ch.model || "";
+      return;
     }
-    state.aiKeyRows.forEach((row, index) =>
-      keys.append(orderRow(maskKey(row.tail), index, state.aiKeyRows.length, "key", row)),
-    );
+    enqueueAi(() => {
+      ch.model = val;
+    }, "模型已保存", { force: true });
+  });
+  modelRow.append(modelKey, modelInput);
+
+  const urlRow = document.createElement("label");
+  urlRow.className = "name-row channel-field";
+  const urlKey = document.createElement("span");
+  urlKey.className = "name-key";
+  urlKey.textContent = "接口地址";
+  const urlInput = document.createElement("input");
+  urlInput.value = ch.baseUrl || "";
+  urlInput.maxLength = 300;
+  urlInput.autocomplete = "off";
+  urlInput.placeholder = ch.provider === "openai-compat" ? "必填，如 https://api.deepseek.com/v1" : "可选，留空默认 Google 官方接口";
+  urlInput.addEventListener("input", () => {
+    ch.baseUrl = urlInput.value;
+  });
+  urlInput.addEventListener("change", () => {
+    const val = urlInput.value.trim();
+    enqueueAi(() => {
+      ch.baseUrl = val;
+    }, "接口地址已保存", { force: true });
+  });
+  urlRow.append(urlKey, urlInput);
+
+  const keysTitle = document.createElement("span");
+  keysTitle.className = "channel-keys-label";
+  keysTitle.textContent = "密钥";
+
+  const keyList = document.createElement("div");
+  keyList.className = "name-list";
+  if (ch.keys.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "尚未添加密钥。";
+    keyList.append(empty);
+  } else {
+    ch.keys.forEach((row, kIdx) => {
+      keyList.append(keyOrderRow(ch, row, kIdx, ch.keys.length));
+    });
   }
+
+  const addKeyWrap = document.createElement("div");
+  addKeyWrap.className = "inline-row";
+  const keyInput = document.createElement("input");
+  keyInput.type = "password";
+  keyInput.placeholder = "添加该通道密钥";
+  keyInput.maxLength = 512;
+  keyInput.autocomplete = "off";
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "btn-fit";
+  addBtn.textContent = "添加";
+  const submitKey = () => addChannelKey(ch, keyInput);
+  addBtn.addEventListener("click", submitKey);
+  keyInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submitKey();
+    }
+  });
+  addKeyWrap.append(keyInput, addBtn);
+
+  card.append(head, modelRow, urlRow, keysTitle, keyList, addKeyWrap);
+  return card;
+}
+
+function channelCtrlBtn(label, disabled, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn-fit ghost";
+  btn.textContent = label;
+  btn.disabled = disabled;
+  btn.addEventListener("click", onClick);
+  return btn;
 }
 
 export function maskKey(tail) {
   return tail ? `····${tail}` : "已保存";
 }
 
-export function orderRow(label, index, total, kind, keyRow) {
+function keyOrderRow(ch, keyRow, index, total) {
   const row = document.createElement("div");
   row.className = "name-row order-row";
   const text = document.createElement("input");
-  text.value = label;
+  text.value = maskKey(keyRow.tail);
   text.readOnly = true;
   const actions = document.createElement("div");
   actions.className = "step-actions";
 
-  if (kind === "key" && keyRow && keyRow.id) {
+  if (keyRow.id) {
     const badge = document.createElement("span");
     badge.className = "probe-badge";
     const prev = state.keyProbeResults.get(keyRow.id);
     if (prev) {
       badge.classList.add(prev.ok ? "ok" : "err");
-      badge.textContent = prev.ok ? `可用 · ${prev.latencyMs}ms` : `失败`;
+      badge.textContent = prev.ok ? `可用 · ${prev.latencyMs}ms` : "失败";
       if (prev.error) badge.title = prev.error;
     } else {
       badge.hidden = true;
@@ -1019,42 +1182,37 @@ export function orderRow(label, index, total, kind, keyRow) {
     probeBtn.type = "button";
     probeBtn.className = "btn-fit ghost";
     probeBtn.textContent = "试";
-    probeBtn.title = "在服务端向模型接口发送一次极短探针测试";
-    probeBtn.addEventListener("click", () => void testSavedAiKey(keyRow.id, probeBtn, badge));
+    probeBtn.title = "在服务端向该通道模型发送一次极短探针测试";
+    probeBtn.addEventListener("click", () => void testSavedAiKey(ch, keyRow.id, probeBtn, badge));
     actions.append(badge, probeBtn);
   }
 
-  const up = document.createElement("button");
-  up.type = "button";
-  up.className = "btn-fit ghost";
-  up.textContent = "上移";
-  up.disabled = index === 0;
-  up.addEventListener("click", () => moveAiRow(kind, index, -1));
-  const down = document.createElement("button");
-  down.type = "button";
-  down.className = "btn-fit ghost";
-  down.textContent = "下移";
-  down.disabled = index === total - 1;
-  down.addEventListener("click", () => moveAiRow(kind, index, 1));
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "btn-fit ghost";
-  remove.textContent = "移除";
-  remove.addEventListener("click", () => removeAiRow(kind, index));
-  actions.append(up, down, remove);
+  actions.append(
+    channelCtrlBtn("上移", index === 0, () => moveChannelKey(ch, index, -1)),
+    channelCtrlBtn("下移", index === total - 1, () => moveChannelKey(ch, index, 1)),
+    channelCtrlBtn("移除", false, () => removeChannelKey(ch, index)),
+  );
   row.append(text, actions);
   return row;
 }
 
-export async function testSavedAiKey(keyId, button, badge) {
+export async function testSavedAiKey(ch, keyId, button, badge) {
   button.disabled = true;
   button.textContent = "测…";
   badge.hidden = false;
   badge.className = "probe-badge";
   badge.textContent = "连接中";
   try {
-    const body = { id: keyId };
-    if (state.aiModels[0]) body.model = state.aiModels[0];
+    await state.aiJob;
+    const body = {
+      id: keyId,
+      provider: ch.provider,
+      baseUrl: (ch.baseUrl || "").trim(),
+      model: (ch.model || "").trim(),
+    };
+    if (ch.id && !ch.id.startsWith("legacy:") && !ch.id.startsWith("env:")) {
+      body.channelId = ch.id;
+    }
     const res = await request("/v1/settings/ai/test-key", { method: "POST", body });
     state.keyProbeResults.set(keyId, res);
     if (res.ok) {
@@ -1078,52 +1236,59 @@ export async function testSavedAiKey(keyId, button, badge) {
   }
 }
 
-export function moveAiRow(kind, index, delta) {
-  const list = kind === "model" ? state.aiModels : state.aiKeyRows;
+export function addChannelCard() {
+  if (state.aiChannels.length >= 8) {
+    toast("最多配置 8 条通道");
+    return;
+  }
+  const hasGemini = state.aiChannels.some((ch) => ch.provider === "gemini");
+  const nextProvider = hasGemini ? "openai-compat" : "gemini";
+  enqueueAi(() => {
+    state.aiChannels.push({
+      id: "",
+      provider: nextProvider,
+      baseUrl: "",
+      model: "",
+      keys: [],
+    });
+  }, "通道已添加", { force: true });
+}
+
+function moveChannel(index, delta) {
   const next = index + delta;
-  if (next < 0 || next >= list.length) return;
+  if (next < 0 || next >= state.aiChannels.length) return;
   enqueueAi(() => {
-    const current = kind === "model" ? state.aiModels : state.aiKeyRows;
-    if (index < 0 || next >= current.length) return;
-    const [item] = current.splice(index, 1);
-    current.splice(next, 0, item);
-  }, "顺序已保存");
+    if (index < 0 || next >= state.aiChannels.length) return;
+    const [item] = state.aiChannels.splice(index, 1);
+    state.aiChannels.splice(next, 0, item);
+  }, "通道顺序已保存", { force: true });
 }
 
-export function removeAiRow(kind, index) {
-  const list = kind === "model" ? state.aiModels : state.aiKeyRows;
-  if (index < 0 || index >= list.length) return;
+function removeChannel(index) {
+  if (index < 0 || index >= state.aiChannels.length) return;
   enqueueAi(() => {
-    const current = kind === "model" ? state.aiModels : state.aiKeyRows;
-    if (index < 0 || index >= current.length) return;
-    current.splice(index, 1);
-  }, kind === "model" ? "模型已移除" : "密钥已移除");
+    state.aiChannels.splice(index, 1);
+  }, "通道已移除", { force: true });
 }
 
-export function addModelRow() {
-  const input = document.querySelector("#model-add");
-  const model = input ? input.value.trim() : "";
-  if (!model) {
-    toast("请输入模型名称");
-    return;
-  }
-  if (!/^[A-Za-z0-9._:@/-]{1,80}$/.test(model)) {
-    toast("模型名称无效");
-    return;
-  }
-  if (state.aiModels.includes(model)) {
-    if (input) input.value = "";
-    toast("这个模型已经在列表里");
-    return;
-  }
-  if (input) input.value = "";
+function moveChannelKey(ch, index, delta) {
+  const next = index + delta;
+  if (next < 0 || next >= ch.keys.length) return;
   enqueueAi(() => {
-    if (!state.aiModels.includes(model)) state.aiModels.push(model);
-  }, "模型已添加");
+    if (index < 0 || next >= ch.keys.length) return;
+    const [item] = ch.keys.splice(index, 1);
+    ch.keys.splice(next, 0, item);
+  }, "密钥顺序已保存", { force: true });
 }
 
-export function addKeyRow() {
-  const input = document.querySelector("#key-add");
+function removeChannelKey(ch, index) {
+  if (index < 0 || index >= ch.keys.length) return;
+  enqueueAi(() => {
+    ch.keys.splice(index, 1);
+  }, "密钥已移除", { force: true });
+}
+
+function addChannelKey(ch, input) {
   const secret = input ? input.value.trim() : "";
   if (!secret) {
     toast("请输入密钥");
@@ -1136,8 +1301,8 @@ export function addKeyRow() {
   const tail = secret.length >= 12 ? secret.slice(-4) : "";
   if (input) input.value = "";
   enqueueAi(() => {
-    state.aiKeyRows.push({ secret, tail });
-  }, "密钥已添加");
+    ch.keys.push({ secret, tail });
+  }, "密钥已添加", { force: true });
 }
 
 export async function loadDkimSection() {

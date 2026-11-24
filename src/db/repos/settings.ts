@@ -1,4 +1,5 @@
 import { ulid } from "ulid";
+import type { AiChannelsFallback, AiProvider } from "../../ai/pool.js";
 import { keyTail } from "../../ai/secret.js";
 import { LABELS, type Label } from "../../ai/types.js";
 import { ConfigError, parseAcceptDomains } from "../../config.js";
@@ -15,6 +16,7 @@ export const SETTING_DOMAIN_NAMES = "domain_names";
 export const SETTING_SENDER_NAMES = "sender_names";
 export const SETTING_AI_MODELS = "ai_models";
 export const SETTING_AI_KEYS = "ai_keys";
+export const SETTING_AI_CHANNELS = "ai_channels";
 export const SETTING_AI_ENABLED = "ai_enabled";
 export const SETTING_AI_THINKING = "ai_thinking";
 export const SETTING_PASSWORD_HASH = "password_hash";
@@ -55,6 +57,8 @@ export const MAX_SENDER_NAME = 40;
 export const MAX_DOMAIN_NAMES = 50;
 export const MAX_AI_MODELS = 8;
 export const MAX_AI_KEYS = 20;
+export const MAX_AI_CHANNELS = 8;
+export const AI_PROVIDERS = ["gemini", "openai-compat"] as const;
 export const MAX_BLOCKED_SENDERS = 500;
 
 const MODEL_RE = /^[A-Za-z0-9._:@/-]{1,80}$/;
@@ -350,6 +354,157 @@ export interface AiPoolPublic {
   keysFrom: "saved" | "env";
 }
 
+export interface StoredAiChannel {
+  id: string;
+  provider: AiProvider;
+  baseUrl: string;
+  model: string;
+  keys: StoredAiKey[];
+}
+
+export interface AiChannelPublic {
+  id: string;
+  provider: AiProvider;
+  baseUrl: string;
+  model: string;
+  keys: AiKeyPublic[];
+}
+
+export interface AiChannelsSource {
+  channels: StoredAiChannel[];
+  from: "saved" | "legacy" | "env";
+}
+
+export interface AiChannelsPublic {
+  channels: AiChannelPublic[];
+  from: "saved" | "legacy" | "env";
+}
+
+export function readEffectiveAiChannels(db: Db, fallback: AiChannelsFallback): AiChannelsSource {
+  const storedChannels = readStoredAiChannels(db);
+  if (storedChannels !== null) {
+    return { channels: storedChannels, from: "saved" };
+  }
+
+  const legacy = readStoredAiPool(db);
+  if (legacy.models.length > 0 || legacy.keys.length > 0) {
+    const provider: AiProvider = fallback.classifier === "openai-compat" ? "openai-compat" : "gemini";
+    const baseUrl =
+      provider === "openai-compat" ? (fallback.openaiBaseUrl ?? "").trim() : (fallback.geminiBaseUrl ?? "").trim();
+    const envModels =
+      provider === "gemini"
+        ? [fallback.geminiModel || "gemini-2.5-flash"]
+        : fallback.openaiModel
+          ? [fallback.openaiModel]
+          : [];
+    const models = legacy.models.length > 0 ? legacy.models : envModels;
+    const envKeys = provider === "gemini" ? fallback.geminiKeys : fallback.openaiKeys;
+    const keys = legacy.keys.length > 0 ? legacy.keys : envKeys;
+    const channelModels = models.length > 0 ? models : [""];
+    return {
+      channels: channelModels.map((model, index) => ({
+        id: `legacy:${index}`,
+        provider,
+        baseUrl,
+        model,
+        keys: keys.map((item) => ({ id: item.id, secret: item.secret })),
+      })),
+      from: "legacy",
+    };
+  }
+
+  if (fallback.classifier === "fake") {
+    return { channels: [], from: "env" };
+  }
+  const provider: AiProvider = fallback.classifier === "openai-compat" ? "openai-compat" : "gemini";
+  const baseUrl =
+    provider === "openai-compat" ? (fallback.openaiBaseUrl ?? "").trim() : (fallback.geminiBaseUrl ?? "").trim();
+  const model = provider === "gemini" ? fallback.geminiModel || "gemini-2.5-flash" : fallback.openaiModel ?? "";
+  const keys = provider === "gemini" ? fallback.geminiKeys : fallback.openaiKeys;
+  return {
+    channels: [
+      {
+        id: "env:0",
+        provider,
+        baseUrl,
+        model,
+        keys: keys.map((item) => ({ id: item.id, secret: item.secret })),
+      },
+    ],
+    from: "env",
+  };
+}
+
+export function presentAiChannels(source: AiChannelsSource): AiChannelsPublic {
+  return {
+    channels: source.channels.map((ch) => ({
+      id: ch.id,
+      provider: ch.provider,
+      baseUrl: ch.baseUrl,
+      model: ch.model,
+      keys: ch.keys.map((item) => ({ id: item.id, tail: keyTail(item.secret) })),
+    })),
+    from: source.from,
+  };
+}
+
+export function presentAiPoolFromChannels(source: AiChannelsSource): AiPoolPublic {
+  const models: string[] = [];
+  const keys: AiKeyPublic[] = [];
+  const seenKeys = new Set<string>();
+  for (const ch of source.channels) {
+    if (ch.model && !models.includes(ch.model)) models.push(ch.model);
+    for (const item of ch.keys) {
+      if (seenKeys.has(item.id)) continue;
+      seenKeys.add(item.id);
+      keys.push({ id: item.id, tail: keyTail(item.secret) });
+    }
+  }
+  const src: "saved" | "env" = source.from === "env" ? "env" : "saved";
+  return {
+    models,
+    keys,
+    modelsFrom: models.length > 0 ? src : "env",
+    keysFrom: keys.length > 0 ? src : "env",
+  };
+}
+
+export function saveAiChannels(
+  db: Db,
+  input: ReadonlyArray<{
+    id?: string;
+    provider: AiProvider;
+    baseUrl?: string;
+    model?: string;
+    keys: ReadonlyArray<{ id?: string; secret?: string }>;
+  }>,
+  fallbackKeys: readonly StoredAiKey[],
+  now: number,
+): AiChannelsPublic {
+  if (input.length > MAX_AI_CHANNELS) throw new SettingsError(`at most ${MAX_AI_CHANNELS} channels`);
+  const known = collectKnownAiKeys(db, fallbackKeys);
+  const seenChannelIds = new Set<string>();
+  const channels: StoredAiChannel[] = [];
+
+  for (const item of input) {
+    if (!AI_PROVIDERS.includes(item.provider)) throw new SettingsError("unknown ai provider");
+    const rawId = item.id?.trim() ?? "";
+    const id = !rawId || rawId.startsWith("legacy:") || rawId.startsWith("env:") || seenChannelIds.has(rawId)
+      ? ulid()
+      : rawId;
+    seenChannelIds.add(id);
+
+    const baseUrl = cleanOptionalHttpUrl(item.baseUrl ?? "");
+    const model = (item.model ?? "").trim();
+    if (model && !MODEL_RE.test(model)) throw new SettingsError(`invalid model (${model})`);
+    const keys = normalizeKeyList(item.keys, known);
+    channels.push({ id, provider: item.provider, baseUrl, model, keys });
+  }
+
+  writeRaw(db, SETTING_AI_CHANNELS, JSON.stringify(channels), now);
+  return presentAiChannels({ channels, from: "saved" });
+}
+
 export function readEffectiveAiPool(
   db: Db,
   fallback: { models: readonly string[]; keys: readonly StoredAiKey[] },
@@ -385,6 +540,7 @@ export function saveAiPool(
   const write = db.transaction(() => {
     writeRaw(db, SETTING_AI_MODELS, JSON.stringify(models), now);
     writeRaw(db, SETTING_AI_KEYS, JSON.stringify(keys), now);
+    db.prepare("DELETE FROM settings WHERE key = ?").run(SETTING_AI_CHANNELS);
   });
   write();
   return {
@@ -455,10 +611,28 @@ function normalizeAiKeys(
   input: readonly { id?: string; secret?: string }[],
   fallback: readonly StoredAiKey[],
 ): StoredAiKey[] {
-  if (input.length > MAX_AI_KEYS) throw new SettingsError(`at most ${MAX_AI_KEYS} keys`);
+  const known = collectKnownAiKeys(db, fallback);
+  return normalizeKeyList(input, known);
+}
+
+function collectKnownAiKeys(db: Db, fallback: readonly StoredAiKey[]): Map<string, string> {
   const known = new Map<string, string>();
   for (const item of readKeyList(db)) known.set(item.id, item.secret);
+  const storedChannels = readStoredAiChannels(db);
+  if (storedChannels) {
+    for (const ch of storedChannels) {
+      for (const item of ch.keys) known.set(item.id, item.secret);
+    }
+  }
   for (const item of fallback) known.set(item.id, item.secret);
+  return known;
+}
+
+function normalizeKeyList(
+  input: readonly { id?: string; secret?: string }[],
+  known: ReadonlyMap<string, string>,
+): StoredAiKey[] {
+  if (input.length > MAX_AI_KEYS) throw new SettingsError(`at most ${MAX_AI_KEYS} keys`);
   const out: StoredAiKey[] = [];
   const seen = new Set<string>();
   for (const item of input) {
@@ -482,6 +656,56 @@ function normalizeAiKeys(
     out.push({ id: nextId, secret });
   }
   return out;
+}
+
+function readStoredAiChannels(db: Db): StoredAiChannel[] | null {
+  const raw = readRaw(db, SETTING_AI_CHANNELS);
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const out: StoredAiChannel[] = [];
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== "object") continue;
+      const item = entry as { id?: unknown; provider?: unknown; baseUrl?: unknown; model?: unknown; keys?: unknown };
+      const provider = item.provider;
+      if (provider !== "gemini" && provider !== "openai-compat") continue;
+      const id = typeof item.id === "string" && item.id.trim() ? item.id.trim() : ulid();
+      const baseUrl = typeof item.baseUrl === "string" ? item.baseUrl.trim() : "";
+      const model = typeof item.model === "string" && MODEL_RE.test(item.model.trim()) ? item.model.trim() : "";
+      const keys: StoredAiKey[] = [];
+      if (Array.isArray(item.keys)) {
+        for (const rawKey of item.keys) {
+          if (!rawKey || typeof rawKey !== "object") continue;
+          const kid = (rawKey as { id?: unknown }).id;
+          const secret = (rawKey as { secret?: unknown }).secret;
+          if (typeof kid !== "string" || typeof secret !== "string") continue;
+          const trimmed = secret.trim();
+          if (!kid || trimmed.length < 8) continue;
+          keys.push({ id: kid, secret: trimmed });
+        }
+      }
+      out.push({ id, provider, baseUrl, model, keys: keys.slice(0, MAX_AI_KEYS) });
+    }
+    return out.slice(0, MAX_AI_CHANNELS);
+  } catch {
+    return null;
+  }
+}
+
+function cleanOptionalHttpUrl(raw: string): string {
+  const value = raw.trim().slice(0, 300);
+  if (!value) return "";
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new SettingsError("invalid base url");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new SettingsError("invalid base url");
+  }
+  return value.replace(/\/+$/, "");
 }
 
 function cleanSecret(value: string): string {

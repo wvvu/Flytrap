@@ -35,26 +35,53 @@ export function createOpenAiClassifier(options: OpenAiCompatOptions): Classifier
     id: "openai-compat",
     model: options.model ?? "",
     classify(input) {
-      return pool.run(snapshot(), async (modelName, secret) => {
-        const content = await complete(fetchImpl, options.baseUrl, secret, modelName, input, timeoutMs);
-        const output = parseModelOutput(parseModelJson(content));
-        return finalizeAiResult({
-          schema: 1,
-          prompt_id: input.promptId,
+      return pool.run(snapshot(), (modelName, secret) =>
+        classifyWithOpenAi({
+          fetchImpl,
+          baseUrl: options.baseUrl,
           model: modelName,
-          provider: "openai-compat",
-          at: new Date(now()).toISOString(),
-          label: output.label,
-          confidence: output.confidence,
-          summary: output.summary,
-          tags: output.tags,
-          signals: output.signals,
-          ...(output.otp !== undefined ? { otp: output.otp || null } : {}),
-          raw: output,
-        });
-      });
+          secret,
+          input,
+          timeoutMs,
+          now,
+        }),
+      );
     },
   };
+}
+
+export async function classifyWithOpenAi(options: {
+  fetchImpl: typeof fetch;
+  baseUrl: string;
+  model: string;
+  secret: string;
+  input: ClassifyInput;
+  timeoutMs: number;
+  now: () => number;
+}) {
+  const content = await complete(
+    options.fetchImpl,
+    options.baseUrl,
+    options.secret,
+    options.model,
+    options.input,
+    options.timeoutMs,
+  );
+  const output = parseModelOutput(parseModelJson(content));
+  return finalizeAiResult({
+    schema: 1,
+    prompt_id: options.input.promptId,
+    model: options.model,
+    provider: "openai-compat",
+    at: new Date(options.now()).toISOString(),
+    label: output.label,
+    confidence: output.confidence,
+    summary: output.summary,
+    tags: output.tags,
+    signals: output.signals,
+    ...(output.otp !== undefined ? { otp: output.otp || null } : {}),
+    raw: output,
+  });
 }
 
 async function complete(

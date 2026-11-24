@@ -3,6 +3,7 @@ import test from "node:test";
 import { createGeminiClassifier } from "../src/ai/gemini.js";
 import { createOpenAiClassifier } from "../src/ai/openai-compat.js";
 import { PoolCooldownError } from "../src/ai/pool.js";
+import { createMultiChannelClassifier } from "../src/ai/router.js";
 
 test("gemini classifier completes json format and parses result", async () => {
   let calledUrl = "";
@@ -308,4 +309,115 @@ test("openai-compat rotates across multiple keys on auth/rate errors and cools d
     facts: {} as never,
   });
   assert.deepEqual(seenAuth, ["Bearer sk-bad-1", "Bearer sk-good-2", "Bearer sk-good-2"]);
+});
+
+test("multi-channel router falls back from OpenAI-compat to Gemini and aggregates cooldowns", async () => {
+  let clock = 200_000;
+  const calls: string[] = [];
+  let failPrimary = true;
+
+  const router = createMultiChannelClassifier({
+    cooldownMs: 60_000,
+    now: () => clock,
+    resolve: () => [
+      {
+        id: "ch-oai",
+        provider: "openai-compat",
+        baseUrl: "https://oai.example/v1",
+        model: "deepseek-chat",
+        keys: [{ id: "ok1", secret: "sk-primary-1111" }],
+      },
+      {
+        id: "ch-gem",
+        provider: "gemini",
+        baseUrl: "",
+        model: "gemini-flash-lite-latest",
+        keys: [{ id: "gk1", secret: "AIza-backup-2222" }],
+      },
+    ],
+    thinking: () => "medium",
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.startsWith("https://oai.example/v1")) {
+        calls.push("oai");
+        if (failPrimary) return new Response("rate limit", { status: 429 });
+        return Response.json({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  label: "legit",
+                  confidence: 0.95,
+                  summary: "来自主通道",
+                  tags: [],
+                  signals: [],
+                  otp: null,
+                }),
+              },
+            },
+          ],
+        });
+      }
+      calls.push("gemini");
+      if (!failPrimary) return new Response('{"error":{"code":503,"status":"UNAVAILABLE"}}', { status: 503 });
+      return Response.json({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    label: "legit",
+                    confidence: 0.91,
+                    summary: "来自备用 Gemini",
+                    tags: [],
+                    signals: [],
+                    otp: null,
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      });
+    },
+  });
+
+  // Primary OpenAI channel hits 429 -> seamlessly falls back to Gemini channel
+  const fallbackRes = await router.classify({
+    promptId: "classify-v1",
+    systemPrompt: "sys",
+    userMessage: "msg",
+    facts: {} as never,
+  });
+  assert.equal(fallbackRes.provider, "gemini");
+  assert.equal(fallbackRes.model, "gemini-flash-lite-latest");
+  assert.deepEqual(calls, ["oai", "gemini"]);
+
+  // Next call skips cooled primary (429) and goes straight to Gemini; once Gemini also cools on 503, throws PoolCooldownError
+  failPrimary = false;
+  await assert.rejects(
+    () =>
+      router.classify({
+        promptId: "classify-v1",
+        systemPrompt: "sys",
+        userMessage: "msg",
+        facts: {} as never,
+      }),
+    (err: unknown) => err instanceof PoolCooldownError && err.madeCall === true && err.retryAfterMs === 15_000,
+  );
+  assert.deepEqual(calls, ["oai", "gemini", "gemini"]);
+
+  // Third call while both channels are cooling throws PoolCooldownError with madeCall=false
+  await assert.rejects(
+    () =>
+      router.classify({
+        promptId: "classify-v1",
+        systemPrompt: "sys",
+        userMessage: "msg",
+        facts: {} as never,
+      }),
+    (err: unknown) => err instanceof PoolCooldownError && err.madeCall === false && err.retryAfterMs === 15_000,
+  );
+  assert.deepEqual(calls, ["oai", "gemini", "gemini"]);
 });

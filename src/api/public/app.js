@@ -109,9 +109,8 @@ import {
 import { loadDlqJobs, openFailedMail, renderFailureGroups, retryAllDead, updateDlqBadge } from "./dlq-view.js";
 import {
   addBlocked,
+  addChannelCard,
   addDomain,
-  addKeyRow,
-  addModelRow,
   addSenderRow,
   enqueueAi,
   generateDkim,
@@ -290,22 +289,7 @@ document.querySelector("#btn-reset-save")?.addEventListener("click", () => void 
 document.querySelector("#btn-reset-resend")?.addEventListener("click", () => void sendResetCode());
 
 document.querySelector("#btn-refresh-logs")?.addEventListener("click", () => void loadLogs());
-document.querySelector("#btn-add-model")?.addEventListener("click", () => addModelRow());
-document.querySelector("#btn-add-key")?.addEventListener("click", () => addKeyRow());
-
-document.querySelector("#model-add")?.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    addModelRow();
-  }
-});
-
-document.querySelector("#key-add")?.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    addKeyRow();
-  }
-});
+document.querySelector("#btn-add-channel")?.addEventListener("click", () => addChannelCard());
 
 document.querySelector("#btn-save-prompt")?.addEventListener("click", () => void saveCurrentPrompt());
 document.querySelector("#prompt-editor")?.addEventListener("input", syncPromptSave);
