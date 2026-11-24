@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createGeminiClassifier } from "../src/ai/gemini.js";
+import { createOpenAiClassifier } from "../src/ai/openai-compat.js";
+import { PoolCooldownError } from "../src/ai/pool.js";
 
 test("gemini classifier completes json format and parses result", async () => {
   let calledUrl = "";
@@ -178,4 +180,132 @@ test("gemini tries the next model when the first one is missing", async () => {
   assert.deepEqual(models, ["gemini-2.5-flash", "gemini-2.0-flash"]);
   assert.equal(JSON.stringify(classifier.getKeyPoolStatus()).includes("secret-value"), false);
   assert.equal(classifier.getKeyPoolStatus().keys[0]?.tail, "1234");
+});
+
+test("gemini rotates past auth/timeout errors and throws PoolCooldownError with retryAfterMs when all keys cool down", async () => {
+  let clock = 100_000;
+  const calls: string[] = [];
+  const okBody = () =>
+    new Response(
+      JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [{ text: JSON.stringify({ label: "legit", confidence: 0.9, summary: "ok", tags: [], signals: [] }) }],
+            },
+          },
+        ],
+      }),
+      { status: 200 },
+    );
+
+  const classifier = createGeminiClassifier({
+    apiKeys: ["bad-auth-key-1111", "timeout-key-2222", "good-key-3333"],
+    cooldownMs: 60_000,
+    now: () => clock,
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes("bad-auth-key")) {
+        calls.push("k1");
+        return new Response("API_KEY_INVALID", { status: 403 });
+      }
+      if (url.includes("timeout-key")) {
+        calls.push("k2");
+        const err = new Error("The operation was aborted due to timeout");
+        err.name = "TimeoutError";
+        throw err;
+      }
+      calls.push("k3");
+      return okBody();
+    },
+  });
+
+  const res = await classifier.classify({
+    promptId: "classify-v1",
+    systemPrompt: "sys",
+    userMessage: "msg",
+    facts: {} as never,
+  });
+  assert.equal(res.label, "legit");
+  assert.deepEqual(calls, ["k1", "k2", "k3"]);
+  const status = classifier.getKeyPoolStatus();
+  assert.equal(status.keys[0]?.cooldownRemainingSec, 60);
+  assert.equal(status.keys[1]?.cooldownRemainingSec, 15);
+  assert.equal(status.keys[2]?.isCoolingDown, false);
+
+  // Now simulate all keys hitting 503 UNAVAILABLE in a burst
+  const all503 = createGeminiClassifier({
+    apiKeys: ["k-a-111111111111", "k-b-222222222222"],
+    cooldownMs: 60_000,
+    now: () => clock,
+    fetchImpl: async () => new Response('{"error":{"code":503,"status":"UNAVAILABLE"}}', { status: 503 }),
+  });
+
+  await assert.rejects(
+    () => all503.classify({ promptId: "classify-v1", systemPrompt: "sys", userMessage: "msg", facts: {} as never }),
+    (err: unknown) => err instanceof PoolCooldownError && err.madeCall === true && err.retryAfterMs === 15_000,
+  );
+
+  // Second caller right afterward hits pre-existing cooldown without making any HTTP call
+  await assert.rejects(
+    () => all503.classify({ promptId: "classify-v1", systemPrompt: "sys", userMessage: "msg", facts: {} as never }),
+    (err: unknown) => err instanceof PoolCooldownError && err.madeCall === false && err.retryAfterMs === 15_000,
+  );
+});
+
+test("openai-compat rotates across multiple keys on auth/rate errors and cools down", async () => {
+  let clock = 50_000;
+  const seenAuth: string[] = [];
+  const classifier = createOpenAiClassifier({
+    baseUrl: "https://llm.example/v1",
+    cooldownMs: 60_000,
+    now: () => clock,
+    resolve: () => ({
+      models: ["gpt-test"],
+      keys: [
+        { id: "o1", secret: "sk-bad-1" },
+        { id: "o2", secret: "sk-good-2" },
+      ],
+    }),
+    fetchImpl: async (_input, init) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      seenAuth.push(auth);
+      if (auth.includes("sk-bad-1")) return new Response("invalid_api_key", { status: 401 });
+      return Response.json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                label: "legit",
+                confidence: 0.92,
+                summary: "正常通知",
+                tags: [],
+                signals: [],
+                otp: null,
+              }),
+            },
+          },
+        ],
+      });
+    },
+  });
+
+  const first = await classifier.classify({
+    promptId: "classify-v1",
+    systemPrompt: "sys",
+    userMessage: "msg",
+    facts: {} as never,
+  });
+  assert.equal(first.label, "legit");
+  assert.deepEqual(seenAuth, ["Bearer sk-bad-1", "Bearer sk-good-2"]);
+
+  // Next call should skip cooled sk-bad-1 and go straight to sk-good-2
+  clock += 1_000;
+  await classifier.classify({
+    promptId: "classify-v1",
+    systemPrompt: "sys",
+    userMessage: "msg",
+    facts: {} as never,
+  });
+  assert.deepEqual(seenAuth, ["Bearer sk-bad-1", "Bearer sk-good-2", "Bearer sk-good-2"]);
 });

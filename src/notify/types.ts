@@ -6,6 +6,7 @@ export interface NotifyInput {
   confidence: number;
   summary: string;
   otp?: string | null;
+  fallback?: boolean;
   panelUrl: string;
 }
 
@@ -38,9 +39,13 @@ export function notifyPayload(input: NotifyInput): {
 
 export function notifyText(input: NotifyInput): string {
   const otp = typeof input.otp === "string" ? input.otp.trim() : "";
+  const header =
+    input.fallback || input.label === "unclassified"
+      ? "[未分类 / AI异常]"
+      : `[${input.label}] (${input.confidence.toFixed(2)})`;
   return [
     otp ? `验证码: ${otp}` : "",
-    `[${input.label}] (${input.confidence.toFixed(2)})`,
+    header,
     input.subject ? `Subject: ${input.subject}` : "",
     input.from ? `From: ${input.from}` : "",
     input.summary,

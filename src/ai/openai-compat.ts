@@ -1,5 +1,4 @@
-import { scrubSecrets } from "./secret.js";
-import { MISSING_API_KEY_MESSAGE } from "./pool.js";
+import { createKeyPool, type AiPoolSnapshot } from "./pool.js";
 import { finalizeAiResult, parseModelJson, parseModelOutput } from "./types.js";
 import type { Classifier, ClassifyInput } from "./classifier.js";
 
@@ -11,62 +10,49 @@ export interface OpenAiCompatOptions {
   fetchImpl?: typeof fetch;
   now?: () => number;
   timeoutMs?: number;
+  cooldownMs?: number;
 }
 
 export function createOpenAiClassifier(options: OpenAiCompatOptions): Classifier {
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? 60_000;
+  const pool = createKeyPool({
+    provider: "openai",
+    cooldownMs: options.cooldownMs,
+    now,
+  });
+
+  function snapshot(): AiPoolSnapshot {
+    if (options.resolve) return options.resolve();
+    return {
+      models: options.model ? [options.model] : [],
+      keys: options.apiKey ? [{ id: "static", secret: options.apiKey }] : [],
+    };
+  }
+
   return {
     id: "openai-compat",
     model: options.model ?? "",
-    async classify(input) {
-      const pool = options.resolve
-        ? options.resolve()
-        : {
-            models: options.model ? [options.model] : [],
-            keys: options.apiKey ? [{ id: "static", secret: options.apiKey }] : [],
-          };
-      const models = pool.models.map((item) => item.trim()).filter(Boolean);
-      const keys = pool.keys.map((item) => ({ ...item, secret: item.secret.trim() })).filter((item) => item.secret);
-      if (models.length === 0 || keys.length === 0) throw new Error(MISSING_API_KEY_MESSAGE);
-      const secrets = keys.map((item) => item.secret);
-      let lastErr: Error | null = null;
-      for (const modelName of models) {
-        let modelRejected = false;
-        for (const key of keys) {
-          try {
-            const content = await complete(fetchImpl, options.baseUrl, key.secret, modelName, input, timeoutMs);
-            const output = parseModelOutput(parseModelJson(content));
-            return finalizeAiResult({
-              schema: 1,
-              prompt_id: input.promptId,
-              model: modelName,
-              provider: "openai-compat",
-              at: new Date(now()).toISOString(),
-              label: output.label,
-              confidence: output.confidence,
-              summary: output.summary,
-              tags: output.tags,
-              signals: output.signals,
-              ...(output.otp !== undefined ? { otp: output.otp || null } : {}),
-              raw: output,
-            });
-          } catch (err) {
-            const message = scrubSecrets(err instanceof Error ? err.message : String(err), secrets);
-            lastErr = new Error(message);
-            if (message.includes("429") || message.includes("503")) continue;
-            if (message.includes("404") || /not found/i.test(message)) {
-              modelRejected = true;
-              break;
-            }
-            throw lastErr;
-          }
-        }
-        if (modelRejected) continue;
-        break;
-      }
-      throw lastErr || new Error("openai all attempts failed");
+    classify(input) {
+      return pool.run(snapshot(), async (modelName, secret) => {
+        const content = await complete(fetchImpl, options.baseUrl, secret, modelName, input, timeoutMs);
+        const output = parseModelOutput(parseModelJson(content));
+        return finalizeAiResult({
+          schema: 1,
+          prompt_id: input.promptId,
+          model: modelName,
+          provider: "openai-compat",
+          at: new Date(now()).toISOString(),
+          label: output.label,
+          confidence: output.confidence,
+          summary: output.summary,
+          tags: output.tags,
+          signals: output.signals,
+          ...(output.otp !== undefined ? { otp: output.otp || null } : {}),
+          raw: output,
+        });
+      });
     },
   };
 }

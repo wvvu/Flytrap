@@ -14,7 +14,9 @@ import { saveBlockedSenders } from "../src/db/repos/settings.js";
 import { insertMessage } from "../src/db/repos/messages.js";
 import { storeRaw } from "../src/ingest/store-raw.js";
 import { fakeClassifier } from "../src/ai/classifier.js";
-import { MISSING_API_KEY_MESSAGE } from "../src/ai/pool.js";
+import { MISSING_API_KEY_MESSAGE, PoolCooldownError } from "../src/ai/pool.js";
+import { barkPayload } from "../src/notify/bark.js";
+import { notifyText, type NotifyInput } from "../src/notify/types.js";
 import { checkDiskAlert, dirSizeBytes } from "../src/worker/disk-alert.js";
 import type { AppLog } from "../src/log.js";
 import { authResultSchema, authenticateMessage, DnsTimeoutError, type AuthResult } from "../src/mail/auth.js";
@@ -217,6 +219,147 @@ test("a classify job with no api key waits instead of burning an attempt", async
     assert.equal(row.attempts, 0);
     assert.equal(row.run_after, clock + 60_000);
     assert.equal(await processNext(throwing, "worker-nokey"), false);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("classify waits out key pool cooldown without burning pre-cooldown callers and sends fallback alert with OTP on dead", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-cooldown-fallback-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  try {
+    const idA = await seed(db, dir, Buffer.from("Subject: Google Verification\r\n\r\nYour verification code is 537822.\r\n"));
+    const idB = await seed(db, dir, Buffer.from("Subject: Second Letter\r\n\r\nHello world\r\n"));
+    let clock = 1_000_000;
+    const base = workerOptions(db, dir, async () => failedAuth(), () => clock);
+
+    // Run auth + parse for both messages
+    for (let i = 0; i < 4; i += 1) {
+      assert.equal(await processNext(base, "worker-prep"), true);
+    }
+
+    let cooldownUntil = 0;
+    let recoverAfterFail = true;
+    const sent: NotifyInput[] = [];
+    const options: WorkerOptions = {
+      ...base,
+      notifiers: [
+        {
+          id: "stub",
+          async notify(input) {
+            sent.push(input);
+          },
+        },
+      ],
+      notifyLabels: ["legit"],
+      classifier: {
+        id: "cooldown-sim",
+        model: "sim",
+        async classify() {
+          if (clock < cooldownUntil) {
+            throw new PoolCooldownError("pool cooling", cooldownUntil - clock, false);
+          }
+          if (recoverAfterFail) {
+            cooldownUntil = clock + 60_000;
+            throw new PoolCooldownError("gemini 503", 60_000, true);
+          }
+          return {
+            schema: 1,
+            prompt_id: "classify-v1",
+            model: "sim",
+            provider: "gemini",
+            at: new Date(clock).toISOString(),
+            label: "legit",
+            confidence: 0.9,
+            summary: "Recovered",
+            tags: [],
+            signals: [],
+          };
+        },
+      },
+    };
+
+    // Job A calls upstream, triggers 60s cooldown -> 1 attempt spent, scheduled after 61s
+    assert.equal(await processNext(options, "worker-cd"), true);
+    const jobA1 = db.prepare("SELECT status, attempts, run_after FROM jobs WHERE type = 'classify' AND message_id = ?").get(idA) as {
+      status: string;
+      attempts: number;
+      run_after: number;
+    };
+    assert.equal(jobA1.status, "queued");
+    assert.equal(jobA1.attempts, 1);
+    assert.equal(jobA1.run_after, clock + 61_000);
+
+    // Job B runs right after -> pool already cooling (madeCall=false), deferred without spending an attempt
+    assert.equal(await processNext(options, "worker-cd"), true);
+    const jobB1 = db.prepare("SELECT status, attempts, run_after, payload FROM jobs WHERE type = 'classify' AND message_id = ?").get(idB) as {
+      status: string;
+      attempts: number;
+      run_after: number;
+      payload: string | null;
+    };
+    assert.equal(jobB1.status, "queued");
+    assert.equal(jobB1.attempts, 0);
+    assert.equal(jobB1.run_after, clock + 61_000);
+    assert.equal((JSON.parse(jobB1.payload || "{}") as { cooldownDefers?: number }).cooldownDefers, 1);
+
+    // Advance past cooldown and let Job B succeed while Job A burns its remaining attempts until dead
+    clock += 61_000;
+    recoverAfterFail = false;
+    assert.equal(await processNext(options, "worker-cd"), true);
+    assert.equal(await processNext(options, "worker-cd"), true);
+    // Notify runs for both recovered messages
+    assert.equal(await processNext(options, "worker-cd"), true);
+    assert.equal(await processNext(options, "worker-cd"), true);
+    assert.equal(sent.length, 2);
+
+    // Now test dead classify -> fallback notification with OTP & preserved error status
+    sent.length = 0;
+    const idC = await seed(
+      db,
+      dir,
+      Buffer.from(
+        "Subject: Google Verification\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nYour verification code: 537822\r\n",
+      ),
+    );
+    assert.equal(await processNext(options, "worker-dead"), true);
+    assert.equal(await processNext(options, "worker-dead"), true);
+    db.prepare("UPDATE jobs SET max_attempts = 1 WHERE type = 'classify' AND message_id = ?").run(idC);
+    const deadOptions: WorkerOptions = {
+      ...options,
+      classifier: {
+        id: "broken",
+        model: "broken",
+        async classify() {
+          throw new Error("gemini 503 UNAVAILABLE");
+        },
+      },
+    };
+    assert.equal(await processNext(deadOptions, "worker-dead"), true);
+    const deadClassify = db.prepare("SELECT status FROM jobs WHERE type = 'classify' AND message_id = ?").get(idC) as { status: string };
+    assert.equal(deadClassify.status, "dead");
+    const errMsg = db.prepare("SELECT status, error FROM messages WHERE id = ?").get(idC) as { status: string; error: string | null };
+    assert.equal(errMsg.status, "error");
+    assert.match(errMsg.error ?? "", /503/);
+
+    // Fallback notify runs and delivers OTP even without AI result
+    assert.equal(await processNext(deadOptions, "worker-dead"), true);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.label, "unclassified");
+    assert.equal(sent[0]?.fallback, true);
+    assert.equal(sent[0]?.otp, "537822");
+    assert.match(notifyText(sent[0]!), /^验证码: 537822\n\[未分类 \/ AI异常\]/);
+    const bark = barkPayload(sent[0]!);
+    assert.equal(bark.title, "[验证码 537822] Google Verification");
+    assert.equal(bark.copy, "537822");
+    assert.equal(bark.level, undefined);
+
+    // Message retains error status so DLQ retry remains available
+    const afterNotify = db.prepare("SELECT status, error FROM messages WHERE id = ?").get(idC) as { status: string; error: string | null };
+    assert.equal(afterNotify.status, "error");
+    assert.match(afterNotify.error ?? "", /503/);
   } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

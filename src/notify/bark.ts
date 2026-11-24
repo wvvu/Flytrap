@@ -7,6 +7,7 @@ const LABEL_CN: Record<string, string> = {
   malware: "恶意",
   "unsolicited-admin": "推广",
   gray: "待看",
+  unclassified: "未分类",
 };
 
 export interface BarkPayload {

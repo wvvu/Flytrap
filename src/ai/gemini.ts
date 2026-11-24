@@ -1,7 +1,10 @@
-import { scrubSecrets, keyTail } from "./secret.js";
-import { MISSING_API_KEY_MESSAGE } from "./pool.js";
+import { createKeyPool, type KeyPoolSummary, type KeyState, type PoolKey } from "./pool.js";
+import { finalizeAiResult, parseModelJson, parseModelOutput } from "./types.js";
+import type { Classifier, ClassifyInput } from "./classifier.js";
 
 export type ThinkingLevel = "off" | "low" | "medium" | "high";
+export type { KeyPoolSummary, KeyState };
+export type GeminiPoolKey = PoolKey;
 
 export function geminiThinkingConfig(
   model: string,
@@ -13,23 +16,6 @@ export function geminiThinkingConfig(
   }
   const budget = { off: 0, low: 1024, medium: 8192, high: 24576 }[level];
   return { thinkingBudget: budget };
-}
-import { finalizeAiResult, parseModelJson, parseModelOutput } from "./types.js";
-import type { Classifier, ClassifyInput } from "./classifier.js";
-
-export interface KeyState {
-  key: string;
-  cooldownUntil: number;
-  totalCalls: number;
-  successCalls: number;
-  failedCalls: number;
-  lastUsedAt: number;
-  lastError?: string;
-}
-
-export interface GeminiPoolKey {
-  id: string;
-  secret: string;
 }
 
 export interface GeminiClassifierOptions {
@@ -46,18 +32,6 @@ export interface GeminiClassifierOptions {
   cooldownMs?: number;
 }
 
-export interface KeyPoolSummary {
-  model: string;
-  keys: Array<{
-    tail: string;
-    isCoolingDown: boolean;
-    cooldownRemainingSec: number;
-    successCalls: number;
-    failedCalls: number;
-    lastError?: string;
-  }>;
-}
-
 export interface GeminiClassifier extends Classifier {
   getKeyPoolStatus(): KeyPoolSummary;
 }
@@ -66,7 +40,6 @@ export function createGeminiClassifier(options: GeminiClassifierOptions): Gemini
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? 60_000;
-  const cooldownMs = options.cooldownMs ?? 60_000;
   const model = options.model || "gemini-2.5-flash";
   const baseUrl = (options.baseUrl || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
 
@@ -76,158 +49,54 @@ export function createGeminiClassifier(options: GeminiClassifierOptions): Gemini
     .map((secret, index) => ({ id: `static:${index}`, secret }));
   const staticModels = (options.models ?? [model]).map((item) => item.trim()).filter(Boolean);
 
-  const states = new Map<string, KeyState>();
-  let roundRobinIdx = 0;
+  const pool = createKeyPool({
+    provider: "gemini",
+    cooldownMs: options.cooldownMs,
+    now,
+  });
 
   function snapshot(): { models: string[]; keys: GeminiPoolKey[] } {
     if (options.resolve) {
       const resolved = options.resolve();
       const models = resolved.models.map((item) => item.trim()).filter(Boolean);
-      const keys = resolved.keys
-        .map((item) => ({ id: item.id, secret: item.secret.trim() }))
-        .filter((item) => item.id && item.secret);
-      return { models: models.length > 0 ? models : staticModels, keys };
+      return {
+        models: models.length > 0 ? models : staticModels,
+        keys: resolved.keys,
+      };
     }
     return { models: staticModels, keys: staticKeys };
-  }
-
-  function stateFor(item: GeminiPoolKey): KeyState {
-    const current = states.get(item.id);
-    if (current) {
-      current.key = item.secret;
-      return current;
-    }
-    const created: KeyState = {
-      key: item.secret,
-      cooldownUntil: 0,
-      totalCalls: 0,
-      successCalls: 0,
-      failedCalls: 0,
-      lastUsedAt: 0,
-    };
-    states.set(item.id, created);
-    return created;
-  }
-
-  function pickAvailableKey(keys: readonly GeminiPoolKey[]): { item: GeminiPoolKey; state: KeyState } {
-    const currentNow = now();
-    const n = keys.length;
-    for (let offset = 0; offset < n; offset += 1) {
-      const idx = (roundRobinIdx + offset) % n;
-      const candidate = keys[idx];
-      if (!candidate) continue;
-      const state = stateFor(candidate);
-      if (state.cooldownUntil <= currentNow) {
-        roundRobinIdx = (idx + 1) % n;
-        return { item: candidate, state };
-      }
-    }
-    const minWait = Math.min(...keys.map((item) => Math.max(0, stateFor(item).cooldownUntil - currentNow)));
-    throw new Error(`gemini key pool exhausted: all ${keys.length} keys in cooldown (retry in ${Math.ceil(minWait / 1000)}s)`);
   }
 
   return {
     id: "gemini",
     model,
-    async classify(input: ClassifyInput) {
-      const pool = snapshot();
-      if (pool.keys.length === 0) throw new Error(MISSING_API_KEY_MESSAGE);
-      const secrets = pool.keys.map((item) => item.secret);
-      let lastErr: Error | null = null;
-
-      for (const modelName of pool.models) {
-        let modelRejected = false;
-        for (let attempt = 0; attempt < pool.keys.length; attempt += 1) {
-          let picked: { item: GeminiPoolKey; state: KeyState };
-          try {
-            picked = pickAvailableKey(pool.keys);
-          } catch (err) {
-            const message = scrubSecrets(err instanceof Error ? err.message : String(err), secrets);
-            throw new Error(message);
-          }
-          picked.state.totalCalls += 1;
-          picked.state.lastUsedAt = now();
-          try {
-            const thinking = options.thinking ? geminiThinkingConfig(modelName, options.thinking()) : undefined;
-            const content = await callGemini(fetchImpl, baseUrl, modelName, picked.item.secret, input, timeoutMs, thinking);
-            const output = parseModelOutput(parseModelJson(content));
-            picked.state.successCalls += 1;
-            return finalizeAiResult({
-              schema: 1,
-              prompt_id: input.promptId,
-              model: modelName,
-              provider: "gemini",
-              at: new Date(now()).toISOString(),
-              label: output.label,
-              confidence: output.confidence,
-              summary: output.summary,
-              tags: output.tags,
-              signals: output.signals,
-              ...(output.otp !== undefined ? { otp: output.otp || null } : {}),
-              raw: output,
-            });
-          } catch (err) {
-            const errMsg = scrubSecrets(err instanceof Error ? err.message : String(err), secrets);
-            picked.state.failedCalls += 1;
-            picked.state.lastError = errMsg;
-            if (isRateLimit(errMsg)) {
-              picked.state.cooldownUntil = now() + cooldownMs;
-              lastErr = new Error(errMsg);
-              continue;
-            }
-            if (isMissingModel(errMsg)) {
-              modelRejected = true;
-              lastErr = new Error(errMsg);
-              break;
-            }
-            throw new Error(errMsg);
-          }
-        }
-        if (modelRejected) continue;
-        break;
-      }
-
-      throw lastErr || new Error("gemini all attempts failed");
+    classify(input: ClassifyInput) {
+      return pool.run(snapshot(), async (modelName, secret) => {
+        const thinking = options.thinking ? geminiThinkingConfig(modelName, options.thinking()) : undefined;
+        const content = await callGemini(fetchImpl, baseUrl, modelName, secret, input, timeoutMs, thinking);
+        const output = parseModelOutput(parseModelJson(content));
+        return finalizeAiResult({
+          schema: 1,
+          prompt_id: input.promptId,
+          model: modelName,
+          provider: "gemini",
+          at: new Date(now()).toISOString(),
+          label: output.label,
+          confidence: output.confidence,
+          summary: output.summary,
+          tags: output.tags,
+          signals: output.signals,
+          ...(output.otp !== undefined ? { otp: output.otp || null } : {}),
+          raw: output,
+        });
+      });
     },
     getKeyPoolStatus() {
-      const currentNow = now();
-      const pool = snapshot();
-      return {
-        model: pool.models[0] || model,
-        keys: pool.keys.map((item) => {
-          const keyState = stateFor(item);
-          return {
-            tail: keyTail(item.secret),
-            isCoolingDown: keyState.cooldownUntil > currentNow,
-            cooldownRemainingSec: Math.max(0, Math.ceil((keyState.cooldownUntil - currentNow) / 1000)),
-            successCalls: keyState.successCalls,
-            failedCalls: keyState.failedCalls,
-            lastError: keyState.lastError,
-          };
-        }),
-      };
+      return pool.status(snapshot(), model);
     },
   };
 }
 
-function isRateLimit(message: string): boolean {
-  return message.includes("429") || message.includes("503") || message.includes("ResourceExhausted") || message.includes("Unavailable");
-}
-
-function isMissingModel(message: string): boolean {
-  return message.includes("404") || message.includes("NOT_FOUND") || /not found/i.test(message) || /invalid model/i.test(message);
-}
-
-async function callGemini(
-  fetchImpl: typeof fetch,
-  baseUrl: string,
-  model: string,
-  apiKey: string,
-  input: ClassifyInput,
-  timeoutMs: number,
-  thinking?: { thinkingBudget: number } | { thinkingLevel: string },
-): Promise<string> {
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 const GEMINI_RESPONSE_SCHEMA = {
   type: "OBJECT",
   properties: {
@@ -266,6 +135,16 @@ const GEMINI_RESPONSE_SCHEMA = {
   required: ["label", "confidence", "summary", "tags", "signals"],
 };
 
+async function callGemini(
+  fetchImpl: typeof fetch,
+  baseUrl: string,
+  model: string,
+  apiKey: string,
+  input: ClassifyInput,
+  timeoutMs: number,
+  thinking?: { thinkingBudget: number } | { thinkingLevel: string },
+): Promise<string> {
+  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = {
     system_instruction: {
       parts: [{ text: input.systemPrompt }],
@@ -283,7 +162,6 @@ const GEMINI_RESPONSE_SCHEMA = {
       ...(thinking ? { thinkingConfig: thinking } : {}),
     },
   };
-
 
   const response = await fetchImpl(url, {
     method: "POST",

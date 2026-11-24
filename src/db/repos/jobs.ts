@@ -93,20 +93,58 @@ export function completeJob(db: Db, id: string, now: number): void {
   ).run(now, id);
 }
 
-export function failJob(db: Db, id: string, error: string, now: number): "queued" | "dead" {
+export function failJob(
+  db: Db,
+  id: string,
+  error: string,
+  now: number,
+  options?: { minDelayMs?: number },
+): "queued" | "dead" {
   const current = db.prepare("SELECT attempts, max_attempts FROM jobs WHERE id = ?").get(id) as
     | { attempts: number; max_attempts: number }
     | undefined;
   if (!current) throw new Error("job not found");
   const attempts = current.attempts + 1;
   const dead = attempts >= current.max_attempts;
+  const delayMs = dead ? 0 : Math.max(backoffMs(attempts), options?.minDelayMs ?? 0);
   db.prepare(
     `UPDATE jobs
      SET attempts = ?, status = ?, run_after = ?, locked_at = NULL, locked_by = NULL,
          last_error = ?, updated_at = ?
      WHERE id = ?`,
-  ).run(attempts, dead ? "dead" : "queued", dead ? now : now + backoffMs(attempts), error.slice(0, 500), now, id);
+  ).run(attempts, dead ? "dead" : "queued", dead ? now : now + delayMs, error.slice(0, 500), now, id);
   return dead ? "dead" : "queued";
+}
+
+/**
+ * Put a job back until key-pool cooldown expires without burning an attempt.
+ * Returns false once the per-job cap is reached so permanently broken pools still terminate.
+ */
+export function deferCooldownJob(
+  db: Db,
+  id: string,
+  runAfter: number,
+  error: string,
+  maxDefers: number,
+  now: number,
+): boolean {
+  const row = db
+    .prepare("SELECT payload FROM jobs WHERE id = ? AND status = 'running'")
+    .get(id) as { payload: string | null } | undefined;
+  if (!row) return false;
+  const obj = parsePayloadObject(row.payload);
+  const currentDefers = typeof obj.cooldownDefers === "number" && Number.isFinite(obj.cooldownDefers) ? obj.cooldownDefers : 0;
+  if (currentDefers >= maxDefers) return false;
+  obj.cooldownDefers = currentDefers + 1;
+  const result = db
+    .prepare(
+      `UPDATE jobs
+       SET status = 'queued', run_after = ?, locked_at = NULL, locked_by = NULL,
+           payload = ?, last_error = ?, updated_at = ?
+       WHERE id = ? AND status = 'running'`,
+    )
+    .run(runAfter, JSON.stringify(obj), error.slice(0, 500), now, id);
+  return result.changes === 1;
 }
 
 /** Startup crash recovery. Every running row is stale: this process has not claimed one yet. */
@@ -174,10 +212,10 @@ export function retryJob(db: Db, id: string, now: number): boolean {
       .prepare(
         `UPDATE jobs
          SET status = 'queued', attempts = 0, run_after = ?, locked_at = NULL, locked_by = NULL,
-             last_error = NULL, updated_at = ?
+             payload = ?, last_error = NULL, updated_at = ?
          WHERE id = ?`,
       )
-      .run(now, now, id);
+      .run(now, stripCooldownDefers(job.payload), now, id);
     if (res.changes === 1 && job.message_id) {
       db.prepare(
         `UPDATE messages
@@ -194,18 +232,20 @@ export function retryJob(db: Db, id: string, now: number): boolean {
 export function retryAllDeadJobs(db: Db, now: number): number {
   return db.transaction(() => {
     const deadJobs = db
-      .prepare(`SELECT id, message_id FROM jobs WHERE type != 'send' AND status IN ('dead', 'failed')`)
-      .all() as Array<{ id: string; message_id: string | null }>;
+      .prepare(`SELECT id, message_id, payload FROM jobs WHERE type != 'send' AND status IN ('dead', 'failed')`)
+      .all() as Array<{ id: string; message_id: string | null; payload: string | null }>;
     if (deadJobs.length === 0) return 0;
 
-    const res = db
-      .prepare(
-        `UPDATE jobs
-         SET status = 'queued', attempts = 0, run_after = ?, locked_at = NULL, locked_by = NULL,
-             last_error = NULL, updated_at = ?
-         WHERE type != 'send' AND status IN ('dead', 'failed')`,
-      )
-      .run(now, now);
+    const resetStmt = db.prepare(
+      `UPDATE jobs
+       SET status = 'queued', attempts = 0, run_after = ?, locked_at = NULL, locked_by = NULL,
+           payload = ?, last_error = NULL, updated_at = ?
+       WHERE id = ?`,
+    );
+    for (const deadJob of deadJobs) {
+      resetStmt.run(now, stripCooldownDefers(deadJob.payload), now, deadJob.id);
+    }
+    const res = { changes: deadJobs.length };
 
     const messageIds = [
       ...new Set(deadJobs.map((job) => job.message_id).filter((messageId): messageId is string => Boolean(messageId))),
@@ -316,23 +356,50 @@ export function dismissJob(db: Db, id: string, now: number): boolean {
 /** Requeue every stopped step for one letter, and clear its error flag if that is all that was wrong. */
 export function retryMessageJobs(db: Db, messageId: string, now: number): number {
   return db.transaction(() => {
-    const result = db
-      .prepare(
-        `UPDATE jobs
-         SET status = 'queued', attempts = 0, run_after = ?, locked_at = NULL, locked_by = NULL,
-             last_error = NULL, updated_at = ?
-         WHERE message_id = ? AND status IN ('dead', 'failed')`,
-      )
-      .run(now, now, messageId);
-    if (result.changes > 0) {
-      db.prepare(
-        `UPDATE messages
-         SET status = 'received', error = NULL, updated_at = ?
-         WHERE id = ? AND status = 'error'`,
-      ).run(now, messageId);
+    const rows = db
+      .prepare(`SELECT id, payload FROM jobs WHERE message_id = ? AND status IN ('dead', 'failed')`)
+      .all(messageId) as Array<{ id: string; payload: string | null }>;
+    if (rows.length === 0) return 0;
+    const resetStmt = db.prepare(
+      `UPDATE jobs
+       SET status = 'queued', attempts = 0, run_after = ?, locked_at = NULL, locked_by = NULL,
+           payload = ?, last_error = NULL, updated_at = ?
+       WHERE id = ?`,
+    );
+    for (const row of rows) {
+      resetStmt.run(now, stripCooldownDefers(row.payload), now, row.id);
     }
-    return result.changes;
+    db.prepare(
+      `UPDATE messages
+       SET status = 'received', error = NULL, updated_at = ?
+       WHERE id = ? AND status = 'error'`,
+    ).run(now, messageId);
+    return rows.length;
   })();
+}
+
+function parsePayloadObject(raw: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? { ...(parsed as Record<string, unknown>) } : {};
+  } catch {
+    return {};
+  }
+}
+
+function stripCooldownDefers(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return raw;
+    const copy = { ...(parsed as Record<string, unknown>) };
+    if (!("cooldownDefers" in copy)) return raw;
+    delete copy.cooldownDefers;
+    return Object.keys(copy).length > 0 ? JSON.stringify(copy) : null;
+  } catch {
+    return raw;
+  }
 }
 
 const JOB_DETAIL_FROM = `SELECT j.*, m.subject as message_subject, m.from_addr as message_from, m.envelope_to as message_to

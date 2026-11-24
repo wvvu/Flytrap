@@ -1,7 +1,19 @@
 import { hostname } from "node:os";
 import { ulid } from "ulid";
 import type { Db } from "../db/index.js";
-import { claimJob, completeJob, failJob, outboxIdOf, recoverRunning, releaseJob, requeueJob, type JobRow } from "../db/repos/jobs.js";
+import {
+  claimJob,
+  completeJob,
+  deferCooldownJob,
+  enqueueJob,
+  failJob,
+  hasOpenJob,
+  outboxIdOf,
+  recoverRunning,
+  releaseJob,
+  requeueJob,
+  type JobRow,
+} from "../db/repos/jobs.js";
 import { markOutboxDead, markOutboxRetry } from "../db/repos/outbox.js";
 import { readAiEnabled } from "../db/repos/settings.js";
 import { markMessageError } from "../db/repos/messages.js";
@@ -12,7 +24,7 @@ import type { Authenticator } from "../mail/auth.js";
 import type { Notifier } from "../notify/types.js";
 import type { MailSender } from "../mail/deliver.js";
 import { createMxSender, SMTP_SOCKET_TIMEOUT_MS } from "../mail/deliver.js";
-import { MISSING_API_KEY_MESSAGE } from "../ai/pool.js";
+import { MISSING_API_KEY_MESSAGE, PoolCooldownError } from "../ai/pool.js";
 import { checkDiskAlert } from "./disk-alert.js";
 import { runAuthJob } from "./job-auth.js";
 import { runClassifyJob } from "./job-classify.js";
@@ -54,6 +66,7 @@ export interface RunningWorker {
 
 const INBOUND_JOB_TYPES = ["auth", "parse", "classify", "notify"] as const;
 const SEND_JOB_TYPES = ["send"] as const;
+const MAX_COOLDOWN_DEFERS = 10;
 
 export async function startWorker(options: WorkerOptions): Promise<RunningWorker> {
   const workerId = options.workerId ?? `${hostname()}-${process.pid}-${ulid()}`;
@@ -181,8 +194,20 @@ async function runClaimed(options: WorkerOptions, job: JobRow, now: () => number
       options.log.info({ jobId: job.id, messageId: job.message_id }, "classify deferred, no api key yet");
       return;
     }
+    let minDelayMs: number | undefined;
+    if (job.type === "classify" && err instanceof PoolCooldownError) {
+      const waitMs = Math.max(err.retryAfterMs + 1_000, 2_000);
+      if (!err.madeCall && deferCooldownJob(options.db, job.id, now() + waitMs, message, MAX_COOLDOWN_DEFERS, now())) {
+        options.log.warn(
+          { jobId: job.id, messageId: job.message_id, retryInMs: waitMs },
+          "classify deferred, key pool cooling down",
+        );
+        return;
+      }
+      minDelayMs = waitMs;
+    }
     options.log.error({ jobId: job.id, type: job.type, messageId: job.message_id, err: message }, "job failed");
-    const outcome = failJob(options.db, job.id, message, now());
+    const outcome = failJob(options.db, job.id, message, now(), minDelayMs ? { minDelayMs } : undefined);
     if (job.type === "send") {
       const outboxId = outboxIdOf(job.payload);
       if (outboxId) {
@@ -191,6 +216,15 @@ async function runClaimed(options: WorkerOptions, job: JobRow, now: () => number
       }
     } else if (outcome === "dead" && job.message_id) {
       markMessageError(options.db, job.message_id, message, now());
+      if (job.type === "classify" && !hasOpenJob(options.db, job.message_id, "notify")) {
+        enqueueJob(options.db, {
+          id: ulid(),
+          type: "notify",
+          messageId: job.message_id,
+          payload: { fallback: true },
+          now: now(),
+        });
+      }
     }
   }
 }
