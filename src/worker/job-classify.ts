@@ -38,6 +38,8 @@ export async function runClassifyJob(deps: ClassifyJobDeps, job: JobRow): Promis
   }
   const parsed = parsedSchema.parse(JSON.parse(message.parsed));
   const auth = message.auth_result ? authResultSchema.parse(JSON.parse(message.auth_result)) : null;
+  const smtpMeta = parseSmtpMeta(message.smtp_meta);
+  const isSms = smtpMeta?.channel === "sms";
   const recipients = recipientParts(envelopeAddresses(message.envelope_to));
   const history: ClassifyFacts["history"] = [];
   const missingHistory: ClassifyFacts["missingHistory"] = [];
@@ -67,6 +69,13 @@ export async function runClassifyJob(deps: ClassifyJobDeps, job: JobRow): Promis
     missingHistory.push(recipient);
   }
   const facts: ClassifyFacts = {
+    ...(isSms
+      ? {
+          channel: "sms" as const,
+          smsDevice: typeof smtpMeta?.device === "string" ? smtpMeta.device : undefined,
+          smsSlot: typeof smtpMeta?.slot === "string" ? smtpMeta.slot : undefined,
+        }
+      : {}),
     spf: auth?.spf ?? "none",
     dkim: auth?.dkim ?? "none",
     dmarc: auth?.dmarc ?? "none",
@@ -162,6 +171,15 @@ export function applyDeterministicGuardrails(facts: ClassifyFacts, ai: AiResult)
   }
 
   return result;
+}
+
+function parseSmtpMeta(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }
 
 function headerFrom(from: { name: string; address: string } | null, fallback: string | null): string {

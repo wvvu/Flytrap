@@ -55,6 +55,8 @@ const draftSchema = z.object({
   notifyLabels: z.array(z.enum(LABELS)).min(1),
   notifyMinConfidence: z.number().min(0).max(1),
   panelBaseUrl: z.string().optional(),
+  smsIngestToken: z.string().min(16).max(512).optional(),
+  smsDomain: z.string().min(1).max(253),
   compress: z.enum(["auto", "zstd", "gzip"]),
   diskAlertBytes: z.number().int().min(0),
   logLevel: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]),
@@ -133,6 +135,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     notifyLabels: parseLabels(pick(env, "NOTIFY_LABELS", "legit")),
     notifyMinConfidence: pickFloat(env, "NOTIFY_MIN_CONFIDENCE", 0.6),
     panelBaseUrl: pickOpt(env, "PANEL_BASE_URL"),
+    smsIngestToken: pickOpt(env, "SMS_INGEST_TOKEN"),
+    smsDomain: parseSmsDomain(pickOpt(env, "SMS_DOMAIN") ?? "sms.local"),
     compress: pick(env, "COMPRESS", "auto"),
     diskAlertBytes: pickInt(env, "DISK_ALERT_BYTES", 0),
     logLevel: pick(env, "LOG_LEVEL", "info"),
@@ -235,6 +239,14 @@ function parseLabels(raw: string): Array<(typeof LABELS)[number]> {
   }
   if (out.length === 0) throw new ConfigError("NOTIFY_LABELS is empty");
   return out;
+}
+
+function parseSmsDomain(raw: string): string {
+  const cleaned = raw.trim().toLowerCase().replace(/\.$/, "");
+  if (!cleaned || cleaned.includes("*") || !DOMAIN_RE.test(cleaned)) {
+    throw new ConfigError(`SMS_DOMAIN is invalid (${raw})`);
+  }
+  return cleaned;
 }
 
 function isHttpUrl(value: string): boolean {

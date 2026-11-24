@@ -7,6 +7,7 @@ import type { Db } from "../db/index.js";
 import { enqueueJob, hasOpenJob, type JobType } from "../db/repos/jobs.js";
 import { findMessageBySha, insertMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
+import { rfc822HeaderBlock } from "../mail/headers.js";
 import { PathEscapeError, resolveInside } from "../paths.js";
 
 const RAW_FILE = /^([0-9a-f]{64})\.eml\.(?:gz|zst)$/;
@@ -72,6 +73,7 @@ export async function rebuildFromRaw(input: {
     if (!existing) {
       const info = await stat(abs);
       const receivedAt = Number.isFinite(info.mtimeMs) && info.mtimeMs > 0 ? Math.round(info.mtimeMs) : now;
+      const smsInfo = extractSmsRebuildInfo(plain, receivedAt);
       const id = ulid();
       input.db.transaction(() => {
         insertMessage(input.db, {
@@ -81,14 +83,14 @@ export async function rebuildFromRaw(input: {
           sizeBytes: plain.length,
           receivedAt,
           envelopeFrom: null,
-          envelopeTo: [],
-          domains: [],
-          smtpMeta: rebuildMeta(receivedAt),
+          envelopeTo: smsInfo ? smsInfo.envelopeTo : [],
+          domains: smsInfo ? smsInfo.domains : [],
+          smtpMeta: smsInfo ? smsInfo.smtpMeta : rebuildMeta(receivedAt),
           now,
         });
         enqueueJob(input.db, {
           id: ulid(),
-          type: "auth",
+          type: smsInfo ? "parse" : "auth",
           messageId: id,
           payload: { source: "rebuild" },
           now,
@@ -100,9 +102,10 @@ export async function rebuildFromRaw(input: {
     }
 
     if (existing.ai_result === null && !pipelineOpen(input.db, existing.id)) {
+      const smsInfo = extractSmsRebuildInfo(plain, existing.received_at);
       enqueueJob(input.db, {
         id: ulid(),
-        type: "auth",
+        type: smsInfo ? "parse" : "auth",
         messageId: existing.id,
         payload: { source: "rebuild" },
         now,
@@ -116,6 +119,35 @@ export async function rebuildFromRaw(input: {
 
 function pipelineOpen(db: Db, messageId: string): boolean {
   return PIPELINE.some((type) => hasOpenJob(db, messageId, type));
+}
+
+function extractSmsRebuildInfo(plain: Buffer, receivedAt: number): {
+  envelopeTo: string[];
+  domains: string[];
+  smtpMeta: Record<string, unknown>;
+} | null {
+  const unfolded = rfc822HeaderBlock(plain).replace(/\r\n/g, "\n").replace(/\n[ \t]+/g, " ");
+  const header = (name: string): string | null => {
+    const match = unfolded.match(new RegExp(`(?:^|\\n)${name}:[ \\t]*([^\\n]*)`, "i"));
+    return match?.[1]?.trim() || null;
+  };
+  if (header("x-flytrap-channel")?.toLowerCase() !== "sms") return null;
+  const deliveredTo = header("delivered-to")?.toLowerCase() ?? header("to")?.toLowerCase() ?? "";
+  const at = deliveredTo.lastIndexOf("@");
+  const envelopeTo = at > 0 ? [deliveredTo] : [];
+  const domains = at > 0 ? [deliveredTo.slice(at + 1)] : [];
+  return {
+    envelopeTo,
+    domains,
+    smtpMeta: {
+      ...rebuildMeta(receivedAt),
+      channel: "sms",
+      device: header("x-flytrap-device") ?? "",
+      smsId: header("x-flytrap-sms-id") ?? "",
+      ...(header("x-flytrap-slot") ? { slot: header("x-flytrap-slot") } : {}),
+      rcptTo: envelopeTo,
+    },
+  };
 }
 
 function rebuildMeta(receivedAt: number) {

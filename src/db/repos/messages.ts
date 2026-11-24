@@ -26,6 +26,7 @@ export interface NewMessage {
   envelopeTo: string[];
   domains: string[];
   smtpMeta: unknown;
+  messageId?: string | null;
   now: number;
 }
 
@@ -50,8 +51,8 @@ export function insertMessage(db: Db, row: NewMessage): void {
   db.prepare(
     `INSERT INTO messages (
       id, sha256, raw_path, size_bytes, received_at, envelope_from, envelope_to,
-      domains, smtp_meta, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?)`,
+      domains, smtp_meta, message_id, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?)`,
   ).run(
     row.id,
     row.sha256,
@@ -62,6 +63,7 @@ export function insertMessage(db: Db, row: NewMessage): void {
     JSON.stringify(row.envelopeTo),
     JSON.stringify(row.domains),
     JSON.stringify(row.smtpMeta),
+    row.messageId ?? null,
     row.now,
     row.now,
   );
@@ -74,6 +76,15 @@ export function findMessageBySha(db: Db, sha256: string): MessageRow | undefined
        FROM messages WHERE sha256 = ?`,
     )
     .get(sha256) as MessageRow | undefined;
+}
+
+export function findMessageByMessageId(db: Db, messageId: string): MessageRow | undefined {
+  return db
+    .prepare(
+      `SELECT id, sha256, raw_path, size_bytes, received_at, status, ai_result
+       FROM messages WHERE message_id = ? LIMIT 1`,
+    )
+    .get(messageId) as MessageRow | undefined;
 }
 
 export function insertDelivery(db: Db, row: NewDelivery): void {

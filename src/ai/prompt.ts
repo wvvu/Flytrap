@@ -19,6 +19,9 @@ export interface PromptAttachment {
 }
 
 export interface ClassifyFacts {
+  channel?: "email" | "sms";
+  smsDevice?: string;
+  smsSlot?: string;
   spf: string;
   dkim: string;
   dmarc: string;
@@ -98,7 +101,14 @@ function sanitizeXmlBoundary(text: string): string {
 
 export function buildUserMessage(facts: ClassifyFacts): string {
   const from = facts.envelopeFrom ? facts.envelopeFrom : "<>";
+  const isSms = facts.channel === "sms";
   const telemetryLines = [
+    ...(isSms
+      ? [
+          "CHANNEL: sms (cellular SMS gateway; SPF/DKIM/DMARC do not apply, and numeric or carrier sender IDs are normal)",
+          `SMS_META: device=${oneLine(facts.smsDevice || "android")} slot=${oneLine(facts.smsSlot || "unspecified")}`,
+        ]
+      : []),
     `AUTH: spf= ${facts.spf} dkim= ${facts.dkim} dmarc= ${facts.dmarc} rdns= ${facts.rdns}`,
     `ENVELOPE: from=${from} to=${facts.envelopeTo.join(",")}`,
     "MAILBOX_NOTES: operator notes about recipient addresses. A missing note is normal. It is not a category and it is not suspicious.",

@@ -118,6 +118,13 @@ import {
 import { sha256 } from "../hash.js";
 import { readRaw } from "../ingest/read-raw.js";
 import { removeStoredFiles } from "../ingest/remove-stored.js";
+import {
+  bearerTokenMatches,
+  ingestSms,
+  resolveSmsBarkTarget,
+  resolveSmsRecipient,
+  smsIngestBody,
+} from "../ingest/sms.js";
 import { recentLogs } from "../log.js";
 import { normalizeAddress, OutboundError } from "../mail/address.js";
 import { rfc822HeaderBlock } from "../mail/headers.js";
@@ -444,6 +451,10 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       done();
       return;
     }
+    if (request.method === "POST" && requestPath(request.url) === "/v1/ingest/sms") {
+      done();
+      return;
+    }
     app.csrfProtection(request, reply, done);
   });
 
@@ -484,6 +495,41 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.get("/v1/csrf", async (_request, reply) => {
     return { token: reply.generateCsrf() };
+  });
+
+  app.get("/v1/ingest/sms/config", {
+    config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+  }, async (request, reply) => {
+    if (!requireSmsBearer(request, reply, config)) return;
+    const query = request.query as Record<string, unknown>;
+    const device = optionalString(query?.device);
+    const slot = optionalString(query?.slot);
+    const to = optionalString(query?.to);
+    const recipient = device || to ? resolveSmsRecipient(to, device ?? "sms", slot, config.smsDomain) : undefined;
+    const bark = resolveSmsBarkTarget(db, config, recipient);
+    return reply.send({ ok: true, smsDomain: config.smsDomain, bark });
+  });
+
+  app.post("/v1/ingest/sms", {
+    bodyLimit: 256 * 1024,
+    config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+  }, async (request, reply) => {
+    if (!requireSmsBearer(request, reply, config)) return;
+    const body = smsIngestBody.safeParse(request.body);
+    if (!body.success) throw new HttpError(400);
+    const result = await ingestSms(
+      { db, dataDir: config.mailDataDir, codec, smsDomain: config.smsDomain },
+      body.data,
+      request.ip,
+    );
+    if (!result) throw new HttpError(400);
+    const bark = resolveSmsBarkTarget(db, config, result.recipient);
+    return reply.send({
+      ok: true,
+      id: result.id,
+      ...(result.duplicate ? { duplicate: true } : {}),
+      ...(bark ? { bark } : {}),
+    });
   });
 
   app.post("/v1/login", { config: { rateLimit: { max: 5, timeWindow: "5 minutes" } } }, async (request, reply) => {
@@ -643,6 +689,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
         acceptDomains,
         dkimDomains,
         hasMembers: hasAnyUsers(db),
+        smsDomain: (config.smsIngestToken || hasDomainMessages(db, config.smsDomain)) ? config.smsDomain : null,
         version: APP_VERSION,
       };
     }
@@ -664,6 +711,9 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       acceptDomains: role === "admin" ? acceptDomains : memberDomains,
       dkimDomains: role === "admin" ? dkimDomains : dkimDomains.filter((d) => memberDomains.includes(d)),
       hasMembers: role === "admin" ? hasAnyUsers(db) : false,
+      smsDomain: role === "admin"
+        ? ((config.smsIngestToken || hasDomainMessages(db, config.smsDomain)) ? config.smsDomain : null)
+        : (memberDomains.includes(config.smsDomain) ? config.smsDomain : null),
       version: APP_VERSION,
     };
   });
@@ -2076,10 +2126,32 @@ function personalNotifyView(db: Db, userId: string) {
 }
 
 function requireAcceptDomain(db: Db, config: Config, domain: string): void {
+  const normalized = domain.trim().toLowerCase().replace(/\.$/, "");
   const known = readAcceptDomains(db, config.acceptDomains);
-  if (!known.includes(domain.trim().toLowerCase())) {
+  const allowedSms = Boolean(config.smsIngestToken) && normalized === config.smsDomain;
+  if (!known.includes(normalized) && !allowedSms) {
     throw new HttpError(400, "domain is not accepted");
   }
+}
+
+function hasDomainMessages(db: Db, domain: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS ok FROM messages WHERE EXISTS (SELECT 1 FROM json_each(domains) jd WHERE lower(jd.value) = lower(?)) LIMIT 1")
+    .get(domain) as { ok: number } | undefined;
+  return Boolean(row);
+}
+
+function requireSmsBearer(request: FastifyRequest, reply: { code: (status: number) => { send: (body: unknown) => unknown } }, config: Config): boolean {
+  if (!config.smsIngestToken) {
+    reply.code(503).send({ error: "sms_ingest_disabled" });
+    return false;
+  }
+  const auth = typeof request.headers.authorization === "string" ? request.headers.authorization : undefined;
+  if (!bearerTokenMatches(auth, config.smsIngestToken)) {
+    reply.code(401).send({ error: "unauthorized" });
+    return false;
+  }
+  return true;
 }
 
 function sessionIsOwner(request: FastifyRequest): boolean {
@@ -2216,14 +2288,20 @@ function envelopeList(raw: string | null): string {
   return raw;
 }
 
+function requestPath(url: string): string {
+  return url.split("?")[0] ?? url;
+}
+
 function isPublic(url: string): boolean {
-  const p = url.split("?")[0] ?? url;
+  const p = requestPath(url);
   return (
     p === "/healthz" ||
     p === "/v1/login" ||
     p === "/v1/csrf" ||
     p === "/v1/password/forgot" ||
     p === "/v1/password/reset" ||
+    p === "/v1/ingest/sms" ||
+    p === "/v1/ingest/sms/config" ||
     isPanelAsset(p)
   );
 }

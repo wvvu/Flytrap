@@ -21,11 +21,13 @@ export interface ComposeTextInput {
   date: Date;
   inReplyTo?: string | null;
   references?: readonly string[];
+  extraHeaders?: ReadonlyArray<readonly [string, string]>;
 }
 
 /** A text/plain letter. Bcc stays off the header so it only exists on the envelope. */
 export function composeText(input: ComposeTextInput): Buffer {
   const encoded = encodeBody(input.text);
+  const custom = (input.extraHeaders ?? []).map(([k, v]) => `${cleanHeaderName(k)}: ${cleanHeaderValue(v)}`).filter((line) => line.length > 2);
   const lines = [
     `From: ${formatFrom(input.fromName, input.from)}`,
     foldAddressHeader("To", input.to),
@@ -34,6 +36,7 @@ export function composeText(input: ComposeTextInput): Buffer {
     `Date: ${formatDate(input.date)}`,
     `Message-ID: <${input.messageId}>`,
     ...replyHeaders(input),
+    ...custom,
     "MIME-Version: 1.0",
     `Content-Type: text/plain; charset=utf-8`,
     `Content-Transfer-Encoding: ${encoded.cte}`,
@@ -197,6 +200,14 @@ function encodeBody(text: string): { cte: "7bit" | "base64"; body: string } {
   const b64 = Buffer.from(normalized, "utf8").toString("base64");
   const lines = b64.match(/.{1,76}/g) ?? [];
   return { cte: "base64", body: `${lines.join("\r\n")}\r\n` };
+}
+
+function cleanHeaderName(name: string): string {
+  return name.replace(/[^A-Za-z0-9-]/g, "");
+}
+
+function cleanHeaderValue(value: string): string {
+  return value.replace(/[\r\n\u0000]+/g, " ").trim();
 }
 
 function formatDate(date: Date): string {

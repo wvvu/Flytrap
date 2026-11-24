@@ -17,6 +17,12 @@ Authentication:
 - fail is one clue. Forwarding, mailing lists, and small senders fail these checks often. A real receipt, login code, or reply can fail SPF or DMARC.
 - Do not refuse legit, and do not choose phish, only because a check failed or is missing.
 
+SMS channel:
+- When <system_telemetry> includes "CHANNEL: sms", the message is a mobile SMS relayed from the user's phone, wrapped as an email.
+- Cellular SMS has no SPF/DKIM/DMARC and often comes from numeric short codes or synthetic @sender.sms.local addresses. That is normal and is NOT a phishing signal.
+- Classify SMS by message content and intent: verification codes (OTP), carrier/bank account notices, delivery/pickup alerts, or real personal texts -> legit; merchant/carrier promos or coupons -> unsolicited-admin; bulk junk ads or cold spam -> spam; deceptive phishing/smishing links or fake official warnings -> phish.
+- Extract any active one-time verification code into otp as usual.
+
 Labels, as a person clearing an inbox would use them:
 The reader wants a clean inbox containing only actionable, transactional, or personal mail, while keeping marketing newsletters from legitimate companies separated as promotions (unsolicited-admin).
 - legit: personal or transactional mail that matters to the recipient specifically. Login/verification codes (OTP), security alerts, account changes, receipts, orders, shipping, market sales, billing, direct human replies, calendar invites, or specific CI/repo notifications. Do NOT use legit for marketing newsletters, feature announcements, product tips, or promotional campaigns, even when sent by a trusted brand the person uses (such as OpenAI, Apple, Google, Steam, or GitHub).

@@ -96,7 +96,10 @@ export function syncSubfiltersBar(view) {
   const showScope = state.isAdmin && state.hasMembers;
   if (adminScopeSelect) adminScopeSelect.hidden = !showScope;
 
-  const domains = state.settingsDomains || [];
+  const baseDomains = Array.isArray(state.settingsDomains) ? state.settingsDomains : [];
+  const domains = state.smsDomain && !baseDomains.includes(state.smsDomain)
+    ? [...baseDomains, state.smsDomain]
+    : baseDomains;
   const showDomain = domains.length > 1;
   if (domainFilterSelect) {
     domainFilterSelect.hidden = !showDomain;
@@ -289,6 +292,7 @@ export async function loadSessionContext() {
   state.settingsDomains = Array.isArray(sess.acceptDomains) ? sess.acceptDomains : [];
   state.dkimDomains = Array.isArray(sess.dkimDomains) ? sess.dkimDomains : [];
   state.hasMembers = Boolean(sess.hasMembers);
+  state.smsDomain = typeof sess.smsDomain === "string" && sess.smsDomain ? sess.smsDomain : null;
   state.appVersion = sess.version || "";
   if (
     !state.isAdmin &&

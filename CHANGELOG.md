@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.10.0 - 2026-11-25
+
+新增 Root 安卓短信套壳接入功能（`POST /v1/ingest/sms` 与 `GET /v1/ingest/sms/config`）：支持独立 Bearer 鉴权与 CSRF 免检、确定性 EML 同步落盘与严格幂等去重、跳过 `auth` 直达拆信与短信上下文 AI 分拣、`sms.local` 虚拟域名隔离与筛选、服务端动态下发 Bark 配置，以及配套 Magisk Root 守护脚本与断网急救补传机制。
+
 ## v0.9.2 - 2026-11-25
 
 AI 设置升级为多通道槽位配置，支持混排 Gemini 原生与 OpenAI 兼容端点（含自定义 Base URL）、按通道绑定模型与密钥池、按序自动降级与分协议实测探针，无缝兼容并迁移原有模型/密钥配置。

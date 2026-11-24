@@ -130,6 +130,24 @@ test("tls files must be paired and unknown roles fail", () => {
   assert.throws(() => loadConfig(env({ ROLES: "smtp,imap" })), /unknown role/);
 });
 
+test("sms ingest token and domain settings validate properly", () => {
+  const defaults = loadConfig(env());
+  assert.equal(defaults.smsIngestToken, undefined);
+  assert.equal(defaults.smsDomain, "sms.local");
+
+  const configured = loadConfig(
+    env({
+      SMS_INGEST_TOKEN: "sms-secret-token-0123456789abcdef",
+      SMS_DOMAIN: "MSG.LOCAL.",
+    }),
+  );
+  assert.equal(configured.smsIngestToken, "sms-secret-token-0123456789abcdef");
+  assert.equal(configured.smsDomain, "msg.local");
+
+  assert.throws(() => loadConfig(env({ SMS_INGEST_TOKEN: "short" })), /smsIngestToken/);
+  assert.throws(() => loadConfig(env({ SMS_DOMAIN: "*.sms.local" })), /SMS_DOMAIN/);
+});
+
 test(".env.example names the keys the process requires", () => {
   const example = fs.readFileSync(path.join(appRoot(), ".env.example"), "utf8");
   for (const key of [

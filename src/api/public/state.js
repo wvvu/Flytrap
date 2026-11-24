@@ -75,6 +75,7 @@ export const state = {
   sentToday: 0,
   allocatedMailboxes: [],
   hasMembers: false,
+  smsDomain: null,
   appVersion: "",
   adminScope: "mine",
   domainFilter: "",

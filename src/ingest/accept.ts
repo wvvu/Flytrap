@@ -1,7 +1,7 @@
 import { ulid } from "ulid";
 import type { Db } from "../db/index.js";
 import { enqueueJob } from "../db/repos/jobs.js";
-import { findMessageBySha, insertDelivery, insertMessage } from "../db/repos/messages.js";
+import { findMessageByMessageId, findMessageBySha, insertDelivery, insertMessage } from "../db/repos/messages.js";
 import { sha256 } from "../hash.js";
 import type { Codec } from "../compress.js";
 import { storeRaw } from "./store-raw.js";
@@ -9,8 +9,10 @@ import type { SmtpMeta } from "../smtp/session-meta.js";
 
 export interface AcceptInput {
   bytes: Buffer;
-  meta: SmtpMeta;
+  meta: SmtpMeta & { channel?: string; device?: string; smsId?: string; slot?: string };
   receivedAtMs: number;
+  initialJob?: "auth" | "parse";
+  messageId?: string | null;
 }
 
 export interface AcceptDeps {
@@ -34,6 +36,17 @@ export interface AcceptResult {
  * A second delivery of the same hash adds a delivery and does not requeue AI.
  */
 export async function acceptMessage(deps: AcceptDeps, input: AcceptInput): Promise<AcceptResult> {
+  if (input.messageId) {
+    const existingById = findMessageByMessageId(deps.db, input.messageId);
+    if (existingById) {
+      return {
+        id: existingById.id,
+        sha256: existingById.sha256,
+        duplicate: true,
+        sizeBytes: existingById.size_bytes,
+      };
+    }
+  }
   const hash = sha256(input.bytes);
   const existing = findMessageBySha(deps.db, hash);
   const writeRaw = deps.writeRaw ?? storeRaw;
@@ -59,6 +72,12 @@ export async function acceptMessage(deps: AcceptDeps, input: AcceptInput): Promi
 }
 
 function record(db: Db, hash: string, rawPath: string, input: AcceptInput): { id: string; duplicate: boolean } {
+  if (input.messageId) {
+    const currentById = findMessageByMessageId(db, input.messageId);
+    if (currentById) {
+      return { id: currentById.id, duplicate: true };
+    }
+  }
   const current = findMessageBySha(db, hash);
   if (current) {
     mergeEnvelope(db, current.id, input);
@@ -78,6 +97,7 @@ function record(db: Db, hash: string, rawPath: string, input: AcceptInput): { id
     envelopeTo: input.meta.rcptTo,
     domains,
     smtpMeta: input.meta,
+    messageId: input.messageId ?? null,
     now: input.receivedAtMs,
   });
   insertDelivery(db, {
@@ -86,11 +106,12 @@ function record(db: Db, hash: string, rawPath: string, input: AcceptInput): { id
     receivedAt: input.receivedAtMs,
     smtpMeta: input.meta,
   });
+  const initialJob = input.initialJob ?? "auth";
   enqueueJob(db, {
     id: ulid(),
-    type: "auth",
+    type: initialJob,
     messageId: id,
-    payload: { source: "smtp" },
+    payload: { source: initialJob === "parse" ? "sms" : "smtp" },
     now: input.receivedAtMs,
   });
   return { id, duplicate: false };
