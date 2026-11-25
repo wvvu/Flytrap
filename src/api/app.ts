@@ -2247,9 +2247,9 @@ function readAppVersion(): string {
   if (fromEnv) return fromEnv;
   try {
     const pkg = JSON.parse(readFileSync(path.join(appRoot(), "package.json"), "utf8")) as { version?: unknown };
-    return typeof pkg.version === "string" ? pkg.version : "0.10.0";
+    return typeof pkg.version === "string" ? pkg.version : "1.0.0";
   } catch {
-    return "0.10.0";
+    return "1.0.0";
   }
 }
 
