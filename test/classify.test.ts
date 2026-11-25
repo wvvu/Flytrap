@@ -66,6 +66,20 @@ test("model output with a missing field, an extra field, or a bad label is rejec
   assert.match(prompt, /A missing note is not a category/);
   assert.equal(/honeypot/i.test(prompt), false);
   assert.match(prompt, /Do not refuse legit/);
+  assert.match(prompt, /Always choose label "legit" for all SMS-channel messages/);
+  assert.match(prompt, /along with trailing promotional content, still choose legit/);
+});
+
+test("buildUserMessage marks SMS channel as always legit", () => {
+  const smsText = buildUserMessage({
+    ...emptyFacts(),
+    channel: "sms",
+    smsDevice: "redmi",
+    smsSlot: "5147",
+    text: "【品牌】限时促销退订回T",
+  });
+  assert.match(smsText, /CHANNEL: sms .*always classify as legit/);
+  assert.match(smsText, /SMS_META: device=redmi slot=5147/);
 });
 
 test("the classify prompt carries auth, history, and attachments", () => {

