@@ -143,7 +143,7 @@ def start_inotify() -> subprocess.Popen | None:
         f.write(f"#!/system/bin/sh\nkill -USR1 {os.getpid()} 2>/dev/null\n")
     os.chmod(POKE_SCRIPT, 0o700)
     proc = subprocess.Popen(
-        [BB, "inotifyd", POKE_SCRIPT, f"{SMS_DB_DIR}:wy"],
+        [BB, "inotifyd", POKE_SCRIPT, f"{SMS_DB_DIR}:cwynd"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

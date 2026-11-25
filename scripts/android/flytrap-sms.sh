@@ -385,7 +385,7 @@ if [ -f "$PID_FILE" ]; then
 fi
 EOF
   chmod 700 "$POKE_SCRIPT"
-  $BB inotifyd "$POKE_SCRIPT" "$SMS_DB_DIR:wy" >/dev/null 2>&1 &
+  $BB inotifyd "$POKE_SCRIPT" "$SMS_DB_DIR:cwynd" >/dev/null 2>&1 &
   echo $! >"$INO_PID_FILE"
 }
 
