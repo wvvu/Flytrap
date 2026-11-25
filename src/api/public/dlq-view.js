@@ -9,15 +9,18 @@ import { switchNav } from "./nav.js";
 import { selectMail } from "./mail-view.js";
 
 export async function loadDlqJobs(scope = state.currentDlqScope) {
+  const token = ++state.dlqLoadToken;
   state.currentDlqScope = scope || "open";
   listEl.replaceChildren();
   if (dlqNoticeEl) dlqNoticeEl.textContent = "正在读取";
   try {
     const [res, summary] = await Promise.all([request(jobsUrl(state.currentDlqScope)), request("/v1/jobs/summary")]);
+    if (state.currentView !== "dlq" || token !== state.dlqLoadToken) return;
     state.currentJobs = Array.isArray(res.items) ? res.items : [];
     paintDlqCounts(summary);
     renderFailureGroups(state.currentJobs);
   } catch (err) {
+    if (state.currentView !== "dlq" || token !== state.dlqLoadToken) return;
     if (dlqNoticeEl) dlqNoticeEl.textContent = explain(err);
   }
 }

@@ -3,6 +3,7 @@ import type { AiChannelsFallback, AiProvider } from "../../ai/pool.js";
 import { keyTail } from "../../ai/secret.js";
 import { LABELS, type Label } from "../../ai/types.js";
 import { ConfigError, parseAcceptDomains } from "../../config.js";
+import { validateWebhookUrl } from "../../notify/url-guard.js";
 import type { Db } from "../index.js";
 import { OWNER_USER_ID } from "./users.js";
 
@@ -250,6 +251,10 @@ export function readPersonalNotifySettings(db: Db, userId: string): PersonalNoti
   };
 }
 
+export function shouldBlockPrivateWebhook(userId: string): boolean {
+  return userId !== OWNER_USER_ID && process.env.ALLOW_PRIVATE_WEBHOOK_URLS !== "true";
+}
+
 export function savePersonalNotifySettings(
   db: Db,
   userId: string,
@@ -266,7 +271,7 @@ export function savePersonalNotifySettings(
   if (!Number.isFinite(input.minConfidence) || input.minConfidence < 0 || input.minConfidence > 1) {
     throw new SettingsError("notify confidence must be between 0 and 1");
   }
-  const webhookUrl = cleanWebhookUrl(input.webhookUrl);
+  const webhookUrl = cleanWebhookUrl(input.webhookUrl, shouldBlockPrivateWebhook(userId));
   const current = readPersonalNotifySettings(db, userId);
   const webhookBearer = input.webhookBearer === undefined
     ? current.notifyWebhookBearer
@@ -922,18 +927,21 @@ function readPersonalWebhookFormat(db: Db, userId: string): WebhookFormat {
   return "auto";
 }
 
-function cleanWebhookUrl(raw: string): string {
+function cleanWebhookUrl(raw: string, blockPrivate: boolean): string {
   const url = raw.trim();
   if (!url) return "";
   if (url.length > 500) throw new SettingsError("invalid webhook url");
   try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new SettingsError("invalid webhook url");
+    return validateWebhookUrl(url, { blockPrivate });
   } catch (err) {
-    if (err instanceof SettingsError) throw err;
+    if (
+      err instanceof Error &&
+      (err.message === "forbidden webhook url" || err.message === "invalid webhook url")
+    ) {
+      throw new SettingsError(err.message);
+    }
     throw new SettingsError("invalid webhook url");
   }
-  return url;
 }
 
 function readNotifyLabels(db: Db, fallback: readonly string[]): Label[] {

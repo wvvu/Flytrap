@@ -558,6 +558,7 @@ function handleEscapeInSearch(target) {
 
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
+    if (confirmModal && !confirmModal.hidden) return;
     if (accountModal && !accountModal.hidden) {
       e.preventDefault();
       toggleAccountModal(false);
@@ -606,13 +607,15 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (e.key === "c") {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+
+  if (key === "c") {
     e.preventDefault();
     openComposer();
     return;
   }
 
-  if (e.key === "u") {
+  if (key === "u") {
     if ((state.currentView === "inbox" || state.currentView === "spam") && state.selectedMailId && !state.readingSentId) {
       e.preventDefault();
       void handleMarkUnread();
@@ -620,7 +623,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (e.key === "s" && state.selectedMailId && !state.readingSentId) {
+  if (key === "s" && state.selectedMailId && !state.readingSentId) {
     if (state.currentView === "inbox" || state.currentView === "spam" || state.currentView === "trash") {
       e.preventDefault();
       void toggleStar(state.selectedMailId, !Boolean(state.openDetail?.starred));
@@ -629,20 +632,20 @@ window.addEventListener("keydown", (e) => {
   }
 
   if (state.currentView === "inbox" || state.currentView === "spam") {
-    if (e.key === "j") navigateMail(1);
-    else if (e.key === "k") navigateMail(-1);
-    else if (e.key === "r") void reloadMessages();
+    if (key === "j") navigateMail(1);
+    else if (key === "k") navigateMail(-1);
+    else if (key === "r") void reloadMessages();
   } else if (state.currentView === "trash") {
-    if (e.key === "j") navigateMail(1);
-    else if (e.key === "k") navigateMail(-1);
-    else if (e.key === "r") void reloadTrash();
+    if (key === "j") navigateMail(1);
+    else if (key === "k") navigateMail(-1);
+    else if (key === "r") void reloadTrash();
   } else if (state.currentView === "send") {
-    if (e.key === "j") navigateSent(1);
-    else if (e.key === "k") navigateSent(-1);
-    else if (e.key === "r") void loadSendPage();
-  } else if (state.currentView === "dlq" && e.key === "r") {
+    if (key === "j") navigateSent(1);
+    else if (key === "k") navigateSent(-1);
+    else if (key === "r") void loadSendPage();
+  } else if (state.currentView === "dlq" && key === "r") {
     void loadDlqJobs();
-  } else if (state.currentView === "settings" && state.currentSettingsSection === "users" && e.key === "r") {
+  } else if (state.currentView === "settings" && state.currentSettingsSection === "users" && key === "r") {
     void loadUsersPage();
   }
 });

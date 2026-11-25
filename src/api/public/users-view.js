@@ -9,6 +9,45 @@ import { formatFullTime, formatShortTime, generateRandomPassword } from "./util.
 const ALLOC_HINT =
   "精确邮箱（含 +tag）、前缀通配、整域接管。前缀按字面起首，team 会匹配 teammate。整域接住没被更具体规则分走的地址，连历史信一起划走。";
 
+const LEGACY_AUDIT_ACTIONS = new Set(["user_alloc_add", "user_alloc_update", "user_alloc_remove"]);
+
+function clearCreateUserFeedback() {
+  state.lastCreatedCredentials = "";
+  const credBox = document.querySelector("#uc-credential-box");
+  const credText = document.querySelector("#uc-credential-text");
+  if (credBox) credBox.hidden = true;
+  if (credText) credText.textContent = "";
+  setFormError(document.querySelector("#uc-form-error"), "");
+}
+
+export function resetUsersForAccount() {
+  state.usersList = [];
+  state.usersQuery = "";
+  state.hasMembers = false;
+  state.selectedUserId = "";
+  state.creatingUser = true;
+  clearCreateUserFeedback();
+  const form = document.querySelector("#user-create-form");
+  if (form) form.reset();
+  const quotaEl = document.querySelector("#uc-quota");
+  if (quotaEl) quotaEl.value = "100";
+  const queryEl = document.querySelector("#users-q");
+  if (queryEl) queryEl.value = "";
+  const note = document.querySelector("#users-list-note");
+  if (note) {
+    note.hidden = true;
+    note.textContent = "";
+  }
+  document.querySelector("#users-cards-host")?.replaceChildren();
+  const detailWrap = document.querySelector("#user-detail-wrap");
+  if (detailWrap) {
+    detailWrap.replaceChildren();
+    detailWrap.hidden = true;
+  }
+  const createCard = document.querySelector("#user-create-card");
+  if (createCard) createCard.hidden = true;
+}
+
 function setFormError(el, message) {
   if (!el) return;
   el.hidden = !message;
@@ -56,7 +95,7 @@ export function syncAdminScopeOptions() {
   adminScopeSelect.replaceChildren();
   const optMine = document.createElement("option");
   optMine.value = "mine";
-  optMine.textContent = "视角：本号与未分配";
+  optMine.textContent = state.sessionUserId === "owner" ? "视角：本号与未分配" : "视角：仅本号邮箱";
   const optAll = document.createElement("option");
   optAll.value = "all";
   optAll.textContent = "视角：全站全部邮件";
@@ -215,6 +254,7 @@ function createUserStreamCard(user) {
 export function openCreateUserCard(options = {}) {
   state.creatingUser = true;
   state.selectedUserId = "";
+  clearCreateUserFeedback();
   const createCard = document.querySelector("#user-create-card");
   const detailWrap = document.querySelector("#user-detail-wrap");
   if (createCard) createCard.hidden = false;
@@ -383,7 +423,7 @@ export function renderUserDetail(user) {
   toggleStatusBtn.textContent = user.status === "active" ? "停用账号" : "恢复启用";
   toggleStatusBtn.disabled = ownerOnly;
   if (ownerOnly) toggleStatusBtn.title = "仅主管理员可管理协同管理员";
-  toggleStatusBtn.addEventListener("click", () => void toggleUserStatus(user));
+  toggleStatusBtn.addEventListener("click", () => void toggleUserStatus(user, toggleStatusBtn));
   headTools.append(toggleStatusBtn);
   head.append(headText, headTools);
 
@@ -619,6 +659,30 @@ export function renderUserDetail(user) {
 
   const delRow = document.createElement("div");
   delRow.className = "inline-row";
+  const cannotRevokeSessions = user.role === "admin" && state.sessionUserId !== "owner";
+  const revokeSessionsBtn = document.createElement("button");
+  revokeSessionsBtn.type = "button";
+  revokeSessionsBtn.className = "btn-sm btn-danger-ghost";
+  revokeSessionsBtn.textContent = "退出该账号的登录";
+  revokeSessionsBtn.disabled = cannotRevokeSessions;
+  if (cannotRevokeSessions) revokeSessionsBtn.title = "仅主管理员可管理协同管理员";
+  revokeSessionsBtn.addEventListener("click", async () => {
+    if (!(await askConfirm(`立即退出 ${user.username} 在所有设备上的登录？`))) return;
+    revokeSessionsBtn.disabled = true;
+    try {
+      const res = await request("/v1/users/" + encodeURIComponent(user.id) + "/sessions/revoke", {
+        method: "POST",
+        body: {},
+      });
+      const count = Number(res.count) || 0;
+      toast(count > 0 ? `已退出 ${count} 个活跃会话` : "该账号当前没有活跃会话");
+    } catch (err) {
+      toast("操作失败: " + explain(err));
+    } finally {
+      revokeSessionsBtn.disabled = cannotRevokeSessions;
+    }
+  });
+
   const delBtn = document.createElement("button");
   delBtn.type = "button";
   delBtn.className = "btn-sm btn-danger";
@@ -626,7 +690,7 @@ export function renderUserDetail(user) {
   delBtn.disabled = ownerOnly;
   if (ownerOnly) delBtn.title = "仅主管理员可管理协同管理员";
   delBtn.addEventListener("click", () => void handleRemoveUser(user));
-  delRow.append(delBtn);
+  delRow.append(revokeSessionsBtn, delBtn);
 
   secBlock.append(secHead, passRow, delRow);
 
@@ -650,6 +714,7 @@ export function renderUserDetail(user) {
   allOpt.textContent = "全部动作";
   actionSelect.append(allOpt);
   for (const [action, label] of Object.entries(AUDIT_ACTION_NAMES)) {
+    if (LEGACY_AUDIT_ACTIONS.has(action)) continue;
     const opt = document.createElement("option");
     opt.value = action;
     opt.textContent = label;
@@ -744,7 +809,12 @@ function createAllocationRow(user, box) {
   addr.textContent = box.address;
   const meta = document.createElement("span");
   meta.className = "muted";
-  const scopeNote = box.localpart === "*" ? "整域接收" : `含 ${box.localpart}+* 子地址`;
+  const scopeNote =
+    box.localpart === "*"
+      ? "整域接收"
+      : typeof box.localpart === "string" && box.localpart.endsWith("*")
+        ? "前缀通配（字面起首匹配）"
+        : `精确邮箱（含 ${box.localpart}+* 子地址）`;
   const dkimNote = box.dkimSigned ? "已配 DKIM" : "未配 DKIM";
   const nameNote = box.displayName ? `称呼：${box.displayName}` : "未设专属称呼";
   meta.textContent = `${scopeNote} · ${dkimNote} · ${nameNote}`;
@@ -783,6 +853,7 @@ function createAllocationRow(user, box) {
   revokeBtn.disabled = ownerOnly;
   revokeBtn.addEventListener("click", async () => {
     if (!(await askConfirm(`收回 ${box.address} 的归属权？已看见的历史信留在库里。`))) return;
+    revokeBtn.disabled = true;
     try {
       await request(
         `/v1/users/${encodeURIComponent(user.id)}/mailboxes/${encodeURIComponent(box.id)}`,
@@ -794,6 +865,8 @@ function createAllocationRow(user, box) {
       if (refreshed) renderUserDetail(refreshed);
     } catch (err) {
       toast("收回失败: " + explain(err));
+    } finally {
+      revokeBtn.disabled = ownerOnly;
     }
   });
 
@@ -802,7 +875,7 @@ function createAllocationRow(user, box) {
   return row;
 }
 
-async function toggleUserStatus(user) {
+async function toggleUserStatus(user, btn) {
   const nextStatus = user.status === "active" ? "disabled" : "active";
   if (
     nextStatus === "disabled" &&
@@ -810,6 +883,8 @@ async function toggleUserStatus(user) {
   ) {
     return;
   }
+  const ownerOnly = requiresOwnerForUser(user);
+  if (btn) btn.disabled = true;
   try {
     const res = await request("/v1/users/" + encodeURIComponent(user.id), {
       method: "PATCH",
@@ -820,6 +895,8 @@ async function toggleUserStatus(user) {
     renderUserDetail(res.user);
   } catch (err) {
     toast("状态修改失败: " + explain(err));
+  } finally {
+    if (btn) btn.disabled = ownerOnly;
   }
 }
 

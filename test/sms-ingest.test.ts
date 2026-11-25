@@ -14,6 +14,7 @@ import { rebuildFromRaw } from "../src/ingest/rebuild.js";
 import { readRaw } from "../src/ingest/read-raw.js";
 import type { AppLog } from "../src/log.js";
 import { defaultPromptsDir, migrationsDir } from "../src/paths.js";
+import { barkPayload } from "../src/notify/bark.js";
 import { processNext, type WorkerOptions } from "../src/worker/loop.js";
 
 const adminPassword = "admin-strong-password";
@@ -141,7 +142,7 @@ test("sms ingest verifies bearer auth, bypasses CSRF, deduplicates idempotently,
     assert.equal(row.received_at, receivedSec * 1000);
     assert.deepEqual(JSON.parse(row.envelope_to), ["redmi-note11-sim1@sms.local"]);
     assert.deepEqual(JSON.parse(row.domains), ["sms.local"]);
-    assert.equal(row.message_id, "sms-redmi-note11-42@sms.local");
+    assert.match(row.message_id, /^sms-redmi-note11-42-[0-9a-f]{10}@sms\.local$/);
     assert.equal(row.auth_result, null);
 
     // Stored raw EML has expected headers and survives decompression check
@@ -150,7 +151,7 @@ test("sms ingest verifies bearer auth, bypasses CSRF, deduplicates idempotently,
     assert.match(rawText, /^X-Flytrap-Device: Redmi-Note11$/m);
     assert.match(rawText, /^X-Flytrap-Sms-Id: 42$/m);
     assert.match(rawText, /^X-Flytrap-Slot: sim1$/m);
-    assert.match(rawText, /^Message-ID: <sms-redmi-note11-42@sms\.local>$/m);
+    assert.match(rawText, /^Message-ID: <sms-redmi-note11-42-[0-9a-f]{10}@sms\.local>$/m);
 
     // Idempotent retry with ISO timestamp / identical smsId returns duplicate: true and adds no DB rows or jobs
     const dupIso = await app.inject({
@@ -449,6 +450,160 @@ test("sms ingest returns 503 when SMS_INGEST_TOKEN is not configured", async () 
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("sms ingest preserves reused smsId after device reset while deduplicating identical retries", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-sms-reset-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const clock = Date.UTC(2026, 10, 25, 7, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+      SMS_INGEST_TOKEN: smsToken,
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  try {
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/ingest/sms",
+      headers: { authorization: `Bearer ${smsToken}` },
+      payload: {
+        device: "pixel",
+        smsId: 1,
+        from: "10086",
+        text: "First boot message",
+        receivedAt: clock,
+      },
+    });
+    assert.equal(first.statusCode, 200);
+    assert.equal(first.json().duplicate, undefined);
+
+    const retry = await app.inject({
+      method: "POST",
+      url: "/v1/ingest/sms",
+      headers: { authorization: `Bearer ${smsToken}` },
+      payload: {
+        device: "pixel",
+        smsId: 1,
+        from: "10086",
+        text: "First boot message",
+        receivedAt: clock,
+      },
+    });
+    assert.equal(retry.statusCode, 200);
+    assert.equal(retry.json().duplicate, true);
+    assert.equal(retry.json().id, first.json().id);
+
+    const afterReset = await app.inject({
+      method: "POST",
+      url: "/v1/ingest/sms",
+      headers: { authorization: `Bearer ${smsToken}` },
+      payload: {
+        device: "pixel",
+        smsId: 1,
+        from: "10010",
+        text: "Post-reset message",
+        receivedAt: clock + 60_000,
+      },
+    });
+    assert.equal(afterReset.statusCode, 200);
+    assert.equal(afterReset.json().duplicate, undefined);
+    assert.notEqual(afterReset.json().id, first.json().id);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM messages").get() as { n: number }).n, 2);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("sms ingest rejects invalid payloads with 400", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-sms-400-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+      SMS_INGEST_TOKEN: smsToken,
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+  });
+
+  const base = {
+    device: "redmi",
+    smsId: 5,
+    from: "10086",
+    text: "hello",
+    receivedAt: Date.UTC(2026, 10, 25, 8, 0, 0),
+  };
+
+  try {
+    for (const payload of [
+      { ...base, receivedAt: 0 },
+      { ...base, receivedAt: -500 },
+      { ...base, receivedAt: "not-a-date" },
+      { ...base, device: "   " },
+      { ...base, from: "" },
+      { ...base, unknownField: true },
+    ]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/v1/ingest/sms",
+        headers: { authorization: `Bearer ${smsToken}` },
+        payload,
+      });
+      assert.equal(res.statusCode, 400, JSON.stringify(payload));
+    }
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("barkPayload formats SMS OTP title, copy field, and sender subtitle", () => {
+  const payload = barkPayload(
+    {
+      messageId: "msg_sms_1",
+      subject: "[短信·sim1] 【测试银行】您的验证码是 482910，5分钟内有效。",
+      from: "106933818222266@sender.sms.local",
+      label: "legit",
+      confidence: 0.99,
+      summary: "测试银行登录验证码 482910。",
+      otp: "482910",
+      panelUrl: "https://mail.example/#/m/msg_sms_1",
+    },
+    { defaultGroup: "Flytrap" },
+  );
+
+  assert.equal(payload.title, "[验证码 482910] [短信·sim1] 【测试银行】您的验证码是 482910，5分钟内有效。");
+  assert.equal(payload.subtitle, "106933818222266@sender.sms.local");
+  assert.equal(payload.body, "测试银行登录验证码 482910。");
+  assert.equal(payload.copy, "482910");
+  assert.equal(payload.group, "Flytrap");
+  assert.equal(payload.url, "https://mail.example/#/m/msg_sms_1");
+  assert.equal(payload.level, undefined);
 });
 
 function jar() {

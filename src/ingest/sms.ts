@@ -153,7 +153,9 @@ export async function ingestSms(
   const smsIdRaw = String(input.smsId).trim();
   const deviceSlug = slugifyToken(input.device, "dev");
   const smsIdSlug = slugifyToken(smsIdRaw, "msg");
-  const messageId = `sms-${deviceSlug}-${smsIdSlug}@${deps.smsDomain}`;
+  const sender = buildSmsSender(input.from, deps.smsDomain);
+  const dedupHash = sha256(Buffer.from(`${sender.address}\n${receivedAtMs}\n${input.text}`, "utf8")).slice(0, 10);
+  const messageId = `sms-${deviceSlug}-${smsIdSlug}-${dedupHash}@${deps.smsDomain}`;
 
   const recipient = resolveSmsRecipient(input.to, input.device, input.slot, deps.smsDomain);
   const existingById = findMessageByMessageId(deps.db, messageId);
@@ -166,8 +168,6 @@ export async function ingestSms(
       recipient,
     };
   }
-
-  const sender = buildSmsSender(input.from, deps.smsDomain);
   const slotClean = input.slot ? oneLine(input.slot, 48) : undefined;
   const deviceClean = oneLine(input.device, 64);
   const smsIdClean = oneLine(smsIdRaw, 64);

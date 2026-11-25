@@ -32,6 +32,8 @@ export const state = {
   currentMessages: [],
   mailLoadToken: 0,
   listLoadToken: 0,
+  dlqLoadToken: 0,
+  sendLoadToken: 0,
   csrfToken: null,
   toastTimer: 0,
   currentPromptId: "classify-v1",

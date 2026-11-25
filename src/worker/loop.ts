@@ -215,7 +215,9 @@ async function runClaimed(options: WorkerOptions, job: JobRow, now: () => number
         else markOutboxRetry(options.db, outboxId, message, now());
       }
     } else if (outcome === "dead" && job.message_id) {
-      markMessageError(options.db, job.message_id, message, now());
+      if (job.type !== "notify") {
+        markMessageError(options.db, job.message_id, message, now());
+      }
       if (job.type === "classify" && !hasOpenJob(options.db, job.message_id, "notify")) {
         enqueueJob(options.db, {
           id: ulid(),

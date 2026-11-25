@@ -1,6 +1,6 @@
 import type { Db } from "../db/index.js";
 import type { JobRow } from "../db/repos/jobs.js";
-import { readPersonalNotifySettings, readRuntimeSettings } from "../db/repos/settings.js";
+import { readPersonalNotifySettings, readRuntimeSettings, shouldBlockPrivateWebhook } from "../db/repos/settings.js";
 import { getMessage, markMessageNotified } from "../db/repos/messages.js";
 import { getUserById, OWNER_USER_ID, sqlResolvedOwner } from "../db/repos/users.js";
 import type { AppLog } from "../log.js";
@@ -96,14 +96,17 @@ export async function runNotifyJob(deps: NotifyJobDeps, job: JobRow): Promise<vo
     const useBark =
       personal.notifyWebhookFormat === "bark" ||
       (personal.notifyWebhookFormat === "auto" && isBarkUrl(personal.notifyWebhookUrl));
+    const blockPrivate = shouldBlockPrivateWebhook(holderId);
     const notifier = useBark
       ? createBarkNotifier({
           url: personal.notifyWebhookUrl,
           bearer: personal.notifyWebhookBearer || undefined,
+          blockPrivate,
         })
       : createWebhookNotifier({
           url: personal.notifyWebhookUrl,
           bearer: personal.notifyWebhookBearer || undefined,
+          blockPrivate,
         });
     await notifier.notify(input);
     done.push(channelId);

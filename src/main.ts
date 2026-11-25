@@ -99,6 +99,11 @@ async function serve(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info({ signal }, "shutting down");
+    const forceTimer = setTimeout(() => {
+      log.error({ signal, timeoutMs: 30_000 }, "shutdown timed out, forcing exit");
+      process.exit(1);
+    }, 30_000);
+    forceTimer.unref?.();
     for (const stop of stops) {
       try {
         await stop();
@@ -106,6 +111,7 @@ async function serve(): Promise<void> {
         log.error({ err: err instanceof Error ? err.message : "stop failed" }, "shutdown step failed");
       }
     }
+    clearTimeout(forceTimer);
     db.close();
     process.exit(0);
   }

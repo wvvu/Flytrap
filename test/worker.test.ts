@@ -366,6 +366,61 @@ test("classify waits out key pool cooldown without burning pre-cooldown callers 
   }
 });
 
+test("a dead notify job keeps the classified message status intact instead of marking message error", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-notify-dead-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  try {
+    const id = await seed(db, dir, Buffer.from("Subject: Delivery Alert\r\n\r\nImportant letter\r\n"));
+    let clock = 1_000_000;
+    const base = workerOptions(db, dir, async () => failedAuth(), () => clock);
+
+    // auth -> parse -> classify
+    assert.equal(await processNext(base, "w-prep"), true);
+    assert.equal(await processNext(base, "w-prep"), true);
+    assert.equal(await processNext(base, "w-prep"), true);
+    const before = db.prepare("SELECT status, error FROM messages WHERE id = ?").get(id) as {
+      status: string;
+      error: string | null;
+    };
+    assert.equal(before.status, "classified");
+    assert.equal(before.error, null);
+
+    // Force notify job to fail permanently on the first attempt
+    db.prepare("UPDATE jobs SET max_attempts = 1 WHERE type = 'notify' AND message_id = ?").run(id);
+    const deadNotifyOpts: WorkerOptions = {
+      ...base,
+      notifyLabels: ["gray"],
+      notifyMinConfidence: 0,
+      notifiers: [
+        {
+          id: "failing-webhook",
+          async notify() {
+            throw new Error("webhook 500");
+          },
+        },
+      ],
+    };
+    assert.equal(await processNext(deadNotifyOpts, "w-notify"), true);
+
+    const notifyJob = db
+      .prepare("SELECT status, last_error FROM jobs WHERE type = 'notify' AND message_id = ?")
+      .get(id) as { status: string; last_error: string | null };
+    assert.equal(notifyJob.status, "dead");
+    assert.equal(notifyJob.last_error, "webhook 500");
+
+    const after = db.prepare("SELECT status, error FROM messages WHERE id = ?").get(id) as {
+      status: string;
+      error: string | null;
+    };
+    assert.equal(after.status, "classified");
+    assert.equal(after.error, null);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("disk alert measures a directory tree and warns only over the limit", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-disk-"));
   try {

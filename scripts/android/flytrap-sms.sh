@@ -163,9 +163,9 @@ init_cursor_if_needed() {
   if [ -f "$STATE_FILE" ] && [ -n "$LAST_ACKED_ID" ]; then
     return 0
   fi
-  max_id="$(sql_ro "$SMS_DB" "SELECT COALESCE(MAX(_id), 0) FROM sms WHERE type = 1;")"
+  max_id="$(sql_ro "$SMS_DB" "SELECT COALESCE(MAX(_id), 0) FROM sms WHERE type = 1;")" || return 1
   case "$max_id" in
-    ''|*[!0-9]*) max_id=0 ;;
+    ''|*[!0-9]*) return 1 ;;
   esac
   LAST_ACKED_ID="$max_id"
   FAIL_COUNT=0
@@ -319,44 +319,67 @@ post_sms_to_flytrap() {
       return 0
     fi
   fi
+  case "$code" in
+    400|413|422)
+      log_msg "[ERROR] permanent ingest error sms_id=$sms_id http=$code; skipping"
+      return 2
+      ;;
+  esac
   log_msg "[WARN] ingest failed sms_id=$sms_id http=$code"
   return 1
 }
 
 process_pending() {
-  ids="$(sql_ro "$SMS_DB" "SELECT _id FROM sms WHERE type = 1 AND _id > $LAST_ACKED_ID ORDER BY _id ASC LIMIT 50;")"
+  if ! ids="$(sql_ro "$SMS_DB" "SELECT _id FROM sms WHERE type = 1 AND _id > $LAST_ACKED_ID ORDER BY _id ASC LIMIT 50;")"; then
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    save_state
+    log_msg "[WARN] sqlite query failed fails=$FAIL_COUNT"
+    return 1
+  fi
   [ -n "$ids" ] || return 0
 
   for sms_id in $ids; do
     case "$sms_id" in
       ''|*[!0-9]*) continue ;;
     esac
-    sub_id="$(sql_ro "$SMS_DB" "SELECT COALESCE(sub_id, -1) FROM sms WHERE _id = $sms_id LIMIT 1;")"
+    sub_id="$(sql_ro "$SMS_DB" "SELECT COALESCE(sub_id, -1) FROM sms WHERE _id = $sms_id LIMIT 1;" || echo -1)"
     slot="$(resolve_slot_for_sub "$sub_id")"
 
-    if post_sms_to_flytrap "$sms_id" "$slot"; then
-      LAST_ACKED_ID="$sms_id"
-      FAIL_COUNT=0
-      save_state
-      log_msg "[INFO] acked sms_id=$sms_id slot=$slot"
-    else
-      FAIL_COUNT=$((FAIL_COUNT + 1))
-      save_state
-      if [ "$FAIL_COUNT" -ge "$BARK_FAIL_THRESHOLD" ]; then
-        # Alert once for every currently queued un-alerted SMS, without advancing LAST_ACKED_ID.
-        for pending_id in $ids; do
-          case "$pending_id" in
-            ''|*[!0-9]*) continue ;;
-          esac
-          if ! id_already_alerted "$pending_id"; then
-            p_sub="$(sql_ro "$SMS_DB" "SELECT COALESCE(sub_id, -1) FROM sms WHERE _id = $pending_id LIMIT 1;")"
-            p_slot="$(resolve_slot_for_sub "$p_sub")"
-            send_bark_fallback "$pending_id" "$p_slot"
-          fi
-        done
-      fi
-      return 1
-    fi
+    rc=0
+    post_sms_to_flytrap "$sms_id" "$slot" || rc=$?
+    case "$rc" in
+      0)
+        LAST_ACKED_ID="$sms_id"
+        FAIL_COUNT=0
+        save_state
+        log_msg "[INFO] acked sms_id=$sms_id slot=$slot"
+        ;;
+      2)
+        LAST_ACKED_ID="$sms_id"
+        FAIL_COUNT=0
+        save_state
+        continue
+        ;;
+      *)
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        save_state
+        if [ "$FAIL_COUNT" -ge "$BARK_FAIL_THRESHOLD" ]; then
+          # Alert once for every currently queued un-alerted SMS, without advancing LAST_ACKED_ID.
+          for pending_id in $ids; do
+            case "$pending_id" in
+              ''|*[!0-9]*) continue ;;
+            esac
+            [ "$pending_id" -le "$LAST_ACKED_ID" ] && continue
+            if ! id_already_alerted "$pending_id"; then
+              p_sub="$(sql_ro "$SMS_DB" "SELECT COALESCE(sub_id, -1) FROM sms WHERE _id = $pending_id LIMIT 1;" || echo -1)"
+              p_slot="$(resolve_slot_for_sub "$p_sub")"
+              send_bark_fallback "$pending_id" "$p_slot" || true
+            fi
+          done
+        fi
+        return 1
+        ;;
+    esac
   done
   return 0
 }
@@ -389,6 +412,20 @@ EOF
   echo $! >"$INO_PID_FILE"
 }
 
+ensure_inotify_watcher() {
+  ino_pid=""
+  if [ -f "$INO_PID_FILE" ]; then
+    ino_pid="$(cat "$INO_PID_FILE" 2>/dev/null || true)"
+  fi
+  if [ -n "$ino_pid" ] && kill -0 "$ino_pid" 2>/dev/null; then
+    return 0
+  fi
+  if [ -n "$ino_pid" ]; then
+    log_msg "[WARN] inotifyd (pid=$ino_pid) exited, respawning"
+  fi
+  start_inotify_watcher
+}
+
 echo $$ >"$PID_FILE"
 WAKE_PENDING=0
 SLEEP_PID=""
@@ -401,18 +438,23 @@ trap '
 ' INT TERM
 
 log_msg "[INFO] flytrap-sms shell daemon starting device=$DEVICE_ID url=$FLYTRAP_URL"
-init_cursor_if_needed
+init_cursor_if_needed || log_msg "[WARN] sqlite cursor init deferred, retrying in loop"
 sync_server_config || true
 start_inotify_watcher
 
 while true; do
   WAKE_PENDING=0
+  ensure_inotify_watcher
   now_ts="$(date +%s)"
   if [ $((now_ts - BARK_UPDATED_AT)) -ge "$CONFIG_REFRESH_SEC" ]; then
     sync_server_config || true
   fi
 
-  if process_pending; then
+  if ! init_cursor_if_needed; then
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    log_msg "[WARN] sqlite cursor init failed fails=$FAIL_COUNT"
+    wait_sec="$(compute_backoff)"
+  elif process_pending; then
     wait_sec="$POLL_FALLBACK_SEC"
   else
     wait_sec="$(compute_backoff)"
@@ -421,7 +463,7 @@ while true; do
   if [ "$WAKE_PENDING" = "0" ]; then
     sleep "$wait_sec" &
     SLEEP_PID=$!
-    wait "$SLEEP_PID" 2>/dev/null
+    wait "$SLEEP_PID" 2>/dev/null || true
     SLEEP_PID=""
   else
     # Small debounce when woken during a DB transaction.

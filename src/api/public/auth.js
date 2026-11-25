@@ -14,6 +14,7 @@ import {
 import { request } from "./net.js";
 import { explain, toast } from "./ui.js";
 import { revealApp, resetCompose } from "./nav.js";
+import { resetUsersForAccount } from "./users-view.js";
 
 export async function signIn() {
   loginError.textContent = "";
@@ -57,6 +58,10 @@ export async function signOut() {
 
 export function showLogin() {
   resetCompose();
+  resetUsersForAccount();
+  state.selectedUserId = "";
+  state.creatingUser = true;
+  state.keyProbeResults.clear();
   document.title = "登录";
   if (appEl) appEl.classList.remove("is-booting");
   loginEl.hidden = false;

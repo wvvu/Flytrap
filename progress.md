@@ -175,3 +175,35 @@
 - [x] 编写单字符账号 `+tag` 基座发信与收信测试。提交 `2b15020`。
 - [x] 编写入站多收件人部分拉黑场景下，未拉黑成员通知与 AI 分类正常触发的测试。提交 `2b15020`。
 - [x] 编写全局清空垃圾桶后 Owner 软删除与引用计数释放测试。提交 `2b15020`。
+
+## v0.10.0 审计与实测修复清单（2026-11-25 评审结果）
+
+依据代码审计、交叉复核及本地浏览器探索式实测结论分阶段落地，全部修复完成后通过 `npm run typecheck` 与 `npm test` 验证。
+
+### 阶段零：基线落盘
+- [x] 单独提交工作区 `scripts/android/flytrap-sms.py` 与 `scripts/android/flytrap-sms.sh` 的 `inotifyd` `:cwynd` 监听改动（提交 `47d2663`）。
+
+### 阶段一：核心防线、短信抗毁与后端稳定性
+- [x] **拉黑接口补齐当前视角访问校验**：`src/api/app.ts` `POST /v1/messages/:id/block` 在写入黑名单及 `trashMessageForViewer` 前校验 `canViewerAccessMessage`，未通过返回 404。
+- [x] **个人 Webhook / Bark 出站拦截私网与保留地址**：新增 `src/notify/url-guard.ts`，在 `src/db/repos/settings.ts`、`src/notify/webhook.ts`、`src/notify/bark.ts` 与 `src/worker/job-notify.ts` 中对非 `owner` 成员强制拦截私网/回环/保留段与重定向，保留 `ALLOW_PRIVATE_WEBHOOK_URLS=true` 与 `owner` 豁免。
+- [x] **日志脱敏路径补全**：`src/log.ts` 的 `REDACT_PATHS` 增加 `smsIngestToken`、`SMS_INGEST_TOKEN`、`barkUrl`、`BARK_URL`。
+- [x] **短信 `messageId` 防重置撞库**：`src/ingest/sms.ts` 基于规范化发件人、毫秒时间戳与原文内容生成确定性摘要后缀，保留网络重试幂等的同时避免同设备重置 `_id` 归零撞库。
+- [x] **手机端守护异常与队头阻塞加固**：`scripts/android/flytrap-sms.py` 捕获 `sqlite3.Error` 并在 `finally` 中关闭连接；两份脚本仅对 `400`/`413`/`422` 跳过推进游标，对其余失败保留游标退避并支持 `inotifyd` 异常退出自动拉起。
+- [x] **Worker 与优雅停机**：`src/worker/loop.ts` 中 `notify` 死信保留记录与告警而不再覆写 `messages.error`；`src/main.ts` 的 `shutdown()` 增加 30s `.unref()` 强退兜底。
+
+### 阶段二：前端多账号隔离与关键交互修复
+- [x] **登出及切回新建表单清理开户凭证**：`src/api/public/auth.js` 与 `src/api/public/users-view.js` 清理并隐藏 `#uc-credential-box`、`#uc-credential-text`、`state.lastCreatedCredentials` 与选中/探针缓存。
+- [x] **登出切号清理写信发件候选**：`src/api/public/send-view.js` 的 `resetComposeForAccount()` 清空 `#send-from-list` 与 `#send-identity-pick` 并恢复隐藏，登录进入或打开写信窗时按当前账号重建候选。
+- [x] **修复前缀通配 `localpart*` 默认值与标签**：`src/api/public/send-view.js` 对前缀通配去掉尾 `*` 作为建议发件地址；`src/api/public/users-view.js` 管理员详情行对齐前缀通配展示文案。
+- [x] **修复切页异步竞态与 `is-booting` 残留**：`src/api/public/dlq-view.js` 与 `src/api/public/send-view.js` 校验视图与请求令牌；`src/api/public/shell.js` 在 `finally` 中移除 `is-booting`。
+- [x] **补齐成员强制下线与交互防护**：`src/api/public/users-view.js` 补充「退出该账号的登录」按钮（按 `allowSelf=false` 约束权限）；`src/api/public/app.js` 与 `ui.js` 拦截确认弹窗 `Escape` 穿透；`src/api/public/settings-view.js` 以服务端基线快照兜底 AI 配置保存失败回滚。
+
+### 阶段三：轻量体验抛光、搜索增强与收尾
+- [x] **搜索支持收件人与简单正文**：`src/db/repos/messages.ts` 扩展 `q` 查询覆盖 `to_addrs`、`envelope_to`（遵守 `redactOtherRecipients` 脱敏边界，成员不可搜别的成员 BCC 地址）、`parsed.text` 与 `ai_result.summary`；同步更新搜索框提示文案。
+- [x] **高频按钮防连击与细节文案对齐**：为「全部已读」、邮箱「收回」与账号「停用/启用」增加在途禁用；`users-view.js` 审计筛选去重旧键、协同管理员默认视角改为「仅本号邮箱」；`ui.js`/`app.ts` 补齐常用业务错误提示；`send-view.js` 修复单一非法收件人校验顺序、附件并发上限复核及最小化按钮无障碍标签；`settings-view.js` 映射 `"unlabeled"` 与精简探针失败徽章；`app.js` 快捷键兼容大写锁定；`util.js` 收紧无登录态兜底。
+- [x] **文档、版本字面量与测试补充**：`src/api/http.ts` 补齐 `409: "conflict"`；同步更新 `AGENT.md` `sandbox` 说明与 `docker-compose.yml`/`src/api/app.ts` 版本号；补充 `400` 边界、SSRF、BCC 搜索隔离、死信状态与 Bark 载荷测试。
+
+### 暂时不做
+- SMTP `onRcptTo` 域名缓存（SQLite 本地读取无瓶颈，不增加缓存复杂度）。
+- `listUsersWithDetails` SQL 批量重写与 `countTrash` 独立计数 SQL（保持小团队场景可读性与可见性口径一致）。
+- `scripts/android/` 全套 mock 单测、`PUT /v1/settings/ai` 单字段局部传参放宽及单测端口夹具微调。

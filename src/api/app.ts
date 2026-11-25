@@ -980,6 +980,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       id,
       request.session.role === "admin" ? viewerOf(db, request, "allIfAdmin") : viewer,
     );
+    if (!canViewerAccessMessage(db, message, viewer)) throw new HttpError(404, "not_found");
     const sender = message.from_addr || message.envelope_from;
     if (!sender) throw new HttpError(400);
     let blockedSenders: string[];
@@ -1495,8 +1496,11 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
         webhookFormat: body.data.webhookFormat,
       }, now());
     } catch (err) {
-      if (err instanceof SettingsError && err.message === "invalid webhook url") {
-        throw new HttpError(400, "invalid webhook url");
+      if (
+        err instanceof SettingsError &&
+        (err.message === "invalid webhook url" || err.message === "forbidden webhook url")
+      ) {
+        throw new HttpError(400, err.message);
       }
       if (err instanceof SettingsError) throw new HttpError(400);
       throw err;
@@ -1853,9 +1857,17 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
 
   app.post("/v1/users", async (request, reply) => {
     requireAdmin(request);
+    const rawBody =
+      typeof request.body === "object" && request.body !== null ? (request.body as Record<string, unknown>) : null;
+    if (rawBody?.password === "admin") throw new HttpError(400, "password_too_weak");
     const body = createUserBody.safeParse(request.body);
-    if (!body.success) throw new HttpError(400);
-    if (body.data.password === "admin") throw new HttpError(400);
+    if (!body.success) {
+      const firstField = body.error.issues[0]?.path[0];
+      if (firstField === "initialMailbox") throw new HttpError(400, "invalid_initial_mailbox");
+      if (firstField === "username") throw new HttpError(400, "invalid_username");
+      if (firstField === "password") throw new HttpError(400, "invalid_password");
+      throw new HttpError(400);
+    }
     if (body.data.role === "admin" && !sessionIsOwner(request)) {
       throw new HttpError(403, "only_owner_can_grant_admin");
     }
@@ -1890,7 +1902,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     } catch (err) {
       if (err instanceof UserError) {
         if (err.code === "conflict") throw new HttpError(409, err.message);
-        throw new HttpError(400);
+        throw new HttpError(400, err.message);
       }
       throw err;
     }
@@ -1928,7 +1940,8 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       return reply.send({ ok: true, user: presentPublicUser(updated) });
     } catch (err) {
       if (err instanceof UserError) {
-        throw new HttpError(err.code === "not_found" ? 404 : 400);
+        if (err.code === "not_found") throw new HttpError(404, "not_found");
+        throw new HttpError(400, err.message);
       }
       throw err;
     }
@@ -1940,8 +1953,11 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
     const user = getUserById(db, targetId);
     if (!user) throw new HttpError(404, "not_found");
     rejectAdminTarget(request, user, true);
+    const rawBody =
+      typeof request.body === "object" && request.body !== null ? (request.body as Record<string, unknown>) : null;
+    if (rawBody?.next === "admin") throw new HttpError(400, "password_too_weak");
     const body = adminSetPasswordBody.safeParse(request.body);
-    if (!body.success || body.data.next === "admin") throw new HttpError(400);
+    if (!body.success) throw new HttpError(400, "invalid_password");
     const at = now();
     updateUserPassword(db, targetId, hashPassword(body.data.next), at);
     clearResetSeal(db, targetId);
@@ -2030,7 +2046,7 @@ export async function buildApi(options: ApiOptions): Promise<FastifyInstance> {
       if (err instanceof UserError) {
         if (err.code === "not_found") throw new HttpError(404, "not_found");
         if (err.code === "conflict") throw new HttpError(409, err.message);
-        throw new HttpError(400);
+        throw new HttpError(400, err.message);
       }
       throw err;
     }
@@ -2231,9 +2247,9 @@ function readAppVersion(): string {
   if (fromEnv) return fromEnv;
   try {
     const pkg = JSON.parse(readFileSync(path.join(appRoot(), "package.json"), "utf8")) as { version?: unknown };
-    return typeof pkg.version === "string" ? pkg.version : "0.8.0";
+    return typeof pkg.version === "string" ? pkg.version : "0.10.0";
   } catch {
-    return "0.8.0";
+    return "0.10.0";
   }
 }
 

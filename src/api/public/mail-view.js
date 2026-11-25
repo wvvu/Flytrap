@@ -34,9 +34,11 @@ import {
   plainTextBody,
   queryInput,
   rawHeaders,
+  readAllBtn,
   sandboxWrap,
   sectionAttachments,
   sectionUrls,
+  spamReadAllBtn,
   threadBox,
   threadList,
   trashQueryInput,
@@ -858,7 +860,13 @@ export function navigateMail(delta) {
   }
 }
 
+let markingAllRead = false;
+
 export async function handleMarkAllRead(room = "inbox") {
+  if (markingAllRead) return;
+  markingAllRead = true;
+  if (readAllBtn) readAllBtn.disabled = true;
+  if (spamReadAllBtn) spamReadAllBtn.disabled = true;
   const label =
     room === "spam"
       ? filterSelect && filterSelect.value
@@ -884,6 +892,10 @@ export async function handleMarkAllRead(room = "inbox") {
     toast(res.count > 0 ? `已将 ${res.count} 封标为已读` : "已全部标为已读");
   } catch (err) {
     toast("操作失败: " + explain(err));
+  } finally {
+    markingAllRead = false;
+    if (readAllBtn) readAllBtn.disabled = false;
+    if (spamReadAllBtn) spamReadAllBtn.disabled = false;
   }
 }
 

@@ -98,10 +98,10 @@ def http_json(method: str, url: str, headers: dict[str, str], payload: dict | No
 def resolve_slot(sub_id: int | None, slot_overrides: dict[int, str] | None = None) -> str:
     if sub_id is None or sub_id < 0 or not os.path.exists(TEL_DB):
         return "sim"
+    con = None
     try:
         con = sqlite3.connect(f"file:{TEL_DB}?mode=ro", uri=True, timeout=5.0)
         row = con.execute("SELECT sim_id, number FROM siminfo WHERE _id = ? LIMIT 1", (sub_id,)).fetchone()
-        con.close()
         if row:
             sim_id = row[0] if isinstance(row[0], int) else -1
             raw_num = str(row[1] or "")
@@ -116,24 +116,30 @@ def resolve_slot(sub_id: int | None, slot_overrides: dict[int, str] | None = Non
             return f"sub{sub_id}"
     except Exception:
         pass
+    finally:
+        if con is not None:
+            con.close()
     return "sim"
 
 
 def query_max_id() -> int:
     con = sqlite3.connect(f"file:{SMS_DB}?mode=ro", uri=True, timeout=5.0)
-    row = con.execute("SELECT COALESCE(MAX(_id), 0) FROM sms WHERE type = 1").fetchone()
-    con.close()
-    return int(row[0]) if row and row[0] is not None else 0
+    try:
+        row = con.execute("SELECT COALESCE(MAX(_id), 0) FROM sms WHERE type = 1").fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+    finally:
+        con.close()
 
 
 def query_pending(last_acked_id: int) -> list[tuple]:
     con = sqlite3.connect(f"file:{SMS_DB}?mode=ro", uri=True, timeout=5.0)
-    rows = con.execute(
-        "SELECT _id, address, date, date_sent, body, sub_id FROM sms WHERE type = 1 AND _id > ? ORDER BY _id ASC LIMIT 50",
-        (last_acked_id,),
-    ).fetchall()
-    con.close()
-    return rows
+    try:
+        return con.execute(
+            "SELECT _id, address, date, date_sent, body, sub_id FROM sms WHERE type = 1 AND _id > ? ORDER BY _id ASC LIMIT 50",
+            (last_acked_id,),
+        ).fetchall()
+    finally:
+        con.close()
 
 
 def start_inotify() -> subprocess.Popen | None:
@@ -189,11 +195,6 @@ def main() -> int:
     signal.signal(signal.SIGINT, on_stop)
 
     state = read_json(STATE_FILE, {})
-    if "last_acked_id" not in state:
-        state = {"last_acked_id": query_max_id(), "fail_count": 0, "bark_alerted_ids": []}
-        atomic_write_json(STATE_FILE, state)
-        log_msg(f"[INFO] initialized cursor last_acked_id={state['last_acked_id']}")
-
     bark_cache = read_json(BARK_CACHE_FILE, {"url": "", "bearer": "", "updated_at": 0})
 
     def update_bark_cache(resp: dict | None) -> None:
@@ -250,19 +251,58 @@ def main() -> int:
         else:
             log_msg(f"[ERROR] emergency Bark push failed http={code} sms_id={sms_id}")
 
+    def sleep_interruptible(wait_sec: float) -> None:
+        deadline = time.monotonic() + wait_sec
+        while RUNNING and not WAKE_FLAG and time.monotonic() < deadline:
+            time.sleep(min(0.5, max(0.05, deadline - time.monotonic())))
+        if WAKE_FLAG:
+            time.sleep(0.3)
+
     log_msg(f"[INFO] flytrap-sms python daemon starting device={device} url={base_url}")
     sync_config()
     ino = start_inotify()
+    init_fails = 0
 
     try:
         while RUNNING:
             WAKE_FLAG = False
+            if ino is None:
+                ino = start_inotify()
+            elif ino.poll() is not None:
+                log_msg(f"[WARN] inotifyd exited rc={ino.returncode}, respawning")
+                ino = start_inotify()
+
             if int(time.time()) - int(bark_cache.get("updated_at") or 0) >= cfg_refresh:
                 sync_config()
 
-            pending = query_pending(int(state["last_acked_id"]))
+            if "last_acked_id" not in state:
+                try:
+                    state = {
+                        "last_acked_id": query_max_id(),
+                        "fail_count": 0,
+                        "bark_alerted_ids": state.get("bark_alerted_ids", []),
+                    }
+                    atomic_write_json(STATE_FILE, state)
+                    init_fails = 0
+                    log_msg(f"[INFO] initialized cursor last_acked_id={state['last_acked_id']}")
+                except sqlite3.Error as err:
+                    init_fails += 1
+                    log_msg(f"[WARN] sqlite cursor init failed ({err}) fails={init_fails}")
+                    wait_sec = min(retry_max, retry_base * (2 ** (init_fails - 1)))
+                    sleep_interruptible(wait_sec)
+                    continue
+
             failed = False
-            for row in pending:
+            try:
+                pending = query_pending(int(state["last_acked_id"]))
+            except sqlite3.Error as err:
+                state["fail_count"] = int(state.get("fail_count", 0)) + 1
+                atomic_write_json(STATE_FILE, state)
+                log_msg(f"[WARN] sqlite query failed ({err}) fails={state['fail_count']}")
+                failed = True
+                pending = []
+
+            for idx, row in enumerate(pending):
                 sms_id, address, date_ms, date_sent_ms, body, sub_id = row
                 slot = resolve_slot(sub_id, slot_overrides)
                 sender = (address or "").strip() or "unknown-sender"
@@ -289,12 +329,18 @@ def main() -> int:
                     state["fail_count"] = 0
                     atomic_write_json(STATE_FILE, state)
                     log_msg(f"[INFO] acked sms_id={sms_id} slot={slot}")
+                elif code in (400, 413, 422):
+                    log_msg(f"[ERROR] permanent ingest error sms_id={sms_id} http={code}; skipping")
+                    state["last_acked_id"] = int(sms_id)
+                    state["fail_count"] = 0
+                    atomic_write_json(STATE_FILE, state)
+                    continue
                 else:
                     state["fail_count"] = int(state.get("fail_count", 0)) + 1
                     atomic_write_json(STATE_FILE, state)
                     log_msg(f"[WARN] ingest failed sms_id={sms_id} http={code} fails={state['fail_count']}")
                     if state["fail_count"] >= threshold:
-                        for p_row in pending:
+                        for p_row in pending[idx:]:
                             p_id, p_addr, _d1, _d2, p_body, p_sub = p_row
                             send_bark_fallback(int(p_id), resolve_slot(p_sub, slot_overrides), (p_addr or "").strip(), p_body or "")
                     failed = True
@@ -306,13 +352,9 @@ def main() -> int:
             else:
                 wait_sec = poll_sec
 
-            deadline = time.monotonic() + wait_sec
-            while RUNNING and not WAKE_FLAG and time.monotonic() < deadline:
-                time.sleep(min(0.5, max(0.05, deadline - time.monotonic())))
-            if WAKE_FLAG:
-                time.sleep(0.3)
+            sleep_interruptible(wait_sec)
     finally:
-        if ino:
+        if ino and ino.poll() is None:
             ino.terminate()
         for f in (PID_FILE, INO_PID_FILE):
             if os.path.exists(f):

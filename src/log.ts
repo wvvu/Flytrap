@@ -30,6 +30,10 @@ const REDACT_PATHS = [
   "NOTIFY_WEBHOOK_BEARER",
   "API_PASSWORD",
   "SESSION_SECRET",
+  "smsIngestToken",
+  "SMS_INGEST_TOKEN",
+  "barkUrl",
+  "BARK_URL",
 ];
 
 const RECENT_LIMIT = 200;

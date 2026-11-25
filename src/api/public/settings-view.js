@@ -644,7 +644,7 @@ export function rememberMailboxes(items) {
 }
 
 export function labelName(id) {
-  if (!id) return "未分类";
+  if (!id || id === "unlabeled") return "未分类";
   return state.labelNames[id] || LABEL_NAMES[id] || id;
 }
 
@@ -882,6 +882,8 @@ export async function saveNameSettings() {
     .catch(() => {});
 }
 
+let lastSavedAi = null;
+
 export function renderAiEditors(aiChannels) {
   const list = Array.isArray(aiChannels) ? aiChannels : Array.isArray(aiChannels?.channels) ? aiChannels.channels : [];
   state.aiChannels = list.map((ch) => ({
@@ -896,6 +898,7 @@ export function renderAiEditors(aiChannels) {
   }));
   paintAiEditors();
   rememberAiControls();
+  lastSavedAi = captureAi();
 }
 
 export function rememberAiControls() {
@@ -970,10 +973,11 @@ export function aiStateKey(snapshot) {
 }
 
 export async function applyAndSaveAi(apply, message, options = {}) {
-  const backup = captureAi();
+  const prev = captureAi();
+  const rollback = lastSavedAi || prev;
   try {
     apply();
-    if (!options.force && aiStateKey(captureAi()) === aiStateKey(backup)) return;
+    if (!options.force && aiStateKey(captureAi()) === aiStateKey(prev)) return;
     if (!options.deferRender) paintAiEditors();
     const saved = await request("/v1/settings/ai", { method: "PUT", body: aiPayload() });
     const enabled = document.querySelector("#ai-enabled");
@@ -983,7 +987,7 @@ export async function applyAndSaveAi(apply, message, options = {}) {
     renderAiEditors(saved.aiChannels || {});
     if (message) toast(message);
   } catch (err) {
-    restoreAi(backup);
+    restoreAi(rollback);
     toast("保存模型失败: " + explain(err));
     return;
   }
@@ -1071,7 +1075,10 @@ function buildChannelCard(ch, index, total) {
     const val = modelInput.value.trim();
     if (val && !/^[A-Za-z0-9._:@/-]{1,80}$/.test(val)) {
       toast("模型名称无效");
-      modelInput.value = ch.model || "";
+      const savedCh = (ch.id ? lastSavedAi?.channels?.find((item) => item.id === ch.id) : null) || lastSavedAi?.channels?.[index];
+      const reverted = savedCh?.model || "";
+      ch.model = reverted;
+      modelInput.value = reverted;
       return;
     }
     enqueueAi(() => {
@@ -1157,6 +1164,15 @@ export function maskKey(tail) {
   return tail ? `····${tail}` : "已保存";
 }
 
+function formatProbeErrorBadge(error) {
+  const text = String(error || "").trim();
+  if (!text) return "连接失败";
+  const httpMatch = /\bHTTP\s+(\d{3})\b/i.exec(text);
+  if (httpMatch) return `HTTP ${httpMatch[1]}`;
+  if (/请先填写|Base URL|模型名称/i.test(text)) return "配置有误";
+  return "连接失败";
+}
+
 function keyOrderRow(ch, keyRow, index, total) {
   const row = document.createElement("div");
   row.className = "name-row order-row";
@@ -1172,7 +1188,7 @@ function keyOrderRow(ch, keyRow, index, total) {
     const prev = state.keyProbeResults.get(keyRow.id);
     if (prev) {
       badge.classList.add(prev.ok ? "ok" : "err");
-      badge.textContent = prev.ok ? `可用 · ${prev.latencyMs}ms` : "失败";
+      badge.textContent = prev.ok ? `可用 · ${prev.latencyMs}ms` : formatProbeErrorBadge(prev.error);
       if (prev.error) badge.title = prev.error;
     } else {
       badge.hidden = true;
@@ -1222,7 +1238,7 @@ export async function testSavedAiKey(ch, keyId, button, badge) {
       toast(`密钥可用 · ${res.model} (${res.latencyMs}ms)`);
     } else {
       badge.className = "probe-badge err";
-      badge.textContent = res.error ? res.error.slice(0, 28) : "连接失败";
+      badge.textContent = formatProbeErrorBadge(res.error);
       badge.title = res.error || "连接失败";
       toast("密钥测试未通过: " + (res.error || "连接失败"));
     }

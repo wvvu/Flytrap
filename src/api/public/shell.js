@@ -41,7 +41,7 @@ import { refreshShownNames, reloadMessages, reloadTrash, renderSandboxHtml, sele
 import { loadDlqJobs, updateDlqBadge } from "./dlq-view.js";
 import { loadAppearance, loadSettingsPage, renderSettingsNav, showSettingsSection } from "./settings-view.js";
 import { syncAdminScopeOptions } from "./users-view.js";
-import { loadSendPage } from "./send-view.js";
+import { loadSendPage, renderFromSuggestions } from "./send-view.js";
 import { hashMailId } from "./util.js";
 
 export function initTheme() {
@@ -321,6 +321,7 @@ export async function loadSessionContext() {
 
 export async function revealApp() {
   await loadSessionContext();
+  renderFromSuggestions([]);
   const deepId = hashMailId();
   state.skipFirstOpen = Boolean(deepId);
   const appearance = loadAppearance();
@@ -331,10 +332,10 @@ export async function revealApp() {
     listed = await switchNav("inbox");
   } finally {
     state.skipFirstOpen = false;
+    if (appEl) appEl.classList.remove("is-booting");
   }
   if (listed === false) return;
   if (deepId) void selectMail(deepId);
-  if (appEl) appEl.classList.remove("is-booting");
   void appearance.then(() => {
     syncSubfiltersBar(state.currentView);
     refreshShownNames();

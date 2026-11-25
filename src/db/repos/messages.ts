@@ -581,10 +581,22 @@ export function listMessages(db: Db, query: MessageListQuery): MessageListRow[] 
     params.domain = query.domain;
   }
   if (query.q) {
+    const recipientFilter = target.redactOtherRecipients
+      ? `(IFNULL(m.to_addrs, '') LIKE :q ESCAPE '\\' OR EXISTS (
+          SELECT 1 FROM json_each(m.envelope_to) je_q
+          WHERE ${sqlResolvedOwner("je_q.value")} = :qVisUid AND je_q.value LIKE :q ESCAPE '\\'
+        ))`
+      : `(IFNULL(m.to_addrs, '') LIKE :q ESCAPE '\\' OR IFNULL(m.envelope_to, '') LIKE :q ESCAPE '\\')`;
+    if (target.redactOtherRecipients) {
+      params.qVisUid = target.stateUserId;
+    }
     where.push(`(
       IFNULL(m.subject, '') LIKE :q ESCAPE '\\' OR
       IFNULL(m.from_addr, '') LIKE :q ESCAPE '\\' OR
-      IFNULL(m.message_id, '') LIKE :q ESCAPE '\\'
+      IFNULL(m.message_id, '') LIKE :q ESCAPE '\\' OR
+      ${recipientFilter} OR
+      (CASE WHEN json_valid(m.parsed) THEN IFNULL(json_extract(m.parsed, '$.text'), '') ELSE '' END) LIKE :q ESCAPE '\\' OR
+      (CASE WHEN json_valid(m.ai_result) THEN IFNULL(json_extract(m.ai_result, '$.summary'), '') ELSE '' END) LIKE :q ESCAPE '\\'
     )`);
     params.q = likeContains(query.q);
   }

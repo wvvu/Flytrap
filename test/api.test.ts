@@ -133,7 +133,12 @@ test("the api requires a session, hides paths, and pages the list", async () => 
     assert.equal((next.json() as { items: Array<{ id: string }> }).items[0]?.id, "msg_hidden");
 
     const needle = await client.get(app, "/v1/messages?q=SECRET-BODY-NEEDLE");
-    assert.equal((needle.json() as { items: unknown[] }).items.length, 0);
+    const needleBody = needle.json() as { items: Array<{ id: string }> };
+    assert.equal(needleBody.items.length, 1);
+    assert.equal(needleBody.items[0]?.id, "msg_visible");
+    assert.equal(JSON.stringify(needleBody).includes("SECRET-BODY-NEEDLE"), false);
+    const byRecipient = await client.get(app, "/v1/messages?q=sink@example.com&label=phish");
+    assert.equal((byRecipient.json() as { items: Array<{ id: string }> }).items[0]?.id, "msg_visible");
     const bySubject = await client.get(app, "/v1/messages?q=invoice&label=phish");
     assert.equal((bySubject.json() as { items: Array<{ id: string }> }).items[0]?.id, "msg_visible");
     const junk = await client.get(app, "/v1/messages?label=not-legit");

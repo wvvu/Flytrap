@@ -84,6 +84,7 @@ test("multi-user accounts isolate exact, +subaddress, and wildcard mailboxes wit
       domain: "example.com",
     });
     assert.equal(dup.statusCode, 409);
+    assert.equal(dup.json().error, "conflict");
     assert.equal(dup.json().reason, "mailbox already allocated");
 
     // Create Bob with catch-all *@example.com (lower priority than alice@example.com) + bob@example.net
@@ -1627,6 +1628,303 @@ test("a personal webhook is sent only to the resolved holder", async () => {
     assert.equal(seen[0]?.panel, "http://127.0.0.1:8080/#/m/msg_owner");
   } finally {
     globalThis.fetch = originalFetch;
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("POST /v1/messages/:id/block enforces viewer access isolation", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-mu-block-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 25, 9, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+  const carol = jar();
+  const alice = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com" },
+    });
+    await owner.post(app, "/v1/users", {
+      username: "carol",
+      password: "carol-password-123",
+      role: "admin",
+    });
+
+    const forAlice = await deliver(
+      db,
+      dir,
+      ["alice@example.com"],
+      "From: spammer@outside.test\r\nSubject: spam\r\n\r\nhi\r\n",
+      ++clock,
+    );
+    db.prepare("UPDATE messages SET from_addr = 'spammer@outside.test' WHERE id = ?").run(forAlice.id);
+
+    await carol.login(app, "carol", "carol-password-123");
+    await alice.login(app, "alice", "alice-password-123");
+
+    // Collaborative admin Carol does not hold alice@example.com and must get 404 without mutating state
+    const carolBlock = await carol.post(app, `/v1/messages/${forAlice.id}/block`, {});
+    assert.equal(carolBlock.statusCode, 404);
+    assert.equal((await alice.get(app, `/v1/messages/${forAlice.id}`)).statusCode, 200);
+    const carolSettings = (await carol.get(app, "/v1/settings")).json();
+    assert.deepEqual(carolSettings.blockedSenders, []);
+
+    // Owner in default mine scope also cannot block Alice's private message directly
+    const ownerBlock = await owner.post(app, `/v1/messages/${forAlice.id}/block`, {});
+    assert.equal(ownerBlock.statusCode, 404);
+
+    // Alice herself can block the sender and trash her copy
+    const aliceBlock = await alice.post(app, `/v1/messages/${forAlice.id}/block`, {});
+    assert.equal(aliceBlock.statusCode, 200);
+    assert.equal(aliceBlock.json().trashed, true);
+    assert.deepEqual(aliceBlock.json().blockedSenders, ["spammer@outside.test"]);
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("personal webhook SSRF guard blocks private/loopback targets for members, allows owner and explicit override", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-ssrf-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  const prevAllowPrivate = process.env.ALLOW_PRIVATE_WEBHOOK_URLS;
+  delete process.env.ALLOW_PRIVATE_WEBHOOK_URLS;
+  const originalFetch = globalThis.fetch;
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => Date.UTC(2026, 10, 25, 10, 0, 0),
+  });
+
+  const owner = jar();
+  const alice = jar();
+
+  try {
+    await owner.login(app, "admin", adminPassword);
+    await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com" },
+    });
+    await alice.login(app, "alice", "alice-password-123");
+
+    for (const blockedUrl of [
+      "http://127.0.0.1:8080/hook",
+      "http://192.168.1.1/hook",
+      "http://169.254.169.254/latest/meta-data",
+      "http://localhost:8080/hook",
+      "http://[::1]:8080/hook",
+      "http://[::ffff:127.0.0.1]/hook",
+    ]) {
+      const res = await alice.put(app, "/v1/settings/notify/personal", {
+        labels: ["phish"],
+        minConfidence: 0.6,
+        webhookUrl: blockedUrl,
+      });
+      assert.equal(res.statusCode, 400, blockedUrl);
+      assert.equal(res.json().reason, "forbidden webhook url", blockedUrl);
+    }
+
+    // Owner bypasses private-host restriction for local self-hosted hooks
+    const ownerLocal = await owner.put(app, "/v1/settings/notify/personal", {
+      labels: ["phish"],
+      minConfidence: 0.6,
+      webhookUrl: "http://127.0.0.1:9000/hook",
+    });
+    assert.equal(ownerLocal.statusCode, 200);
+
+    // Worker passes redirect: "error" for member webhooks and re-validates private URLs before fetch
+    const redirects: Array<string | undefined> = [];
+    globalThis.fetch = (async (_input, init) => {
+      redirects.push(init?.redirect);
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+
+    await alice.put(app, "/v1/settings/notify/personal", {
+      labels: ["phish"],
+      minConfidence: 0.6,
+      webhookUrl: "https://alice.hooks/in",
+    });
+    seedClassified(db, "msg_redir", "78".repeat(32), ["alice@example.com"]);
+    enqueueJob(db, { id: "job_redir", type: "notify", messageId: "msg_redir", now: 1 });
+    await runNotifyJob(
+      {
+        db,
+        log: silent,
+        now: () => 2,
+        notifiers: [],
+        notifyLabels: ["phish"],
+        notifyMinConfidence: 0.6,
+        panelBaseUrl: "http://127.0.0.1:8080",
+      },
+      notifyJob("job_redir", "msg_redir"),
+    );
+    assert.deepEqual(redirects, ["error"]);
+
+    // ALLOW_PRIVATE_WEBHOOK_URLS=true unlocks private targets for members as well
+    process.env.ALLOW_PRIVATE_WEBHOOK_URLS = "true";
+    const allowedMember = await alice.put(app, "/v1/settings/notify/personal", {
+      labels: ["phish"],
+      minConfidence: 0.6,
+      webhookUrl: "http://127.0.0.1:9100/hook",
+    });
+    assert.equal(allowedMember.statusCode, 200);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (prevAllowPrivate === undefined) delete process.env.ALLOW_PRIVATE_WEBHOOK_URLS;
+    else process.env.ALLOW_PRIVATE_WEBHOOK_URLS = prevAllowPrivate;
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("POST /v1/users reports clear conflict and validation reasons", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-user-reasons-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => Date.UTC(2026, 10, 25, 11, 0, 0),
+  });
+
+  const owner = jar();
+  try {
+    await owner.login(app, "admin", adminPassword);
+    const weak = await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "admin",
+    });
+    assert.equal(weak.statusCode, 400);
+    assert.equal(weak.json().reason, "password_too_weak");
+
+    const badMailbox = await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "", domain: "example.com" },
+    });
+    assert.equal(badMailbox.statusCode, 400);
+    assert.equal(badMailbox.json().reason, "invalid_initial_mailbox");
+  } finally {
+    await app.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("message search matches recipients, plain body, and summary without leaking BCC", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "flytrap-search-bcc-"));
+  const db = openDatabase(path.join(dir, "db", "mail.db"));
+  migrate(db, migrationsDir());
+  let clock = Date.UTC(2026, 10, 25, 12, 0, 0);
+
+  const app = await buildApi({
+    config: loadConfig({
+      NODE_ENV: "test",
+      ROLES: "api",
+      MAIL_DATA_DIR: dir,
+      ACCEPT_DOMAINS: "example.com",
+      API_USERNAME: "admin",
+      API_PASSWORD: adminPassword,
+      SESSION_SECRET: secret,
+      CLASSIFIER: "fake",
+    }),
+    db,
+    codec: gzipCodec(),
+    log: false,
+    now: () => clock,
+  });
+
+  const owner = jar();
+  const alice = jar();
+  try {
+    await owner.login(app, "admin", adminPassword);
+    await owner.post(app, "/v1/users", {
+      username: "alice",
+      password: "alice-password-123",
+      initialMailbox: { localpart: "alice", domain: "example.com" },
+    });
+    await owner.post(app, "/v1/users", {
+      username: "bob",
+      password: "bob-password-123",
+      initialMailbox: { localpart: "bob", domain: "example.com" },
+    });
+
+    const msg = await deliver(
+      db,
+      dir,
+      ["alice@example.com", "bob@example.com"],
+      "From: ext@outside.test\r\nTo: list@example.com\r\nSubject: notice\r\n\r\nUNIQUE-BODY-TOKEN\r\n",
+      ++clock,
+    );
+    db.prepare("UPDATE messages SET to_addrs = ?, parsed = ?, ai_result = ? WHERE id = ?").run(
+      JSON.stringify(["list@example.com"]),
+      JSON.stringify({ schema: 1, text: "UNIQUE-BODY-TOKEN" }),
+      JSON.stringify({ schema: 1, label: "legit", summary: "中文摘要关键词" }),
+      msg.id,
+    );
+
+    await alice.login(app, "alice", "alice-password-123");
+    assert.equal((await alice.get(app, "/v1/messages?q=UNIQUE-BODY-TOKEN")).json().items.length, 1);
+    assert.equal((await alice.get(app, "/v1/messages?q=中文摘要关键词")).json().items.length, 1);
+    assert.equal((await alice.get(app, "/v1/messages?q=list@example.com")).json().items.length, 1);
+    assert.equal((await alice.get(app, "/v1/messages?q=alice@example.com")).json().items.length, 1);
+    // Searching another user's BCC recipient must not leak via search hits
+    assert.equal((await alice.get(app, "/v1/messages?q=bob@example.com")).json().items.length, 0);
+    // Admin scope=all can search across all envelope recipients
+    assert.equal((await owner.get(app, "/v1/messages?scope=all&q=bob@example.com")).json().items.length, 1);
+  } finally {
     await app.close();
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

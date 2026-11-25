@@ -232,7 +232,8 @@ function allocationRank(box, local, base) {
 
 /** 判断当前账号是否被授权使用该发件地址。owner 直通，协同管理员和成员走同一套裁决。 */
 export function memberCanSendFrom(address) {
-  if (!state.sessionUserId || state.sessionUserId === "owner") return true;
+  if (!state.sessionUserId) return false;
+  if (state.sessionUserId === "owner") return true;
   const norm = normalizeAddress(address);
   if (!norm) return false;
   const at = norm.lastIndexOf("@");

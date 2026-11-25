@@ -56,13 +56,22 @@ export function rememberFrom(from) {
   }
 }
 
+export function suggestedSenderForMailbox(box) {
+  if (!box) return "";
+  if (box.localpart === "*") return `mail@${box.domain}`;
+  if (typeof box.localpart === "string" && box.localpart.endsWith("*")) {
+    return `${box.localpart.slice(0, -1)}@${box.domain}`;
+  }
+  return box.address || "";
+}
+
 export function defaultSenderAddress() {
   const remembered = lastUsedFrom();
   if (remembered && memberCanSendFrom(remembered)) return remembered;
   if (state.sessionUserId && state.sessionUserId !== "owner" && state.allocatedMailboxes.length > 0) {
     const sendable = state.allocatedMailboxes.find((b) => b.canSend);
     if (sendable) {
-      return sendable.localpart === "*" ? `mail@${sendable.domain}` : sendable.address;
+      return suggestedSenderForMailbox(sendable);
     }
   }
   return remembered;
@@ -217,6 +226,7 @@ export function clearComposeFields() {
 
 export async function handleAttachmentFiles(fileList) {
   if (!fileList || fileList.length === 0) return;
+  const sessionTag = state.sessionUserId;
   for (const file of fileList) {
     if (state.composeAttachments.length >= 5) {
       toast("单封邮件最多添加 5 个附件");
@@ -229,6 +239,16 @@ export async function handleAttachmentFiles(fileList) {
     }
     try {
       const contentBase64 = await readFileAsBase64(file);
+      if (state.sessionUserId !== sessionTag) return;
+      if (state.composeAttachments.length >= 5) {
+        toast("单封邮件最多添加 5 个附件");
+        break;
+      }
+      const latestTotal = state.composeAttachments.reduce((total, item) => total + item.size, 0);
+      if (latestTotal + file.size > 10 * 1024 * 1024) {
+        toast("附件总大小不能超过 10MB");
+        break;
+      }
       state.composeAttachments.push({
         filename: file.name || "attachment.bin",
         contentType: file.type || "application/octet-stream",
@@ -291,14 +311,27 @@ export function syncReplyBanner() {
   }
 }
 
+function syncComposeMinimizeBtn() {
+  const btn = document.querySelector("#btn-compose-min");
+  if (!btn || !composeSheet) return;
+  const minimized = composeSheet.classList.contains("is-minimized");
+  btn.title = minimized ? "恢复" : "最小化";
+  btn.setAttribute("aria-label", minimized ? "恢复写信窗口" : "最小化写信窗口");
+}
+
 export function openComposer(options = {}) {
   if (!composeSheet) return;
   composeSheet.hidden = false;
   composeSheet.classList.remove("is-minimized");
+  syncComposeMinimizeBtn();
   try {
     composeSheet.classList.toggle("is-expanded", localStorage.getItem(COMPOSE_WIDE_KEY) === "1");
   } catch {
     // 隐私窗口忽略存储异常
+  }
+  const fromList = document.querySelector("#send-from-list");
+  if (state.sessionUserId && state.sessionUserId !== "owner" && fromList && fromList.childElementCount === 0) {
+    renderFromSuggestions([]);
   }
   if (!options.keepReply) restoreDraftIfPresent();
   const fromInput = document.querySelector("#send-from");
@@ -329,12 +362,14 @@ export function toggleMinimizeComposer() {
   if (!composeSheet || composeSheet.hidden) return;
   composeSheet.classList.remove("is-expanded");
   composeSheet.classList.toggle("is-minimized");
+  syncComposeMinimizeBtn();
 }
 
 export function toggleExpandComposer() {
   if (!composeSheet || composeSheet.hidden) return;
   composeSheet.classList.remove("is-minimized");
   composeSheet.classList.toggle("is-expanded");
+  syncComposeMinimizeBtn();
   try {
     localStorage.setItem(COMPOSE_WIDE_KEY, composeSheet.classList.contains("is-expanded") ? "1" : "0");
   } catch {
@@ -347,6 +382,7 @@ export function closeComposer() {
   saveComposeDraftNow();
   composeSheet.hidden = true;
   composeSheet.classList.remove("is-minimized", "is-expanded");
+  syncComposeMinimizeBtn();
 }
 
 export function collapseExpandedComposer() {
@@ -416,6 +452,7 @@ function renderComposeQuotaHint() {
 }
 
 export async function loadSendPage() {
+  const token = ++state.sendLoadToken;
   try {
     const scopeParam =
       state.isAdmin && state.adminScope && state.adminScope !== "mine"
@@ -426,6 +463,7 @@ export async function loadSendPage() {
       request("/v1/session"),
       request("/v1/mailbox-history"),
     ]);
+    if (state.currentView !== "send" || token !== state.sendLoadToken) return;
     state.sentItems = Array.isArray(box.items) ? box.items : [];
     state.settingsDomains = Array.isArray(sessionInfo.acceptDomains)
       ? sessionInfo.acceptDomains.slice()
@@ -441,18 +479,21 @@ export async function loadSendPage() {
     renderSentList();
     refreshSendNote();
   } catch (err) {
+    if (state.currentView !== "send" || token !== state.sendLoadToken) return;
     toast("读取发信失败: " + explain(err));
   }
 }
 
 export async function refreshSentList() {
   if (state.currentView !== "send") return;
+  const token = state.sendLoadToken;
   try {
     const scopeParam =
       state.isAdmin && state.adminScope && state.adminScope !== "mine"
         ? "&scope=" + encodeURIComponent(state.adminScope)
         : "";
     const box = await request("/v1/outbox?limit=100" + scopeParam);
+    if (state.currentView !== "send" || token !== state.sendLoadToken) return;
     const items = Array.isArray(box.items) ? box.items : [];
     const same =
       items.length === state.sentItems.length &&
@@ -481,7 +522,7 @@ export function renderFromSuggestions(items) {
 
   if (state.sessionUserId && state.sessionUserId !== "owner") {
     for (const box of state.allocatedMailboxes) {
-      if (box.canSend) add(box.localpart === "*" ? `mail@${box.domain}` : box.address);
+      if (box.canSend) add(suggestedSenderForMailbox(box));
     }
   } else {
     for (const item of items) {
@@ -571,7 +612,7 @@ export async function submitSend() {
   const from = normalizeAddress(extractEmail(fromInput ? fromInput.value : ""));
   const rawParts = splitAddresses(toInput ? toInput.value : "");
   const to = rawParts.map((item) => normalizeAddress(extractEmail(item))).filter(Boolean);
-  if (!from || to.length === 0) {
+  if (!from || rawParts.length === 0) {
     toast("请填写发件和收件地址");
     return;
   }
@@ -765,9 +806,25 @@ export function resetComposeForAccount() {
   const discard = document.querySelector("#btn-discard-draft");
   if (status) status.hidden = true;
   if (discard) discard.hidden = true;
+  document.querySelector("#send-from-list")?.replaceChildren();
+  if (composeIdentitySelect) {
+    composeIdentitySelect.replaceChildren();
+    composeIdentitySelect.hidden = true;
+  }
+  const note = document.querySelector("#send-domain-note");
+  if (note) {
+    note.hidden = true;
+    note.textContent = "";
+  }
+  const badge = document.querySelector("#send-dkim-badge");
+  if (badge) {
+    badge.hidden = true;
+    badge.textContent = "";
+  }
   renderComposeAttachments();
   syncReplyBanner();
   updateComposeTitle();
+  syncComposeMinimizeBtn();
 }
 
 setResetCompose(resetComposeForAccount);

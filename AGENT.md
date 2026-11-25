@@ -7,7 +7,7 @@
 - **读时路由**：地址归属按「精确地址 > `+tag` 基座 > 长前缀通配 > 短前缀通配 > 整域 `*` > 主管理员兜底」实时裁决；不建归属物化表，不做历史同步。
 - **共享信件与引用计数**：多人共享邮件的状态写入 `user_message_state`，删除与清空垃圾桶统一走 `deleteMessageForViewer` / `emptyTrashForViewer`，不绕过引用计数直接物理清库。
 - **角色与脱敏边界**：仅 `OWNER_USER_ID` 可管理协同管理员与全域代发；协同管理员和普通成员发信均受归属裁决约束；非 Owner 的个人视角对多收件人与 SMTP 元数据做 BCC 脱敏。
-- **面板安全底线**：`src/api/public/` 为纯静态原生 ES 模块，不用 `innerHTML`，模块依赖无环；预览 iframe 保持空 `sandbox=""`，外链图片默认不加载；界面文案不出现人称代词（你/我/他）。
+- **面板安全底线**：`src/api/public/` 为纯静态原生 ES 模块，不用 `innerHTML`，模块依赖无环；预览 iframe 保持 `sandbox="allow-popups allow-popups-to-escape-sandbox"`（禁止 scripts 与 same-origin），外链图片默认不加载；界面文案不出现人称代词（你/我/他）。
 - **数据库版本护栏**：启动校验 `PRAGMA user_version`；库版本高于代码识别范围时拒绝启动，不倒向迁移；旧库沿 `migrations/*.sql` 顺序前迁。
 
 ## 代码地图

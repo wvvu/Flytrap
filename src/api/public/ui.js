@@ -242,8 +242,15 @@ export function askConfirm(message) {
     const onOk = () => finish(true);
     const onCancel = () => finish(false);
     const onKey = (event) => {
-      if (event.key === "Escape") finish(false);
-      else if (event.key === "Enter") finish(true);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(false);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(true);
+      }
     };
     confirmOk.addEventListener("click", onOk);
     confirmCancel.addEventListener("click", onCancel);
@@ -258,11 +265,27 @@ const CONFLICT_TEXT = {
   "username is reserved": "这个账号名留给了环境变量里的管理员",
 };
 
+const FORBIDDEN_TEXT = {
+  only_owner_can_manage_admin: "仅主管理员可管理协同管理员",
+  only_owner_can_grant_admin: "仅主管理员可授予管理员权限",
+};
+
+const BAD_REQUEST_TEXT = {
+  "domain is not accepted": "这个域名不在收信列表里",
+  "invalid webhook url": "Webhook 地址无效，仅支持 http 或 https",
+  "forbidden webhook url": "该 Webhook 地址不允许指向本机或内网地址",
+  cannot_disable_self: "不能停用当前登录的账号",
+  cannot_delete_self: "不能删除当前登录的账号",
+  password_too_weak: "密码过于简单，请换用更强的密码",
+  invalid_initial_mailbox: "初始邮箱配置无效",
+  invalid_username: "账号名称格式不正确",
+  invalid_password: "密码长度需在 8 到 512 位之间",
+};
+
 export function explain(err) {
   if (err && err.status === 401) return "账号或口令不正确";
-  if (err && err.status === 403) return "当前账号无权执行此操作";
-  if (err && err.status === 400 && err.reason === "domain is not accepted") return "这个域名不在收信列表里";
-  if (err && err.status === 400 && err.reason === "invalid webhook url") return "这个 Webhook 地址不是 http 或 https";
+  if (err && err.status === 403) return FORBIDDEN_TEXT[err.reason] || "当前账号无权执行此操作";
+  if (err && err.status === 400) return BAD_REQUEST_TEXT[err.reason] || "操作失败，请重试";
   if (err && err.status === 409) return CONFLICT_TEXT[err.reason] || "账号或邮箱已被占用";
   if (err && err.status === 429) return "请求过于频繁或已达今日发信上限";
   return "操作失败，请重试";

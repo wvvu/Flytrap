@@ -1,4 +1,5 @@
 import type { Notifier, NotifyInput } from "./types.js";
+import { validateWebhookUrl } from "./url-guard.js";
 
 const LABEL_CN: Record<string, string> = {
   legit: "正常",
@@ -80,6 +81,7 @@ export function createBarkNotifier(options: {
   bearer?: string | undefined;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  blockPrivate?: boolean;
 }): Notifier {
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? 10_000;
@@ -87,18 +89,28 @@ export function createBarkNotifier(options: {
     id: "bark",
     async notify(input: NotifyInput) {
       try {
-        const { endpoint, hasGroupParam } = normalizeBarkEndpoint(options.url);
+        const validatedUrl = options.blockPrivate
+          ? validateWebhookUrl(options.url, { blockPrivate: true })
+          : options.url;
+        const { endpoint, hasGroupParam } = normalizeBarkEndpoint(validatedUrl);
         const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8" };
         if (options.bearer) headers.authorization = `Bearer ${options.bearer}`;
-        const response = await fetchImpl(endpoint, {
+        const init: RequestInit = {
           method: "POST",
           headers,
           body: JSON.stringify(barkPayload(input, hasGroupParam ? {} : { defaultGroup: "Flytrap" })),
           signal: AbortSignal.timeout(timeoutMs),
-        });
+        };
+        if (options.blockPrivate) init.redirect = "error";
+        const response = await fetchImpl(endpoint, init);
         if (!response.ok) throw new Error(`bark ${response.status}`);
       } catch (err) {
-        if (err instanceof Error && /^bark \d+$/.test(err.message)) {
+        if (
+          err instanceof Error &&
+          (/^bark \d+$/.test(err.message) ||
+            err.message === "forbidden webhook url" ||
+            err.message === "invalid webhook url")
+        ) {
           throw err;
         }
         throw new Error("bark request failed");

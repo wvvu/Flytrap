@@ -71,6 +71,7 @@ const ERROR_NAMES: Record<number, string> = {
   401: "unauthorized",
   403: "forbidden",
   404: "not_found",
+  409: "conflict",
   415: "bad_request",
   429: "rate_limited",
 };

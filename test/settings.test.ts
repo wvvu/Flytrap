@@ -26,6 +26,7 @@ import {
   SettingsError,
 } from "../src/db/repos/settings.js";
 import { migrationsDir } from "../src/paths.js";
+import { validateWebhookUrl } from "../src/notify/url-guard.js";
 import { runNotifyJob } from "../src/worker/job-notify.js";
 
 const silent = {
@@ -348,6 +349,41 @@ test("a saved notify policy is what the notify step uses", async () => {
     assert.deepEqual(calls, ["phish"]);
   } finally {
     db.close();
+  }
+});
+
+test("validateWebhookUrl checks scheme, control chars, and private/reserved IPv4/IPv6 ranges", () => {
+  assert.equal(validateWebhookUrl("https://hooks.example/in", { blockPrivate: true }), "https://hooks.example/in");
+  assert.equal(validateWebhookUrl("  https://hooks.example/in  ", { blockPrivate: true }), "https://hooks.example/in");
+  assert.equal(validateWebhookUrl("http://127.0.0.1:8080/hook", { blockPrivate: false }), "http://127.0.0.1:8080/hook");
+
+  for (const invalid of ["", "ftp://hooks.example/in", "https://hooks.example/\n", "https://hooks.example/a\rb", "not a url"]) {
+    assert.throws(() => validateWebhookUrl(invalid, { blockPrivate: true }), { message: "invalid webhook url" });
+  }
+
+  for (const forbidden of [
+    "http://localhost/hook",
+    "http://sub.localhost/hook",
+    "http://printer.local/hook",
+    "http://svc.internal/hook",
+    "http://redis:6379/hook",
+    "http://0.0.0.0/hook",
+    "http://10.0.0.1/hook",
+    "http://100.64.0.1/hook",
+    "http://127.0.0.1/hook",
+    "http://169.254.169.254/hook",
+    "http://172.16.0.1/hook",
+    "http://192.168.1.1/hook",
+    "http://[::]/hook",
+    "http://[::1]/hook",
+    "http://[fc00::1]/hook",
+    "http://[fd12:3456::1]/hook",
+    "http://[fe80::1]/hook",
+    "http://[::ffff:127.0.0.1]/hook",
+    "http://[::ffff:7f00:1]/hook",
+    "http://[::ffff:192.168.1.1]/hook",
+  ]) {
+    assert.throws(() => validateWebhookUrl(forbidden, { blockPrivate: true }), { message: "forbidden webhook url" }, forbidden);
   }
 });
 
