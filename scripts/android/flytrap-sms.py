@@ -95,15 +95,23 @@ def http_json(method: str, url: str, headers: dict[str, str], payload: dict | No
         return 0, None
 
 
-def resolve_slot(sub_id: int | None) -> str:
+def resolve_slot(sub_id: int | None, slot_overrides: dict[int, str] | None = None) -> str:
     if sub_id is None or sub_id < 0 or not os.path.exists(TEL_DB):
         return "sim"
     try:
         con = sqlite3.connect(f"file:{TEL_DB}?mode=ro", uri=True, timeout=5.0)
-        row = con.execute("SELECT sim_id FROM siminfo WHERE _id = ? LIMIT 1", (sub_id,)).fetchone()
+        row = con.execute("SELECT sim_id, number FROM siminfo WHERE _id = ? LIMIT 1", (sub_id,)).fetchone()
         con.close()
-        if row and isinstance(row[0], int) and row[0] >= 0:
-            return f"sim{row[0] + 1}"
+        if row:
+            sim_id = row[0] if isinstance(row[0], int) else -1
+            raw_num = str(row[1] or "")
+            if slot_overrides and sim_id in slot_overrides and slot_overrides[sim_id]:
+                return slot_overrides[sim_id]
+            digits = "".join(ch for ch in raw_num if ch.isdigit())
+            if len(digits) >= 4:
+                return digits[-4:]
+            if sim_id >= 0:
+                return f"sim{sim_id + 1}"
         if sub_id > 0:
             return f"sub{sub_id}"
     except Exception:
@@ -156,6 +164,10 @@ def main() -> int:
     retry_max = int(cfg.get("RETRY_MAX_SEC", "60"))
     poll_sec = int(cfg.get("POLL_FALLBACK_SEC", "30"))
     cfg_refresh = int(cfg.get("CONFIG_REFRESH_SEC", "21600"))
+    slot_overrides = {
+        0: cfg.get("SLOT_1_LABEL", "").strip(),
+        1: cfg.get("SLOT_2_LABEL", "").strip(),
+    }
 
     if not base_url or not token:
         sys.stderr.write("FLYTRAP_URL or SMS_INGEST_TOKEN missing\n")
@@ -252,7 +264,7 @@ def main() -> int:
             failed = False
             for row in pending:
                 sms_id, address, date_ms, date_sent_ms, body, sub_id = row
-                slot = resolve_slot(sub_id)
+                slot = resolve_slot(sub_id, slot_overrides)
                 sender = (address or "").strip() or "unknown-sender"
                 ts = date_ms if (date_ms and date_ms > 0) else (date_sent_ms if (date_sent_ms and date_sent_ms > 0) else int(time.time() * 1000))
                 code, resp = http_json(
@@ -284,7 +296,7 @@ def main() -> int:
                     if state["fail_count"] >= threshold:
                         for p_row in pending:
                             p_id, p_addr, _d1, _d2, p_body, p_sub = p_row
-                            send_bark_fallback(int(p_id), resolve_slot(p_sub), (p_addr or "").strip(), p_body or "")
+                            send_bark_fallback(int(p_id), resolve_slot(p_sub, slot_overrides), (p_addr or "").strip(), p_body or "")
                     failed = True
                     break
 

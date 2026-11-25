@@ -46,6 +46,8 @@ RETRY_MAX_SEC=60
 POLL_FALLBACK_SEC=30
 CONFIG_REFRESH_SEC=21600
 MAX_LOG_BYTES=524288
+SLOT_1_LABEL=""
+SLOT_2_LABEL=""
 
 # shellcheck disable=SC1090
 . "$CONFIG_FILE"
@@ -182,6 +184,26 @@ resolve_slot_for_sub() {
     case "$sim_id" in
       ''|*[!0-9-]*) sim_id=-1 ;;
     esac
+
+    custom_label=""
+    case "$sim_id" in
+      0) custom_label="$SLOT_1_LABEL" ;;
+      1) custom_label="$SLOT_2_LABEL" ;;
+    esac
+    if [ -n "$custom_label" ]; then
+      echo "$custom_label"
+      return
+    fi
+
+    raw_num="$(sql_ro "$TEL_DB" "SELECT COALESCE(number, '') FROM siminfo WHERE _id = $sub_id LIMIT 1;")"
+    digits="$(printf '%s' "$raw_num" | $BB tr -cd '0-9')"
+    case "$digits" in
+      ????*)
+        echo "${digits#${digits%????}}"
+        return
+        ;;
+    esac
+
     if [ "$sim_id" -ge 0 ] 2>/dev/null; then
       echo "sim$((sim_id + 1))"
       return
